@@ -186,11 +186,22 @@ Persistent vector storage using FAISS for efficient similarity search.
 
 Current implementation:
 
-- FAISS Flat index for exact similarity search
+- **Auto-installation**: Automatically detects and installs FAISS if missing via pip
+- **FAISS Flat index** for exact similarity search on small datasets
+- **Adaptive Index Selection**: Automatically switches between index types based on dataset size:
+  - Flat: <= 10,000 vectors (exact search)
+  - IVF_Small (nlist=100): <= 100,000 vectors
+  - IVF_Medium (nlist=400): <= 500,000 vectors
+  - IVF_Large (nlist=800): > 500,000 vectors
+- **Lazy Deletion**: Tombstone-based efficient deletion without full index rebuild
+  - Tombstone tracking for deleted vectors
+  - Automatic compaction at 10% deletion ratio with 60s minimum interval
+  - Force compaction via `force_compact()` method
 - Normalized vectors for cosine similarity
 - Metadata storage alongside vectors
 - Persistence to `data/vector_db/` directory
 - Graceful fallback to in-memory if FAISS unavailable
+- **Built-in Benchmarking**: `benchmark_build()`, `benchmark_search()`, `benchmark_delete()`, `run_benchmarks()`
 
 Used by:
 
@@ -199,8 +210,8 @@ Used by:
 
 Files:
 
-- `app/vector_db/__init__.py` - VectorDB class
-- Tests in `tests/test_vector_db.py`
+- `app/vector_db/__init__.py` - VectorDB class with IndexConfig dataclass
+- Tests in `tests/test_vector_db.py` (41 tests)
 
 ---
 
@@ -275,7 +286,7 @@ Freya now possesses:
 - [x] Patch verification
 - [x] Autonomous repair loop
 - [x] Persistent memory
-- [x] Persistent Vector Database (FAISS)
+- [x] Persistent Vector Database (FAISS) with auto-install, adaptive indexing, lazy deletion, and benchmarking
 
 ---
 

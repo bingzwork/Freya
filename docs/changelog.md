@@ -1,5 +1,27 @@
 # Freya Changelog
 
+## Unreleased - Vector Store Enhancements
+- **Auto-install FAISS**: VectorDB now automatically detects and installs faiss-cpu if missing
+- **Adaptive Index Selection**: Automatically selects optimal FAISS index type based on dataset size:
+  - Flat: <= 10,000 vectors (exact search)
+  - IVF_Ssmall (nlist=100): <= 100,000 vectors
+  - IVF_Medium (nlist=400): <= 500,000 vectors  
+  - IVF_Large (nlist=800): > 500,000 vectors
+- **Efficient Deletion**: Tombstone-based lazy deletion without full index rebuild
+  - Tombstone tracking for deleted vectors
+  - Automatic compaction at configurable thresholds (default: 10% deletion ratio, 60s min interval)
+  - `force_compact()` method for immediate compaction
+- **Built-in Benchmarking**: Comprehensive performance measurement:
+  - `benchmark_build()` - measures index build time
+  - `benchmark_search()` - measures search latency
+  - `benchmark_delete()` - measures deletion performance
+  - `run_benchmarks()` - runs full benchmark suite with statistics
+- **IndexConfig dataclass**: Configurable thresholds, nlist values, and compaction settings
+- Expanded test coverage: 41 tests for VectorDB (was 16)
+- Added `faiss-cpu>=1.7.0,<2.0` to requirements.txt
+
+---
+
 ## Unreleased - Bug Fixes and Cleanup
 - Fixed `test_repair_loop.py` to match `VerificationResult` dataclass signature (added `command` field)
 - Fixed `test_executor_blocks_mutating_tool_without_approval` to mock stdin for interactive prompt
