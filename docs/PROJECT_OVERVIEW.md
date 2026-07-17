@@ -165,6 +165,7 @@ Capabilities:
 - Understands natural language queries
 - Caches embeddings to disk for performance
 - Graceful fallback if dependencies unavailable
+- **Persistent Vector Database (FAISS) for efficient similarity search across sessions**
 
 ---
 
@@ -176,6 +177,30 @@ Scoring:
 
 - 60% lexical (keyword matching)
 - 40% semantic (embedding similarity)
+
+---
+
+## Vector Database
+
+Persistent vector storage using FAISS for efficient similarity search.
+
+Current implementation:
+
+- FAISS Flat index for exact similarity search
+- Normalized vectors for cosine similarity
+- Metadata storage alongside vectors
+- Persistence to `data/vector_db/` directory
+- Graceful fallback to in-memory if FAISS unavailable
+
+Used by:
+
+- `ProjectMemory` for persistent semantic memory
+- `SemanticSearch` for persistent symbol embeddings
+
+Files:
+
+- `app/vector_db/__init__.py` - VectorDB class
+- Tests in `tests/test_vector_db.py`
 
 ---
 
@@ -250,6 +275,7 @@ Freya now possesses:
 - [x] Patch verification
 - [x] Autonomous repair loop
 - [x] Persistent memory
+- [x] Persistent Vector Database (FAISS)
 
 ---
 
@@ -259,7 +285,6 @@ Freya still:
 
 - Cannot build full dependency graphs (only follows direct imports)
 - Cannot preserve metadata or binary files during rollback
-- Dependencies on external vector databases (uses local caching instead)
 - No GUI, voice, or internet search
 
 These are planned for future milestones.

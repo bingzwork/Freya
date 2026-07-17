@@ -8,6 +8,16 @@
 - Added proper exports to `app/retrieval/__init__.py` (exports `EnhancedRetriever`)
 - Fixed package import issues for semantic search and retrieval modules
 
+## v0.5.1 — Persistent Vector Database
+- Added `app/vector_db/` package with FAISS-based `VectorDB` class
+- Added support for persistent vector storage with metadata
+- Integrated VectorDB into `ProjectMemory` for persistent semantic memory
+- Integrated VectorDB into `SemanticSearch` for persistent symbol embeddings
+- Added `faiss-cpu` as optional dependency in requirements.txt
+- Added comprehensive tests for VectorDB in `tests/test_vector_db.py`
+- Fixed typos in `project_memory.py` (variable name corrections)
+- Updated documentation in `PROJECT_OVERVIEW.md`
+
 ## v0.5.0 — Local Ranked Retrieval
 - Added dependency-free lexical ranking over source, symbols, docstrings, and filenames
 - Integrated ranked retrieval into agent context construction

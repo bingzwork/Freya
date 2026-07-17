@@ -57,11 +57,15 @@ data/
 *.tmp
 *.temp
 
+# Memory (keep the module, ignore the data)
+# app/memory/ is NOT ignored - it contains source code
+# data/memory/ contains runtime data and IS ignored by data/
+
 # Cache
 .semantic_cache/
 
-# Memory
-memory/
+# Memory data (source code in app/memory/ is NOT ignored)
+# data/memory/ contains runtime data and IS ignored by data/
 
 # Freya-specific temporary files
 profile_output.txt
