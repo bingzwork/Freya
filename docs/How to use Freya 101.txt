@@ -1,0 +1,287 @@
+Freya AI‑Agent – How to start using it (no‑code‑expert version)
+
+  Below is a step‑by‑step, click‑by‑click guide you can follow on a Windows PC.
+  It tells you exactly what program to open, what to type, and how to switch the
+  “let Freya change files” switch on and off while you work with her.
+
+  ———
+
+  ## 📋 What you need before you begin
+
+   Item                                    Why it’s needed                         How to get it
+  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   Python 3 (the language Freya is         Runs the code                           If you installed Python from the
+   written in)                                                                     official website you already have
+                                                                                   it. Open Start → type “cmd” → open
+                                                                                   Command Prompt and run python
+                                                                                   --version. You should see something
+                                                                                   like Python 3.14.x.
+  ──────────────────────────────────────  ──────────────────────────────────────  ──────────────────────────────────────
+   Git (optional) – only if you haven’t    Gives you the source code               If you already see a folder called
+   already copied the Freya folder to                                              Freya on your disk you can skip
+   your computer                                                                   this.
+  ──────────────────────────────────────  ──────────────────────────────────────  ──────────────────────────────────────
+   Ollama (optional but recommended) –     Gives Freya a “brain” that can          Download from https://ollama.com,
+   the local AI model that actually        generate real Python code               install, then run ollama pull
+   writes the code                                                                 qwen2.5-coder:14b (or any model you
+                                                                                   like) and leave ollama serve running
+                                                                                   in a background window. If you don’t
+                                                                                   do this, Freya will still work –
+                                                                                   she’ll just tell you “LLM not
+                                                                                   available” and give you a
+                                                                                   placeholder answer.
+
+  > You do NOT need to be a programmer to follow the steps below.
+  > All the typing is done in a simple black window (Command Prompt or PowerShell) and in a plain‑text editor like
+  > Notepad.
+
+  ———
+
+  ## 🗂️ 1️⃣ Open the Freya folder
+
+  1. Press Win + E to open File Explorer.
+  2. Navigate to the place where you unzipped or cloned the Freya project.
+      - Typical path: C:\AI Projects\Freya (you’ll see a folder named Freya).
+
+  3. Inside that folder you should see items like app, data, docs, requirements.txt, start_freya.py (if you already
+     created it – we’ll make it in a moment).
+
+  > Keep this Explorer window open – you’ll need to drag‑and‑drop files into Notepad later.
+
+  ———
+
+  ## 🖥️ 2️⃣ Open a command line window
+
+  You can use either Command Prompt or PowerShell – they work the same for our commands.
+
+  - Option A – Command Prompt
+      1. Press Win + R, type cmd, hit Enter.
+
+  - Option B – PowerShell (the newer Windows shell)
+      1. Press Win + X, choose Windows PowerShell (or Windows Terminal → PowerShell).
+
+  A black (or blue) window will appear with a prompt like C:\Users\YourName>.
+
+  ———
+
+  ## 📂 3️⃣ Change the prompt to the Freya folder
+
+  In the command window type (or paste) the following line exactly and press Enter:
+
+  cd C:\AI Projects\Freya
+
+  You should now see the prompt change to something like:
+
+  C:\AI Projects\Freya>
+
+  > This tells the computer “from now on, run commands inside this folder”.
+
+  ———
+
+  ## 📦 4️⃣ Install the needed Python packages (once only)
+
+  Freya needs a handful of extra libraries.
+  In the same command window type (or copy‑paste) the following line and hit Enter:
+
+  pip install -r requirements.txt
+
+  You’ll see a lot of text scrolling by – it’s downloading and installing packages such as numpy, sentence‑transformers,
+  ollama, etc.
+  When it finishes you’ll see a line that ends with Successfully installed ....
+
+  > If you get an error like “‘pip’ is not recognized”, make sure Python is installed and that its Scripts folder is on
+  > your PATH. Re‑opening the command window after installing Python usually fixes this.
+
+  ———
+
+  ## 🤖 5️⃣ (Optional) Start Ollama so Freya can actually write code
+
+  If you want Freya to generate real Python code (instead of just saying “LLM not available”), do this once and leave it
+  running:
+
+  1. In the same command window (or a second one) type:
+
+     ollama serve
+
+  2. You’ll see a line like Listening on 127.0.0.1:11434.
+     Leave that window open – it’s the local AI server.
+     (In a separate window you can also pull a model if you haven’t already: ollama pull qwen2.5-coder:14b.)
+
+  If you skip this step, Freya will still run; she’ll just tell you the LLM isn’t available and give you a placeholder
+  answer. That’s fine for testing the on/off switch.
+
+  ———
+
+  ## 📄 6️⃣ Create a tiny script to talk to Freya
+
+  We’ll make a simple Notepad file that starts Freya and asks her to do a task.
+
+  1. Open Notepad
+      - Press Win + R, type notepad, hit Enter.
+
+  2. Copy the exact text below into Notepad (do not add extra spaces at the start of lines):
+
+     # -------------------------------------------------
+     # Simple script to start Freya and ask her to do a task
+     # -------------------------------------------------
+     from app.agent.core_agent import FreyaAgent
+
+     # ---- 1️⃣ Choose where Freya may work ----
+     # "." means the current folder (the Freya project folder)
+     # Change this to any other folder on your PC if you want her to edit files there.
+     WORKSPACE = "."
+
+     # ---- 2️⃣ Turn mutations ON or OFF ----
+     #   False = read‑only (she can only suggest changes)
+     #   True  = she is allowed to write files → she can learn from real edits
+     ALLOW_MUTATIONS = False      # <-- set to True when you want her to edit files
+
+     # ---- 3️⃣ Create the agent ----
+     agent = FreyaAgent(workspace=WORKSPACE, allow_mutations=ALLOW_MUTATIONS)
+
+     print("Freya ready – mutations are", "ON" if ALLOW_MUTATIONS else "OFF")
+
+     # ---- 4️⃣ Give her a task ----
+     task = "Write a function that returns the factorial of a number"
+
+     # ---- 5️⃣ Define what counts as “success” ----
+     # Here we accept any patch that verifies (lint+tests pass) and contains the word “def”
+     success_condition = lambda t, i, vr, hist: \
+         vr.success and "def " in str(vr)
+
+     # ---- 6️⃣ Ask Freya to solve it ----
+     result = agent.solve(
+         task=task,
+         max_iterations=4,          # how many attempts she may try
+         allow_mutations=True,      # ← ON for this call (override the agent default)
+         success_condition=success_condition
+     )
+
+     # ---- 7️⃣ Show the result ----
+     print("\n=== RESULT ===")
+     print("Success :", result["success"])
+     print("Iterations:", result["iterations"])
+     if result["history"]:
+         last = result["history"][-1]
+         print("Last verification passed?", last["verification"].success if hasattr(last["verification"], "success")
+         else "unknown")
+     # -------------------------------------------------
+
+  3. Save the file
+      - Click File → Save As.
+      - Navigate to the Freya folder (the same one you are in the command prompt).
+      - File name: run_freya_demo.py
+      - Make sure the dropdown Save as type says “All Files (.)” (otherwise Notepad will add a .txt extension).
+      - Click Save.
+
+  You now have a ready‑to‑run Python script.
+
+  ———
+
+  ## ▶️ 6️⃣ Run the script and see Freya work
+
+  In the command window where you are already inside C:\AI Projects\Freya, type:
+
+  python run_freya_demo.py
+
+  Press Enter.
+
+  You should see output similar to:
+
+  INFO  Building project index...
+  INFO  Building symbol index...
+  INFO  Indexed 109 files.
+  INFO  Indexed 44 Python files.
+  INFO  Freya Agent initialized
+  Freya ready – mutations are OFF
+
+  === RESULT ===
+  Success : True
+  Iterations: 2
+  Last verification passed? True
+
+  What happened?
+
+  1. Freya built indexes of your source code (so she can find relevant snippets).
+  2. Because ALLOW_MUTATIONS was set to False in the script, the agent started in read‑only mode.
+  3. Inside the solve() call we explicitly passed allow_mutations=True, so for this attempt she was allowed to write a
+     file.
+
+  4. She planned, proposed a tiny patch, applied it, ran a quick lint + test check, saw that it succeeded, stored the
+     whole attempt in her memory, and returned Success: True.
+
+  If you change ALLOW_MUTATIONS = True at the top of the script and run it again, you won’t need to put
+  allow_mutations=True inside the solve() call – the agent will be allowed to edit files for every mutating method
+  automatically.
+
+  ———
+
+  ## 🔁 How to turn the mutation switch ON and OFF while you are using Freya
+
+   Situation                               What to do                              Example
+  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   Start with mutations OFF (safe          Create the agent without the flag       agent = FreyaAgent(workspace=".")
+   default)                                (or set it to False).
+  ──────────────────────────────────────  ──────────────────────────────────────  ──────────────────────────────────────
+   Turn it ON for the whole session        Either create the agent with            agent = FreyaAgent(workspace=".",
+                                           allow_mutations=True or set the         allow_mutations=True)<br>or<br>agent
+                                           attribute after creation.               .allow_mutations = True
+  ──────────────────────────────────────  ──────────────────────────────────────  ──────────────────────────────────────
+   Turn it OFF for the whole session       Create the agent with                   agent.allow_mutations = False
+                                           allow_mutations=False (default) or
+                                           set the attribute to False.
+  ──────────────────────────────────────  ──────────────────────────────────────  ──────────────────────────────────────
+   Allow mutations only for one            Keep the agent’s default (False) and    agent.solve(...,
+   specific call                           pass allow_mutations=True when you      allow_mutations=True)
+                                           call solve(), repair(),
+                                           apply_patch(), or
+                                           apply_patch_and_verify().
+  ──────────────────────────────────────  ──────────────────────────────────────  ──────────────────────────────────────
+   Disallow mutations for one specific     Pass allow_mutations=False to the       agent.solve(...,
+   call (when the agent’s default is       call.                                   allow_mutations=False)
+   ON)
+  ──────────────────────────────────────  ──────────────────────────────────────  ──────────────────────────────────────
+   Toggle manually anytime                 Directly change the attribute:          agent.allow_mutations = True  <br> …
+                                           agent.allow_mutations = True or         do work… <br> agent.allow_mutations
+                                           False.                                  = False
+
+  > What you’ll see if you forget to turn it on
+  > If you call a mutating method while the flag is False, Freya will raise a clear error:
+
+  PermissionError: Patch application requires allow_mutations=True.
+
+  > That’s her way of saying “I’m not allowed to touch files right now – flip the switch if you really want me to edit.”
+
+  ———
+
+  ## 📚 Where Freya stores what she learns
+
+  All of Freya’s experience is saved automatically in a file you can open later:
+
+  - Location: Freya\data\memory\freya_memory.json
+  - It’s a plain‑text JSON file – you can open it with Notepad to see the list of things she has tried, what succeeded,
+    what failed, and the full “trajectory” (plan, patch, test output).
+
+  When you give her a new, similar task, her Planner looks into this file (using semantic similarity when
+  numpy + sentence‑transformers are installed) and re‑uses ideas that worked before. That’s how she gets smarter the
+  more you use her.
+
+  ———
+
+  ## 🎯 Quick recap – the exact clicks you need
+
+  1. Open File Explorer → go to C:\AI Projects\Freya.
+  2. Open Command Prompt (or PowerShell).
+  3. In that window type cd C:\AI Projects\Freya and press Enter.
+  4. Type pip install -r requirements.txt and press Enter (wait for it to finish).
+  5. (Optional) In a second command window type ollama serve and leave it running.
+  6. Open Notepad, paste the script from section 6️⃣, save as run_freya_demo.py in the Freya folder.
+  7. In the first command window run python run_freya_demo.py.
+  8. To turn mutations on/off, either:
+      - Edit the line ALLOW_MUTATIONS = False in the script and re‑run, or
+      - Keep the script as‑is and change the allow_mutations= argument inside the solve() call (True = on, False = off).
+
+  That’s it! You now have a working Freya agent that you can switch between “read‑only advice mode” and “let her
+  actually edit files and learn from the results”.
+
+  Enjoy experimenting, and watch Freya get better at writing code the more you give her meaningful tasks. 🚀

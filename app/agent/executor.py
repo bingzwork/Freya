@@ -1,0 +1,149 @@
+﻿import json
+import re
+import sys
+from typing import Any
+
+from app.core.logger import logger
+
+
+class Executor:
+
+    READ_ONLY_TOOLS = {"list_files", "read_file"}
+    MUTATING_TOOLS = {"write_file", "replace_in_file", "run_terminal"}
+
+
+    def __init__(
+        self,
+        llm,
+        tools,
+    ):
+
+        self.llm = llm
+        self.tools = tools
+
+
+    def decide_action(self, step: str) -> dict[str, Any] | None:
+
+        prompt = f"""
+You are Freya, an autonomous coding agent.
+
+Choose an action for this task:
+
+{step}
+
+Available tools:
+
+- read_file(path)
+- write_file(path, content)
+- replace_in_file(path, old_text, new_text)
+- list_files()
+- run_terminal(command)
+
+Return ONLY JSON.
+
+Examples:
+
+{{
+ "tool": "list_files",
+ "args": {{}}
+}}
+
+or
+
+{{
+ "tool": "read_file",
+ "args": {{
+    "path":"main.py"
+ }}
+}}
+"""
+
+
+        answer = self.llm.ask(prompt)
+
+
+        answer = re.sub(
+            r"```json|```",
+            "",
+            answer
+        ).strip()
+
+
+        try:
+
+            return json.loads(answer)
+
+        except:
+
+            return None
+    def execute_step(
+        self,
+        step: str,
+        allowed_tools: set[str] | None = None,
+    ) -> dict[str, Any]:
+        logger.info(f"Executing: {step}")
+
+        action = self.decide_action(step)
+
+        if not isinstance(action, dict):
+            return {"error": "No valid action selected"}
+
+        tool = action.get("tool")
+        args = action.get("args", {})
+        allowed_tools = allowed_tools or self.READ_ONLY_TOOLS
+
+        # Ask for confirmation for mutating tools
+        if tool in self.MUTATING_TOOLS:
+            action_desc = f"{tool}({args})"
+            sys.stdout.write(f"\nAgent requests permission to execute: {action_desc}\n")
+            sys.stdout.write("Choose an option:\n")
+            sys.stdout.write("  1. Yes\n")
+            sys.stdout.write("  2. No\n")
+            sys.stdout.write("Enter your choice (1 or 2): ")
+            sys.stdout.flush()
+            reply = sys.stdin.readline().strip()
+            if reply != "1":
+                return {
+                    "action": action,
+                    "error": f"User denied permission for {tool}.",
+                }
+
+        if tool not in allowed_tools:
+            return {
+                "action": action,
+                "error": f"Tool '{tool}' requires explicit mutation approval.",
+            }
+
+        if not isinstance(args, dict):
+            return {"action": action, "error": "Tool arguments must be a JSON object."}
+
+        result = self.tools.execute(tool, **args)
+
+        return {
+            "action": action,
+            "result": result.output if result.success else result.error
+        }
+
+
+    def execute_plan(
+        self,
+        plan: dict[str, Any],
+        allowed_tools: set[str] | None = None,
+    ) -> list[dict[str, Any]]:
+
+        results = []
+
+
+        for step in plan.get("steps", [])[:8]:
+
+            results.append(
+                {
+                    "step": step,
+                    "result": self.execute_step(step, allowed_tools)
+                }
+            )
+
+
+        return results
+
+
