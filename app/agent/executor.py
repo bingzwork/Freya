@@ -18,8 +18,25 @@ class Executor:
  "http_patch",
  "http_head",
  "http_request",
+ "git_status",
+ "git_diff",
+ "git_log",
+ "git_branch_list",
+ "git_is_repo",
  }
-    MUTATING_TOOLS = {"write_file", "replace_in_file", "run_terminal"}
+    MUTATING_TOOLS = {
+ "write_file",
+ "replace_in_file",
+ "run_terminal",
+ "create_file",
+ "delete_file",
+ "format_file",
+ "git_add",
+ "git_commit",
+ "git_push",
+ "git_pull",
+ "git_checkout",
+ }
 
 
     def __init__(
