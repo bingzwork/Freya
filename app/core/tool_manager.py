@@ -334,6 +334,23 @@ class ToolManager:
 
         )
 
+        # Register HTTP tools
+        from app.tools.http_tools import (
+            http_get,
+            http_post,
+            http_put,
+            http_delete,
+            http_patch,
+            http_head,
+            http_request,
+        )
+        self.register("http_get", http_get)
+        self.register("http_post", http_post)
+        self.register("http_put", http_put)
+        self.register("http_delete", http_delete)
+        self.register("http_patch", http_patch)
+        self.register("http_head", http_head)
+        self.register("http_request", http_request)
         # Register git tools - use wrapper methods to pass workspace
 
         self.register("git_status", self._git_status)

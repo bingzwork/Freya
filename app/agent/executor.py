@@ -1,4 +1,4 @@
-﻿import json
+import json
 import re
 import sys
 from typing import Any
@@ -8,7 +8,17 @@ from app.core.logger import logger
 
 class Executor:
 
-    READ_ONLY_TOOLS = {"list_files", "read_file"}
+    READ_ONLY_TOOLS = {
+ "list_files",
+ "read_file",
+ "http_get",
+ "http_post",
+ "http_put",
+ "http_delete",
+ "http_patch",
+ "http_head",
+ "http_request",
+ }
     MUTATING_TOOLS = {"write_file", "replace_in_file", "run_terminal"}
 
 
