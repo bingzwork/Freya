@@ -44,12 +44,38 @@ Responsibilities:
 
 Responsible for executing tools safely.
 
-Current tools:
+### Tool Classification
 
-- read_file
-- write_file
-- list_files
-- run_terminal
+All tools are classified as either **READ_ONLY_TOOLS** (autonomous approval) or **MUTATING_TOOLS** (requires user confirmation).
+
+**READ_ONLY_TOOLS (14) - Autonomous Approval:**
+- `list_files()` - List workspace files
+- `read_file(path)` - Read file contents
+- `http_get(url, ...)` - HTTP GET request
+- `http_post(url, ...)` - HTTP POST request
+- `http_put(url, ...)` - HTTP PUT request
+- `http_delete(url, ...)` - HTTP DELETE request
+- `http_patch(url, ...)` - HTTP PATCH request
+- `http_head(url, ...)` - HTTP HEAD request
+- `http_request(method, url, ...)` - Generic HTTP request
+- `git_status(path)` - Get git status
+- `git_diff(path, staged)` - Get git diff
+- `git_log(path, limit)` - Get git history
+- `git_branch_list()` - List git branches
+- `git_is_repo(path)` - Check if git repository
+
+**MUTATING_TOOLS (11) - Requires User Approval:**
+- `write_file(path, content)` - Write file
+- `replace_in_file(path, old, new)` - Replace text
+- `run_terminal(command)` - Run shell command
+- `create_file(path, content)` - Create new file
+- `delete_file(path)` - Delete file
+- `format_file(path)` - Format file
+- `git_add(path)` - Stage file for commit
+- `git_commit(message, all)` - Commit changes
+- `git_push(branch)` - Push to remote
+- `git_pull(branch)` - Pull from remote
+- `git_checkout(branch)` - Switch branch
 
 Safety features:
 

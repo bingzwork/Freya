@@ -1,5 +1,24 @@
 # Freya Changelog
 
+## Unreleased - Autonomous Approval & HTTP Requests
+- **HTTP Requests Tool**: Added comprehensive HTTP client capabilities
+  - `http_get`, `http_post`, `http_put`, `http_delete`, `http_patch`, `http_head`
+  - `http_request` for generic HTTP method support
+  - Support for custom headers, query parameters, timeout configuration
+  - Support for both form data and JSON data
+  - All HTTP tools classified as READ_ONLY_TOOLS (autonomous approval)
+
+- **Autonomous Approval for Non-destructive Tools**
+  - All 26 registered tools now classified as READ_ONLY_TOOLS or MUTATING_TOOLS
+  - READ_ONLY_TOOLS (14): list_files, read_file, all HTTP tools, git read tools
+  - MUTATING_TOOLS (11): write_file, replace_in_file, run_terminal, file operations, git write tools
+  - LLM prompt updated to include all 26 tools with signatures
+  - READ_ONLY_TOOLS execute without user confirmation
+  - MUTATING_TOOLS require user confirmation via stdin
+  - Added `tests/test_autonomous_approval.py` (10 tests)
+
+---
+
 ## Unreleased - Vector Store Enhancements
 - **Auto-install FAISS**: VectorDB now automatically detects and installs faiss-cpu if missing
 - **Adaptive Index Selection**: Automatically selects optimal FAISS index type based on dataset size:
