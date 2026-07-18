@@ -1,6 +1,8 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from typing import Optional
+import json
+import os
 
 
 @dataclass
@@ -15,15 +17,25 @@ class AgentState:
 
 @dataclass
 class Message:
-    role: str  # "user" or "assistant"
+    role: str # "user" or "assistant"
     content: str
     timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Message":
+        return cls(**data)
+
 
 class ConversationState:
-    def __init__(self, max_history: int = 20):
+    def __init__(self, max_history: int = 20, persistence_path: Optional[str] = None):
         self.max_history = max_history
         self._messages: list[Message] = []
+        self._persistence_path = persistence_path
+        if self._persistence_path and os.path.exists(self._persistence_path):
+            self._load()
 
     def add_message(self, role: str, content: str) -> Message:
         message = Message(role=role, content=content)
@@ -44,6 +56,8 @@ class ConversationState:
 
     def clear(self) -> None:
         self._messages.clear()
+        if self._persistence_path and os.path.exists(self._persistence_path):
+            os.remove(self._persistence_path)
 
     def __len__(self) -> int:
         return len(self._messages)
@@ -62,3 +76,32 @@ class ConversationState:
             if msg.role == "assistant":
                 return msg.content
         return None
+
+    def to_dict(self) -> list[dict]:
+        return [msg.to_dict() for msg in self._messages]
+
+    def save(self, path: Optional[str] = None) -> None:
+        save_path = path or self._persistence_path
+        if save_path:
+            os.makedirs(os.path.dirname(save_path) if os.path.dirname(save_path) else ".", exist_ok=True)
+            with open(save_path, "w", encoding="utf-8") as f:
+                json.dump(self.to_dict(), f, indent=2)
+
+    def _load(self) -> None:
+        if self._persistence_path and os.path.exists(self._persistence_path):
+            try:
+                with open(self._persistence_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                self._messages = [Message.from_dict(msg) for msg in data]
+            except (json.JSONDecodeError, KeyError, TypeError):
+                self._messages = []
+
+    def load(self, path: str) -> None:
+        self._persistence_path = path
+        self._load()
+
+    @classmethod
+    def from_dict(cls, data: list[dict], max_history: int = 20) -> "ConversationState":
+        conversation = cls(max_history=max_history)
+        conversation._messages = [Message.from_dict(msg) for msg in data]
+        return conversation

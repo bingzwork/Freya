@@ -153,3 +153,106 @@ class TestMessage:
         """Message should accept custom timestamp."""
         msg = Message(role="assistant", content="Response", timestamp="2024-01-01T00:00:00")
         assert msg.timestamp == "2024-01-01T00:00:00"
+
+
+class TestConversationPersistence:
+    """Test conversation persistence functionality."""
+
+    def test_save_and_load_conversation(self, tmp_path):
+        """Test saving and loading conversation to file."""
+        import os
+        conversation = ConversationState(max_history=10)
+        conversation.add_message("user", "Hello")
+        conversation.add_message("assistant", "Hi there!")
+
+        save_path = str(tmp_path / "conversation.json")
+        conversation.save(save_path)
+
+        assert os.path.exists(save_path)
+
+        # Load into a new conversation
+        new_conversation = ConversationState(max_history=10)
+        new_conversation.load(save_path)
+
+        assert len(new_conversation) == 2
+        history = new_conversation.get_history()
+        assert history[0].role == "user"
+        assert history[0].content == "Hello"
+        assert history[1].role == "assistant"
+        assert history[1].content == "Hi there!"
+
+    def test_conversation_with_persistence_path(self, tmp_path):
+        """Test conversation with persistence_path auto-loads."""
+        import os
+        save_path = str(tmp_path / "conversation.json")
+
+        # Create and save a conversation
+        conversation1 = ConversationState(max_history=10, persistence_path=save_path)
+        conversation1.add_message("user", "First message")
+        conversation1.add_message("assistant", "First response")
+        conversation1.save()
+
+        # Create new conversation with same path - should auto-load
+        conversation2 = ConversationState(max_history=10, persistence_path=save_path)
+        assert len(conversation2) == 2
+        history = conversation2.get_history()
+        assert history[0].content == "First message"
+        assert history[1].content == "First response"
+
+    def test_conversation_save_method(self, tmp_path):
+        """Test that conversation.save() saves to file."""
+        import os
+        save_path = str(tmp_path / "conversation.json")
+
+        conversation = ConversationState(max_history=10, persistence_path=save_path)
+        conversation.add_message("user", "Test message")
+        conversation.save()
+
+        # Should have saved
+        assert os.path.exists(save_path)
+
+        # Load and verify
+        new_conversation = ConversationState(max_history=10)
+        new_conversation.load(save_path)
+        assert new_conversation.get_last_user_message() == "Test message"
+
+    def test_clear_removes_persistence_file(self, tmp_path):
+        """Test that clear removes the persistence file."""
+        import os
+        save_path = str(tmp_path / "conversation.json")
+
+        conversation = ConversationState(max_history=10, persistence_path=save_path)
+        conversation.add_message("user", "Test")
+        conversation.save()
+        assert os.path.exists(save_path)
+
+        conversation.clear()
+        assert not os.path.exists(save_path)
+
+    def test_to_dict_and_from_dict(self):
+        """Test serialization methods."""
+        conversation = ConversationState(max_history=10)
+        conversation.add_message("user", "Hello")
+        conversation.add_message("assistant", "Hi!")
+
+        data = conversation.to_dict()
+        assert len(data) == 2
+        assert data[0]["role"] == "user"
+        assert data[0]["content"] == "Hello"
+
+        new_conversation = ConversationState.from_dict(data)
+        assert len(new_conversation) == 2
+        assert new_conversation.get_history()[0].content == "Hello"
+
+    def test_message_serialization(self):
+        """Test Message serialization."""
+        msg = Message(role="user", content="Test", timestamp="2024-01-01T00:00:00")
+        data = msg.to_dict()
+        assert data["role"] == "user"
+        assert data["content"] == "Test"
+        assert data["timestamp"] == "2024-01-01T00:00:00"
+
+        new_msg = Message.from_dict(data)
+        assert new_msg.role == "user"
+        assert new_msg.content == "Test"
+        assert new_msg.timestamp == "2024-01-01T00:00:00"

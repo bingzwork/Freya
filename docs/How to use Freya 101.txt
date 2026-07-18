@@ -285,3 +285,43 @@ Freya AI‑Agent – How to start using it (no‑code‑expert version)
   actually edit files and learn from the results”.
 
   Enjoy experimenting, and watch Freya get better at writing code the more you give her meaningful tasks. 🚀
+
+
+———
+## 🔐 Permission Prompts (Keyboard Navigation)
+
+When Freya needs to perform an action that modifies your files (such as writing, 
+deleting, or running terminal commands), she will ask for your permission.
+
+### The NEW Way (Keyboard Navigation):
+
+Instead of typing numbers, you can now use your arrow keys:
+
+1. Use the UP ARROW and DOWN ARROW keys to move the selection
+2. The currently selected option will be highlighted with a cursor
+3. Press ENTER to confirm your selection
+
+Example:
+
+Agent requests permission to execute: write_file({"path": "test.py", "content": "..."})
+
+> Yes
+  No
+
+Up/Down Move  Enter Select
+
+After pressing Down:
+
+  Yes
+> No
+
+Up/Down Move  Enter Select
+
+### If Arrow Keys Don't Work:
+
+If your terminal doesn't support arrow key navigation, the system will automatically 
+fall back to the numeric input method where you can type 1 for Yes or 2 for No.
+
+### Canceling a Permission Prompt:
+
+Press Ctrl+C to cancel the permission prompt. The default action (No) will be taken.

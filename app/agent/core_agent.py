@@ -2,6 +2,7 @@ from app.agent.executor import Executor
 from app.agent.planner import Planner
 from app.brain.state import ConversationState
 from app.core.llm import LLM
+from typing import Optional
 from app.core.logger import logger
 from app.core.project_index import ProjectIndex
 from app.core.symbol_index import SymbolIndex
@@ -23,7 +24,7 @@ except ImportError:
 
 
 class FreyaAgent:
-    def __init__(self, workspace=".", max_conversation_history=20):
+    def __init__(self, workspace=".", max_conversation_history=20, conversation_persistence_path: Optional[str] = None):
         self.workspace = workspace
         self.llm = LLM()
         self.tools = ToolManager(workspace)
@@ -33,7 +34,7 @@ class FreyaAgent:
         self.patch_generator = PatchGenerator(self.llm, self.patch_engine)
         self.verifier = VerificationRunner(workspace)
         self.planner = Planner(self.llm, self.memory)
-        self.conversation = ConversationState(max_history=max_conversation_history)
+        self.conversation = ConversationState(max_history=max_conversation_history, persistence_path=conversation_persistence_path)
 
         self.project_index = ProjectIndex(workspace)
         self.symbol_index = SymbolIndex(workspace)
@@ -106,6 +107,8 @@ Answer the user's request using the relevant code above.
         self.memory.record("task", {"request": task, "outcome": answer[:500]})
         self.conversation.add_message("user", task)
         self.conversation.add_message("assistant", answer)
+        if self.conversation._persistence_path:
+            self.conversation.save()
         return answer
 
     def propose_patch(self, task):
@@ -143,7 +146,7 @@ Answer the user's request using the relevant code above.
 
         Args:
             task (str): Description of the goal.
-            max_iterations (int): Maximum number of planÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¹Ã…â€œproposeÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¹Ã…â€œapply cycles.
+            max_iterations (int): Maximum number of planÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¹Ãƒâ€¦Ã¢â‚¬Å“proposeÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¹Ãƒâ€¦Ã¢â‚¬Å“apply cycles.
             allow_mutations (bool): If True, allows the agent to modify files.
             success_condition (callable, optional): A function that takes (task, iteration,
                 verification_result, history) and returns True if the task is considered
@@ -163,7 +166,7 @@ Answer the user's request using the relevant code above.
         for it in range(1, max_iterations + 1):
             # 1. Plan
             plan = self.planner.create_plan(task)
-            # 2. Propose patch based on plan (we treat the plan steps as the subÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¹Ã…â€œtask)
+            # 2. Propose patch based on plan (we treat the plan steps as the subÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¹Ãƒâ€¦Ã¢â‚¬Å“task)
             plan_steps = plan.get("steps", [])
             sub_task = "\n".join(plan_steps) if plan_steps else task
             try:
@@ -259,3 +262,11 @@ Answer the user's request using the relevant code above.
     def clear_conversation(self) -> None:
         """Clear the current conversation history. Alias for new_conversation.""" 
         self.conversation.clear()
+
+    def save_conversation(self, path: Optional[str] = None) -> None:
+        """Save conversation history to a file."""
+        self.conversation.save(path)
+
+    def load_conversation(self, path: str) -> None:
+        """Load conversation history from a file."""
+        self.conversation.load(path)

@@ -165,3 +165,53 @@ class TestFreyaAgentConversation:
 
         mock_agent.conversation.add_message("assistant", "Response")
         assert mock_agent.get_conversation_length() == 2
+
+    def test_agent_conversation_persistence_path(self, tmp_path: Path):
+        """FreyaAgent should accept conversation_persistence_path."""
+        with patch("app.agent.core_agent.LLM"), \
+             patch("app.agent.core_agent.ToolManager"), \
+             patch("app.agent.core_agent.ProjectMemory"), \
+             patch("app.agent.core_agent.Executor"), \
+             patch("app.agent.core_agent.Planner"), \
+             patch("app.agent.core_agent.PatchEngine"), \
+             patch("app.agent.core_agent.PatchGenerator"), \
+             patch("app.agent.core_agent.VerificationRunner"), \
+             patch("app.core.project_index.ProjectIndex"), \
+             patch("app.core.symbol_index.SymbolIndex"), \
+             patch("app.intelligence.file_locator.FileLocator"), \
+             patch("app.intelligence.lexical_search.LexicalSearch"), \
+             patch("app.intelligence.dependency_graph.DependencyGraph"), \
+             patch("app.intelligence.context_builder.ContextBuilder"), \
+             patch("app.rag.SimpleRetriever"), \
+             patch("app.core.logger.logger"):
+
+            save_path = str(tmp_path / "conversation.json")
+            agent = FreyaAgent(str(tmp_path), max_conversation_history=10, conversation_persistence_path=save_path)
+            assert agent.conversation._persistence_path == save_path
+
+    def test_save_conversation_method(self, mock_agent, tmp_path: Path):
+        """save_conversation should save conversation to file."""
+        import os
+        mock_agent.conversation.add_message("user", "Test")
+        mock_agent.conversation.add_message("assistant", "Response")
+
+        save_path = str(tmp_path / "conversation.json")
+        mock_agent.save_conversation(save_path)
+
+        assert os.path.exists(save_path)
+
+    def test_load_conversation_method(self, mock_agent, tmp_path: Path):
+        """load_conversation should load conversation from file."""
+        import os
+        save_path = str(tmp_path / "conversation.json")
+
+        # Save a conversation
+        mock_agent.conversation.add_message("user", "Saved message")
+        mock_agent.save_conversation(save_path)
+        mock_agent.clear_conversation()
+        assert len(mock_agent.conversation) == 0
+
+        # Load it back
+        mock_agent.load_conversation(save_path)
+        assert len(mock_agent.conversation) == 1
+        assert mock_agent.get_conversation_history()[0].content == "Saved message"
