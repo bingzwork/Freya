@@ -4,40 +4,40 @@ import sys
 from typing import Any
 
 from app.core.logger import logger
+from app.ui.permission_menu import permission_prompt
 
 
 class Executor:
 
     READ_ONLY_TOOLS = {
- "list_files",
- "read_file",
- "http_get",
- "http_post",
- "http_put",
- "http_delete",
- "http_patch",
- "http_head",
- "http_request",
- "git_status",
- "git_diff",
- "git_log",
- "git_branch_list",
- "git_is_repo",
- }
+        "list_files",
+        "read_file",
+        "http_get",
+        "http_post",
+        "http_put",
+        "http_delete",
+        "http_patch",
+        "http_head",
+        "http_request",
+        "git_status",
+        "git_diff",
+        "git_log",
+        "git_branch_list",
+        "git_is_repo",
+    }
     MUTATING_TOOLS = {
- "write_file",
- "replace_in_file",
- "run_terminal",
- "create_file",
- "delete_file",
- "format_file",
- "git_add",
- "git_commit",
- "git_push",
- "git_pull",
- "git_checkout",
- }
-
+        "write_file",
+        "replace_in_file",
+        "run_terminal",
+        "create_file",
+        "delete_file",
+        "format_file",
+        "git_add",
+        "git_commit",
+        "git_push",
+        "git_pull",
+        "git_checkout",
+    }
 
     def __init__(
         self,
@@ -47,7 +47,6 @@ class Executor:
 
         self.llm = llm
         self.tools = tools
-
 
     def decide_action(self, step: str) -> dict[str, Any] | None:
 
@@ -71,30 +70,28 @@ Return ONLY JSON.
 Examples:
 
 {{
- "tool": "list_files",
- "args": {{}}
+"tool": "list_files",
+"args": {{
+}}
 }}
 
 or
 
 {{
- "tool": "read_file",
- "args": {{
-    "path":"main.py"
- }}
+"tool": "read_file",
+"args": {{
+"path":"main.py"
+}}
 }}
 """
 
-
         answer = self.llm.ask(prompt)
-
 
         answer = re.sub(
             r"```json|```",
             "",
             answer
         ).strip()
-
 
         try:
 
@@ -103,6 +100,7 @@ or
         except:
 
             return None
+
     def execute_step(
         self,
         step: str,
@@ -122,14 +120,12 @@ or
         # Ask for confirmation for mutating tools
         if tool in self.MUTATING_TOOLS:
             action_desc = f"{tool}({args})"
-            sys.stdout.write(f"\nAgent requests permission to execute: {action_desc}\n")
-            sys.stdout.write("Choose an option:\n")
-            sys.stdout.write("  1. Yes\n")
-            sys.stdout.write("  2. No\n")
-            sys.stdout.write("Enter your choice (1 or 2): ")
-            sys.stdout.flush()
-            reply = sys.stdin.readline().strip()
-            if reply != "1":
+            choice = permission_prompt(
+                title=f"Agent requests permission to execute: {action_desc}",
+                options=["Yes", "No"],
+                default="No",
+            )
+            if choice != "Yes":
                 return {
                     "action": action,
                     "error": f"User denied permission for {tool}.",
@@ -151,7 +147,6 @@ or
             "result": result.output if result.success else result.error
         }
 
-
     def execute_plan(
         self,
         plan: dict[str, Any],
@@ -159,7 +154,6 @@ or
     ) -> list[dict[str, Any]]:
 
         results = []
-
 
         for step in plan.get("steps", [])[:8]:
 
@@ -170,7 +164,4 @@ or
                 }
             )
 
-
         return results
-
-

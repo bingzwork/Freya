@@ -41,7 +41,7 @@ class ProjectMemory:
         """Return the most recent edit records."""
         all_entries = self._load()
         edits = [e for e in all_entries if e.get("kind") == "edit"]
-        return edges[-limit:]
+        return edits[-limit:]
 
     def context(self, limit=5, max_characters=2_000):
         lines = [

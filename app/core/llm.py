@@ -9,7 +9,7 @@ except ImportError:
         def __getattr__(self, name):
             # Return a mock function that returns a default response
             return lambda *args, **kwargs: {"message": {"content": "[LLM response not available - ollama not installed]"}}
-    
+
     ollama = _MockOllama()
 
 
@@ -30,11 +30,13 @@ class LLM:
 
             model=self.model,
 
+
             messages=[
 
                 {
 
                     "role": "system",
+
 
                     "content": system,
 
@@ -43,6 +45,7 @@ class LLM:
                 {
 
                     "role": "user",
+
 
                     "content": prompt,
 

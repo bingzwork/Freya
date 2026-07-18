@@ -20,7 +20,7 @@ from app.rag import SimpleRetriever
 try:
     from app.retrieval.enhanced_retriever import EnhancedRetriever
 except ImportError:
-    EnhancedRetriever = SimpleRetriever  # Fallback if enhanced version not available
+    EnhancedRetriever = SimpleRetriever # Fallback if enhanced version not available
 
 
 class FreyaAgent:
@@ -54,21 +54,21 @@ class FreyaAgent:
         logger.info("Freya Agent initialized")
 
     def build_context(self, task):
-       matches = self.file_locator.locate(task)
-       if not matches:
-           for word in task.replace(",", " ").replace(".", " ").split():
-               matches.extend(self.file_locator.locate(word))
+        matches = self.file_locator.locate(task)
+        if not matches:
+            for word in task.replace(",", " ").replace(".", " ").split():
+                matches.extend(self.file_locator.locate(word))
 
-       matches.extend(self.lexical_search.search(task, limit=5))
-       matches.extend(self.retriever.retrieve(task, limit=5))
-       unique = []
-       seen = set()
-       for match in matches:
-           key = (match["file"], match["type"], match["name"], match["line"])
-           if key not in seen:
-               seen.add(key)
-               unique.append(match)
-       return self.context_builder.build(unique[:5]) if unique else ""
+        matches.extend(self.lexical_search.search(task, limit=5))
+        matches.extend(self.retriever.retrieve(task, limit=5))
+        unique = []
+        seen = set()
+        for match in matches:
+            key = (match["file"], match["type"], match["name"], match["line"])
+            if key not in seen:
+                seen.add(key)
+                unique.append(match)
+        return self.context_builder.build(unique[:5]) if unique else ""
 
     def run(self, task, allow_mutations=True):
         """Plan, execute bounded workspace actions, and summarize the result. Mutating tools will prompt for confirmation before each use."""
@@ -146,7 +146,7 @@ Answer the user's request using the relevant code above.
 
         Args:
             task (str): Description of the goal.
-            max_iterations (int): Maximum number of planÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¹Ãƒâ€¦Ã¢â‚¬Å“proposeÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¹Ãƒâ€¦Ã¢â‚¬Å“apply cycles.
+            max_iterations (int): Maximum number of propose-apply cycles.
             allow_mutations (bool): If True, allows the agent to modify files.
             success_condition (callable, optional): A function that takes (task, iteration,
                 verification_result, history) and returns True if the task is considered
@@ -166,7 +166,7 @@ Answer the user's request using the relevant code above.
         for it in range(1, max_iterations + 1):
             # 1. Plan
             plan = self.planner.create_plan(task)
-            # 2. Propose patch based on plan (we treat the plan steps as the subÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¹Ãƒâ€¦Ã¢â‚¬Å“task)
+            # 2. Propose patch based on plan (we treat the plan steps as the sub-task)
             plan_steps = plan.get("steps", [])
             sub_task = "\n".join(plan_steps) if plan_steps else task
             try:
@@ -248,19 +248,19 @@ Answer the user's request using the relevant code above.
         ).run(propose)
 
     def new_conversation(self) -> None:
-        """Start a new conversation, clearing previous message history.""" 
+        """Start a new conversation, clearing previous message history."""
         self.conversation.clear()
 
     def get_conversation_history(self) -> list:
-        """Get the current conversation message history.""" 
+        """Get the current conversation message history."""
         return self.conversation.get_history()
 
     def get_conversation_length(self) -> int:
-        """Get the number of messages in the current conversation.""" 
+        """Get the number of messages in the current conversation."""
         return len(self.conversation)
 
     def clear_conversation(self) -> None:
-        """Clear the current conversation history. Alias for new_conversation.""" 
+        """Clear the current conversation history. Alias for new_conversation."""
         self.conversation.clear()
 
     def save_conversation(self, path: Optional[str] = None) -> None:
