@@ -1,5 +1,6 @@
 from app.agent.executor import Executor
 from app.agent.planner import Planner
+from app.brain.state import ConversationState
 from app.core.llm import LLM
 from app.core.logger import logger
 from app.core.project_index import ProjectIndex
@@ -22,7 +23,7 @@ except ImportError:
 
 
 class FreyaAgent:
-    def __init__(self, workspace="."):
+    def __init__(self, workspace=".", max_conversation_history=20):
         self.workspace = workspace
         self.llm = LLM()
         self.tools = ToolManager(workspace)
@@ -32,6 +33,7 @@ class FreyaAgent:
         self.patch_generator = PatchGenerator(self.llm, self.patch_engine)
         self.verifier = VerificationRunner(workspace)
         self.planner = Planner(self.llm, self.memory)
+        self.conversation = ConversationState(max_history=max_conversation_history)
 
         self.project_index = ProjectIndex(workspace)
         self.symbol_index = SymbolIndex(workspace)
@@ -79,8 +81,12 @@ class FreyaAgent:
         prompt = f"""
 You are Freya, an AI software engineer.
 
+{conversation_history}
+
 User request:
 {task}
+
+conversation_history = self.conversation.get_history_text()
 
 Relevant project code:
 {context}
@@ -98,6 +104,8 @@ Answer the user's request using the relevant code above.
 """
         answer = self.llm.ask(prompt)
         self.memory.record("task", {"request": task, "outcome": answer[:500]})
+        self.conversation.add_message("user", task)
+        self.conversation.add_message("assistant", answer)
         return answer
 
     def propose_patch(self, task):
@@ -236,5 +244,18 @@ Answer the user's request using the relevant code above.
             self.patch_engine, self.tools, self.verifier, max_attempts
         ).run(propose)
 
+    def new_conversation(self) -> None:
+        """Start a new conversation, clearing previous message history.""" 
+        self.conversation.clear()
 
+    def get_conversation_history(self) -> list:
+        """Get the current conversation message history.""" 
+        return self.conversation.get_history()
 
+    def get_conversation_length(self) -> int:
+        """Get the number of messages in the current conversation.""" 
+        return len(self.conversation)
+
+    def clear_conversation(self) -> None:
+        """Clear the current conversation history. Alias for new_conversation.""" 
+        self.conversation.clear()
