@@ -79,6 +79,7 @@ class FreyaAgent:
         if allow_mutations:
             allowed_tools.update(Executor.MUTATING_TOOLS)
         results = self.executor.execute_plan(plan, allowed_tools)
+        conversation_history = self.conversation.get_history_text()
         prompt = f"""
 You are Freya, an AI software engineer.
 
@@ -87,7 +88,6 @@ You are Freya, an AI software engineer.
 User request:
 {task}
 
-conversation_history = self.conversation.get_history_text()
 
 Relevant project code:
 {context}
