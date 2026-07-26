@@ -18,4 +18,4 @@ dev = ["pytest>=8.0,<9.0"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q --basetemp=tmp/pytest_tmp --cache-clear -p no:cacheprovider --disable-warnings"
+addopts = "-q --basetemp=C:/temp/pytest_tmp --cache-clear -p no:cacheprovider --disable-warnings"

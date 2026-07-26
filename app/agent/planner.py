@@ -26,35 +26,44 @@ class Planner:
                 # If memory fails, just ignore
                 pass
 
-        # Define task-specific templates and examples
-        task_samples = """Task Type Examples (use these as patterns):
-- Build tasks: Detect project type, Restore dependencies if required, Build the project, Analyze build errors, Fix build errors if possible, Rebuild, Report results
-- Debug/Fix tasks: Analyze the error/symptoms, Locate relevant code/files, Identify root cause, Implement a fix, Run validation/tests, Report results
-- Refactor tasks: Analyze existing implementation and dependencies, Design refactoring approach, Implement changes incrementally, Preserve existing behavior, Run tests/validation, Report results
-- Create/Implement tasks: Analyze requirements/project structure, Design solution/architecture, Implement the feature/module/API, Add tests if applicable, Validate functionality, Report results
-- Explain tasks: Analyze the code/function/module, Identify key components and logic, Provide clear explanation with examples if helpful, Answer follow-up questions
-- Review tasks: Examine the code/changes, Identify issues or improvements, Provide specific feedback, Suggest fixes or enhancements
-- Test tasks: Design test cases, Implement test code, Run tests, Analyze results, Fix issues if found, Re-run tests
-- Optimize tasks: Profile current performance, Identify bottlenecks, Design optimizations, Implement improvements, Validate results, Compare before/after metrics
+        # Define task-specific templates and examples for ENGINEERING TASKS ONLY
+        # ONLY executable engineering actions that map to TOOLS should appear here
+        # REASONING steps (analyze, understand, explain, summarize, describe, identify, provide, answer) are NOT executable
+        task_samples = """Engineering Task Examples (ONLY executable tool actions):
+
+- Build tasks: Detect project type, Restore dependencies, Build project, Run build command, Fix build errors, Rebuild, Report results
+- Debug/Fix tasks: Read error file, Read code files, Locate relevant code, Fix the code, Run validation tests, Report results
+- Refactor tasks: Read existing implementation, Modify code files, Run tests, Report results
+- Create/Implement tasks: Read requirements, Write implementation files, Add tests, Run validation, Report results
+- Review tasks: Read code files, Write feedback, Suggest fixes
+- Test tasks: Write test files, Run tests, Fix issues, Re-run tests
+- Optimize tasks: Profile performance, Implement optimizations, Run benchmarks, Compare results
+
+FORBIDDEN STEPS (these are LLM REASONING, not executable tool actions):
+- Analyze, Understand, Explain, Summarize, Describe, Identify, Provide, Answer, Clarify, Determine, Design, Locate
+- These happen AFTER tools execute, NOT as plan steps
 """
 
-        prompt = f"""You are Freya, an autonomous coding AI. Create a short execution plan for this task: {task}
+        prompt = f"""You are Freya, an autonomous coding AI. Create a SHORT EXECUTION PLAN for this ENGINEERING task: {task}
 
 {task_samples}
 
-{memory_context}Guidelines:
-- Create a plan that is SPECIFIC to the type of task requested
-- For "Build my project": include steps like detecting project type, restoring dependencies, building, analyzing errors
-- For "Fix this Python error": include analyzing the error, locating code, implementing fix, validating
-- For "Refactor this function": include analyzing current implementation, designing refactoring, implementing changes, testing
-- For "Create a REST API": include analyzing structure, designing endpoints, implementing API, testing, validating
-- For "Explain this function": include analyzing code, identifying key logic, providing clear explanation
-- Do NOT generate generic software development workflows
-- Each step must directly contribute to completing the specific request
-- Keep steps concise and high-level
-- Limit to 3-5 practical steps
-- Return ONLY JSON. Do not use markdown. Do not use ```. 
-Format: {{"steps": ["step 1", "step 2"]}}"""
+{memory_context}CRITICAL RULES:
+- ONLY generate steps that map to EXECUTABLE TOOLS: read_file, write_file, replace_in_file, list_files, run_terminal, create_file, delete_file, git_*, http_*, format_file
+- NEVER include reasoning steps: NO "analyze", "understand", "explain", "summarize", "describe", "identify", "provide", "answer", "clarify", "determine"
+- If the request is NOT an engineering task (knowledge question, capability question, identity, status), return {{"steps": []}} - empty plan
+- Each step MUST be a concrete TOOL ACTION: "Read file X", "Run command Y", "Write file Z", "List directory"
+- Max 5 steps. Keep steps concise.
+- Return ONLY JSON. No markdown. No explanations.
+Format: {{"steps": ["step 1", "step 2"]}}
+
+EXAMPLES:
+- "Read app/router.py" -> {{"steps": ["Read app/router.py"]}}
+- "Run pytest" -> {{"steps": ["Run pytest"]}}
+- "Fix this bug: <traceback>" -> {{"steps": ["Read error file", "Read relevant code files", "Fix the code", "Run tests"]}}
+- "What is Python?" -> {{"steps": []}}  (not engineering - empty plan)
+- "Explain this function: <code>" -> {{"steps": []}}  (not engineering - empty plan)
+"""
 
         answer = self.llm.ask(prompt)
         # remove markdown fences if model adds them

@@ -1,5 +1,7 @@
 # Freya Project Overview
 
+> **Audit Status (2026-07-26):** All critical issues fixed. Production code clean. 49 capabilities registered; 40 fully implemented, 7 partially implemented, 1 not yet implemented (AST refactoring), 1 removed (legacy ToolCaller). See `CAPABILITY_AUDIT_REPORT.md` for full details.
+
 ## Vision
 
 Freya is an autonomous AI software engineer capable of understanding, navigating, modifying, testing, and improving software projects with minimal human guidance.
@@ -243,27 +245,58 @@ Files:
 
 ## Tool Selection
 
-Freya no longer relies entirely on the LLM for tool selection.
+Freya uses a hybrid approach for tool selection: deterministic rule-based mapping first, then LLM fallback for complex steps.
 
-Current strategy:
+### Strategy
 
-Deterministic rules first.
+1. **Direct Keyword Mapping** (fast, consistent):
+   - Comprehensive keyword-to-tool mappings for common software engineering tasks
+   - Build operations → `run_terminal`
+   - Test execution → `run_terminal`
+   - Dependency installation → `run_terminal`
+   - File reading/analysis → `read_file`
+   - File creation → `create_file` / `write_file`
+   - Code modification → `replace_in_file`
+   - File listing/search → `list_files`
+   - Git operations → `git_*` tools
+   - HTTP requests → `http_*` tools
 
-Examples:
+2. **LLM Fallback** (for unmatched steps):
+   - Enhanced prompt with tool preference order (least powerful first)
+   - Concrete examples of correct tool selection
+   - Anti-patterns explicitly documented (avoid unnecessary terminal use)
+   - Structured JSON response format
 
-Explain X
-→ list_files
+### Logging Format
 
-Read file
-→ read_file
+Every tool selection decision is logged in a structured format for auditability:
 
-Run command
-→ run_terminal
+```
+[Tool Selector]
+Planning Step:
+Build the project
 
-Unknown requests
-→ fallback to LLM
+Selected Tool:
+run_terminal
 
-This greatly improves consistency.
+Reason:
+Project build required.
+```
+
+### Tool Preference Order (Least Powerful → Most Powerful)
+
+1. **Read operations**: `list_files`, `read_file`
+2. **File operations**: `create_file`, `write_file`, `delete_file`, `replace_in_file`
+3. **Git operations**: `git_*` tools
+4. **HTTP operations**: `http_*` tools
+5. **Terminal operations**: `run_terminal` (last resort)
+
+### Guiding Principles
+
+- Match tool to planning step precisely
+- Never choose unrelated tools
+- Avoid `run_terminal` when another tool can accomplish the task
+- Prefer the least powerful tool capable of completing the step
 
 ---
 
@@ -299,20 +332,55 @@ Response
 
 # Current Capabilities Summary
 
-Freya now possesses:
+## Core Agent Pipeline
 
-- [x] Project awareness
-- [x] Code awareness
+- [x] Project awareness (project_index)
+- [x] Code awareness (symbol_index)
 - [x] Symbol awareness
 - [x] File awareness
 - [x] Lexical search
-- [x] Semantic search
-- [x] Enhanced retrieval
+- [x] Semantic search (sentence-transformers + FAISS)
+- [x] Enhanced retrieval (60% lexical + 40% semantic)
 - [x] Patch generation
 - [x] Patch verification
 - [x] Autonomous repair loop
-- [x] Persistent memory
+- [x] Persistent memory (ProjectMemory, ExperienceMemory, EngineeringLessons)
 - [x] Persistent Vector Database (FAISS) with auto-install, adaptive indexing, lazy deletion, and benchmarking
+
+## Foundation Systems (Phase 1 - all implemented)
+
+- [x] **Capability Audit System** — Automated auditing with registry and reports
+- [x] **Diagnostics Engine** — Static code analysis (unused imports, complexity, security, etc.)
+- [x] **System Monitoring** — Real-time CPU, memory, disk, network metrics with alerts
+- [x] **Advanced Planner** — Task graph, scheduler, resource allocator, progress tracker, visualizer
+- [x] **Reviewer System** — Code review workflow with assignments, checklists, metrics
+- [x] **Risk Assessment** — Risk identification, assessment, mitigation tracking
+- [x] **Confidence Scoring** — Confidence calibration and tracking
+- [x] **Improvement Backlog** — Priority-scored backlog with weighted scoring
+- [x] **Benchmarking Framework** — Timing, accuracy, multi-metric benchmarks
+- [x] **Documentation Automation** — AST-based documentation generation
+- [x] **Git Automation** — Semantic commits, change tracking, branch management
+- [x] **Project Health** — Health dashboard with metrics and monitoring
+- [x] **LLM Provider Abstraction** — Multi-provider framework (Ollama implementation)
+
+## Subsystems
+
+- [x] Multi-turn conversation state with persistence
+- [x] Intent classification (8 types with confidence scoring)
+- [x] Capability routing (15+ direct answers bypassing LLM)
+- [x] Patch-based editing with rollback
+- [x] Verification runner (pytest, py_compile)
+- [x] Permission menu for mutating tools
+
+## Architectural Quality
+
+- [x] Clean modular structure (25+ modules, 127+ files)
+- [x] Event system (pub/sub) for inter-component communication
+- [x] Provider factory pattern for LLM extensibility
+- [x] Capability registry (49 capabilities tracked)
+- [x] All foundation systems integrated
+- [x] Comprehensive test suite (500+ tests across 40 test files)
+- [x] No duplicate implementations (all duplicates removed in v0.4.1)
 
 ---
 
@@ -330,17 +398,23 @@ These are planned for future milestones.
 
 # Next Milestones
 
-1. **v0.6.0** - Dependency Graph and Context Builder v2
-   - Full dependency graph
-   - Improved context building
-   - Better symbol-level context extraction
+> See `ROADMAP.md` for the full actionable roadmap aligned with the 2026-07-26 audit.
 
-2. **v0.7.0** - Enhanced Patch System
-   - Formal patch review object
-   - CLI workflow for propose/preview/approve/apply/verify
-   - End-to-end tests with stub LLM
+## Upcoming (v0.4.2 - v0.5.0)
 
-3. **v0.8.0** - Self-Improvement
-   - Learning from past decisions
-   - Autonomous goal detection
-   - Online learning capabilities
+1. **Multi-provider LLM** — Claude, OpenAI, Gemini provider implementations
+2. **Structured Logging** — JSON format for production observability
+3. **Streaming LLM** — Token-by-token responses for better UX
+4. **Delete Patch Action** — PatchEngine support for file deletion
+5. **ExperienceMemory Integration** — Connect experience lessons to agent decisions
+6. **EngineeringLessons Integration** — Auto-retrieve lessons during planning
+7. **AST-based Refactoring** — Safe code transformations (rename, extract, inline)
+8. **Cross-file Symbol Resolution** — Navigate imports/references across files
+
+## Future (v0.6.0 - v1.0.0)
+
+- Plugin system for extensibility
+- Distributed tracing (OpenTelemetry)
+- Agent spawning / sub-agent delegation
+- Multi-version LLM caching
+- Production hardening (integration tests, fault injection)

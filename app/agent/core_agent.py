@@ -13,14 +13,147 @@ from app.intelligence.context_builder import ContextBuilder
 from app.intelligence.dependency_graph import DependencyGraph
 from app.intelligence.file_locator import FileLocator
 from app.intelligence.lexical_search import LexicalSearch
+from app.intent import should_answer_directly, classify_intent, IntentType
 from app.memory.project_memory import ProjectMemory
 from app.verification.repair_loop import RepairLoop
 from app.verification.runner import VerificationRunner
 from app.rag import SimpleRetriever
+import re
 try:
     from app.retrieval.enhanced_retriever import EnhancedRetriever
 except ImportError:
     EnhancedRetriever = SimpleRetriever # Fallback if enhanced version not available
+
+
+def _has_sufficient_context(task: str, intent: IntentType) -> bool:
+    """
+    Check if an engineering task has sufficient context to execute.
+
+    Returns True if the task contains actionable information (file paths, code, errors, etc.),
+    False if essential information is missing and user should be asked for it.
+    """
+    task_lower = task.lower()
+
+    # Patterns that indicate sufficient context is provided
+    has_file_path = bool(re.search(r'\b\w+\.(py|js|ts|jsx|tsx|java|cpp|cc|c|h|rs|go|rb|php|cs|kt|swift|scala|r|m|pl|sh|bash|zsh|fish|ps1|bat|cmd|dockerfile|makefile|cmake|gradle|xml|json|yaml|yml|toml|ini|cfg|conf|md|txt|html|css|scss|sass|less|vue|svelte)\b', task_lower))
+
+    has_code_block = '```' in task
+
+    # Repository/project references (e.g., "this repository", "the repo", "my project")
+    has_repo_reference = any(phrase in task_lower for phrase in [
+        'this repository', 'the repository', 'my repository', 'the repo', 'my repo',
+        'this project', 'my project', 'the project', 'this codebase', 'the codebase',
+        'this code base', 'the code base', 'entire project', 'whole project', 'full project'
+    ])
+
+    # Actual traceback patterns: file paths with line numbers, exception types with details
+    has_traceback = bool(re.search(
+        r'(traceback \(most recent call last\)|file\s+\".*\",\s+line\s+\d+|'
+        r'(syntaxerror|typeerror|valueerror|attributeerror|importerror|modulenotfounderror|keyerror|indexerror|runtimeerror|assertionerror|nameerror|indentationerror|zerodivisionerror):\s+\w+)',
+        task_lower
+    ))
+
+    # Error message with substantial content (not just the word "error")
+    has_error_message = bool(re.search(r'(error|exception|fail|crash|bug)\s*:', task_lower)) and len(task) > 30
+
+    # Colon followed by substantial content (e.g., "Fix this: actual error info")
+    has_colon_content = ':' in task and len(task.split(':', 1)[-1].strip()) >= 14
+
+    # Natural language specific action: "by <action>", "to <action>", "for <action>"
+    # OR action verb at start with file path: "Upgrade requirements.txt", "Fix bug in app.py"
+    has_specific_action = bool(re.search(
+        r'\b(by|to|for)\s+(upgrad|add|remov|pin|sync|fix|install|upgrad|refactor|optimiz|implement|creat|build|test|delet|clean)\w*',
+        task_lower
+    ))
+    # Action verb at start followed by file path: "Upgrade requirements.txt", "Fix app.py"
+    has_action_with_file = bool(re.search(
+        r'^(upgrad|fix|debug|review|explain|optimiz|refactor|implement|creat|build|test|delet|clean|modif|chang|edit)\w*\s+.*\.(py|txt|json|yaml|yml|toml|ini|cfg|conf|md|js|ts|java|cpp|rs|go)\b',
+        task_lower
+    ))
+
+    # ... rest of function
+
+    # Intent-specific validation
+    if intent == IntentType.FILE_OPERATION:
+        # File operations need a file path AND specific action for ambiguous verbs
+        ambiguous_verbs = ['update', 'modify', 'change', 'edit', 'upgrade']
+        if any(verb in task_lower for verb in ambiguous_verbs):
+            # "Update requirements.txt" - need specific action (colon content or code or action+file)
+            return has_colon_content or has_code_block or has_traceback or has_action_with_file
+        # Read/write/delete/create are explicit enough with just a file path
+        return has_file_path
+
+    elif intent == IntentType.CODE_TASK:
+        # Code tasks need code, file path, or traceback
+        # Exception: refactor/analyze on "this repository" is valid
+        if 'refactor' in task_lower or 'analyze' in task_lower:
+            return (has_file_path or has_code_block or has_traceback or
+                    has_colon_content or has_repo_reference)
+        return has_file_path or has_code_block or has_traceback or has_colon_content
+
+    elif intent == IntentType.TASK:
+        # General tasks: check if it's a fix/debug/review/optimize/update that needs context
+        fix_debug_keywords = ['fix', 'debug', 'review', 'explain', 'optimize', 'refactor', 'analyze', 'update', 'upgrade', 'modify', 'change', 'edit']
+        if any(kw in task_lower for kw in fix_debug_keywords):
+            # These need code, file, or error context with SPECIFIC ACTION
+            # A file path alone is not enough (e.g., "Update requirements.txt" is ambiguous)
+            # Exception: refactor/analyze on "this repository" is valid
+            if 'refactor' in task_lower or 'analyze' in task_lower:
+                return (has_file_path or has_code_block or has_traceback or
+                        has_colon_content or has_repo_reference)
+            # For update/upgrade/modify/change/edit/fix/debug/review/explain/optimize:
+            # Need specific action: colon content, code block, traceback, repo reference,
+            # OR natural language specific action ("by X", "to X", "for X") WITH a file path,
+            # OR action verb at start with file path ("Upgrade requirements.txt")
+            return (has_code_block or has_traceback or has_colon_content or has_repo_reference or
+                    (has_file_path and has_specific_action) or has_action_with_file)
+        # Other tasks (build, run, create, etc.) may not need additional context
+        return True
+
+    elif intent == IntentType.TOOL_REQUEST:
+        # Tool requests like "run pytest" are self-contained
+        return True
+
+    elif intent == IntentType.GIT_OPERATION:
+        # Git operations typically don't need additional context
+        return True
+
+    # Default: assume sufficient context
+    return True
+
+
+def _get_missing_context_prompt(task: str, intent: IntentType) -> str:
+    """Generate a helpful prompt asking for missing context."""
+    task_lower = task.lower()
+
+    if 'fix' in task_lower and ('traceback' in task_lower or 'error' in task_lower):
+        return "I'd be happy to help fix that. Please paste the complete traceback or error message."
+
+    if 'debug' in task_lower:
+        return "I'd be happy to help debug. Please provide the code, error message, or traceback."
+
+    if 'review' in task_lower or 'explain' in task_lower:
+        if 'function' in task_lower:
+            return "Please provide the function code you'd like me to review or explain."
+        return "Please provide the code you'd like me to review or explain."
+
+    if 'optimize' in task_lower:
+        return "Please provide the code you'd like me to optimize."
+
+    if 'refactor' in task_lower:
+        return "Please provide the code or file path you'd like me to refactor."
+
+    if 'update' in task_lower or 'upgrade' in task_lower or 'modify' in task_lower:
+        return "How would you like me to update this? Please specify the change (e.g., upgrade packages, add dependencies, pin versions, sync imports)."
+
+    # Generic fallbacks based on intent
+    if intent == IntentType.CODE_TASK:
+        return "Please provide the code or file path you'd like me to work with."
+
+    if intent == IntentType.FILE_OPERATION:
+        return "Please specify the file path and the specific change you want."
+
+    return "Could you please provide more details (code, file path, error message, etc.)?"
 
 
 class FreyaAgent:
@@ -72,6 +205,39 @@ class FreyaAgent:
 
     def run(self, task, allow_mutations=True):
         """Plan, execute bounded workspace actions, and summarize the result. Mutating tools will prompt for confirmation before each use."""
+        # Classify intent to determine if we need the engineering pipeline
+        if should_answer_directly(task):
+            # Chat, knowledge questions, and system status -> direct LLM response
+            conversation_history = self.conversation.get_history_text()
+            prompt = f"""You are Freya, an AI software engineer.
+
+{conversation_history}
+
+User: {task}
+
+Answer the user's request directly."""
+            answer = self.llm.ask(prompt)
+            self.memory.record("task", {"request": task, "outcome": answer[:500]})
+            self.conversation.add_message("user", task)
+            self.conversation.add_message("assistant", answer)
+            if self.conversation._persistence_path:
+                self.conversation.save()
+            return answer
+
+        # Validate that engineering tasks have sufficient context
+        classification = classify_intent(task)
+        if not _has_sufficient_context(task, classification.intent):
+            # Missing essential information - ask user instead of inventing fake plans
+            prompt = _get_missing_context_prompt(task, classification.intent)
+            answer = self.llm.ask(prompt)
+            self.memory.record("task", {"request": task, "outcome": answer[:500]})
+            self.conversation.add_message("user", task)
+            self.conversation.add_message("assistant", answer)
+            if self.conversation._persistence_path:
+                self.conversation.save()
+            return answer
+
+        # Engineering tasks -> full planning and execution pipeline
         context = self.build_context(task)
         memory_context = self.memory.context()
         plan = self.planner.create_plan(task)

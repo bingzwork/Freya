@@ -18,7 +18,7 @@ class LLM:
     def __init__(self, model="qwen2.5-coder:14b"):
         self.model = model
 
-    def ask(self, prompt, system="You are Falco, an AI software engineer."):
+    def ask(self, prompt, system="You are Freya, an AI software engineer created by Don Alvin Jalop."):
         if not OLLAMA_AVAILABLE:
             # Return a informative message when ollama is not available
             return "[LLM response not available - ollama not installed]\n\nOriginal prompt: {}\n\nSystem prompt: {}".format(
