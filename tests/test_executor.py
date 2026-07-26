@@ -251,7 +251,7 @@ def test_llm_fallback():
 def test_tool_mapping_coverage():
     """Test that all READ_ONLY_TOOLS and MUTATING_TOOLS are covered in mappings."""
     executor = Executor(MockLLM(), ToolManager("."))
-    
+
     # All read-only tools should be selectable
     for tool in executor.READ_ONLY_TOOLS:
         # Some tools have specific triggers, but core ones should be covered
@@ -259,8 +259,194 @@ def test_tool_mapping_coverage():
             action = executor._map_step_to_tool(f"{tool.replace('_', ' ')} files")
             # This might not always map directly, but the tool should be available
             assert tool in executor.tools.tools
-    
+
     # All mutating tools should be selectable
     for tool in executor.MUTATING_TOOLS:
         if tool in ["write_file", "replace_in_file", "create_file", "delete_file", "run_terminal"]:
             assert tool in executor.tools.tools
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 additions: LLM fallback, decide_action, execute_step edge cases,
+# and the [Executor] bracket logging added in Phase 4.
+# ---------------------------------------------------------------------------
+
+
+class ScriptedLLM:
+    """LLM stub that returns one or more canned responses in order."""
+
+    def __init__(self, *responses: str):
+        self.responses = list(responses)
+        self.calls = []
+
+    def ask(self, prompt):
+        self.calls.append(prompt)
+        # When multiple responses are queued, pop the first; otherwise loop
+        # the final response for the duration of the test.
+        if len(self.responses) > 1:
+            return self.responses.pop(0)
+        return self.responses[0]
+
+
+class NoopTools:
+    """Tool manager stand-in that records every tool call."""
+
+    def __init__(self):
+        self.executed = []
+
+    def execute(self, name, **kwargs):
+        from types import SimpleNamespace
+        self.executed.append((name, kwargs))
+        return SimpleNamespace(success=True, output=f"done:{name}", error="")
+
+
+def test_select_tool_with_llm_returns_action_on_clean_json():
+    with tempfile.TemporaryDirectory() as tmp:
+        llm = ScriptedLLM('{"tool": "read_file", "args": {"path": "x.py"}, "reasoning": "need to read"}')
+        ex = Executor(llm, NoopTools())
+
+        action = ex._select_tool_with_llm("Inspect x.py")
+
+        assert action is not None
+        assert action["tool"] == "read_file"
+        assert action["args"] == {"path": "x.py"}
+        # Prompt must include the preference order and JSON-only contract.
+        prompt = llm.calls[0]
+        assert "least powerful" in prompt
+        assert "no markdown fences" in prompt.lower() or "Return ONLY this JSON" in prompt
+
+
+def test_select_tool_with_llm_returns_none_on_garbage():
+    with tempfile.TemporaryDirectory() as tmp:
+        llm = ScriptedLLM("totally not json")
+        ex = Executor(llm, NoopTools())
+
+        assert ex._select_tool_with_llm("do something vague") is None
+
+
+def test_select_tool_with_llm_strips_markdown_fences():
+    """A common LLM output is fenced JSON; the executor must tolerate it."""
+    with tempfile.TemporaryDirectory() as tmp:
+        fenced = '```json\n{"tool": "list_files", "args": {}}\n```'
+        ex = Executor(ScriptedLLM(fenced), NoopTools())
+
+        action = ex._select_tool_with_llm("explore project")
+        assert action is not None
+        assert action["tool"] == "list_files"
+
+
+def test_decide_action_prefers_direct_mapping_over_llm():
+    """Direct mapping wins; the LLM is only consulted when no keyword matches."""
+    with tempfile.TemporaryDirectory() as tmp:
+        llm = ScriptedLLM('{"tool": "list_files", "args": {}}')  # would also be a valid fallback
+        ex = Executor(llm, NoopTools())
+
+        # 'Read' is a direct mapping keyword → read_file
+        action = ex.decide_action("Read main.py")
+        assert action["tool"] == "read_file"
+        # LLM should not have been consulted.
+        assert llm.calls == []
+
+
+def test_decide_action_falls_back_to_llm_when_no_keyword_match():
+    with tempfile.TemporaryDirectory() as tmp:
+        llm = ScriptedLLM('{"tool": "list_files", "args": {}}')
+        ex = Executor(llm, NoopTools())
+
+        action = ex.decide_action("Perform complex analysis on the codebase")
+        assert action["tool"] == "list_files"
+        assert len(llm.calls) == 1
+
+
+def test_execute_step_returns_error_when_no_action_selected():
+    with tempfile.TemporaryDirectory() as tmp:
+        llm = ScriptedLLM("not json at all")  # forces _select_tool_with_llm to None
+        ex = Executor(llm, NoopTools())
+
+        result = ex.execute_step("do the thing no keyword really matches xyzqq")
+
+        assert "error" in result
+        assert "No valid action selected" in result["error"]
+
+
+def test_execute_step_blocks_mutating_tool_outside_allowed_set(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        # Default behaviour in execute_step is to ask the user before any
+        # MUTATING_TOOLS call; in pytest we can't prompt, so stub it out.
+        monkeypatch.setattr(
+            "app.agent.executor.permission_prompt",
+            lambda *a, **kw: "Yes",
+        )
+        # run_terminal is mutating; allow only read-only tools.
+        ex = Executor(ScriptedLLM('{"tool": "run_terminal", "args": {"command": "ls"}}'),
+                      ToolManager(tmp))
+
+        result = ex.execute_step("Run pytest", allowed_tools=ex.READ_ONLY_TOOLS)
+
+        assert "error" in result
+        assert "requires explicit mutation approval" in result["error"]
+
+
+def test_execute_plan_skips_steps_with_empty_plan():
+    with tempfile.TemporaryDirectory() as tmp:
+        ex = Executor(ScriptedLLM('{"tool": "list_files", "args": {}}'), NoopTools())
+        # No steps at all → no [Tool Selector] calls, but Executor logs go out.
+        results = ex.execute_plan({"steps": []}, allowed_tools=set(ex.READ_ONLY_TOOLS))
+        assert results == []
+
+
+def test_execute_plan_runs_each_step_through_tool_selection(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        # Stub out the mutating-tool permission prompt so the test can drive
+        # run_terminal without pytest blocking on stdin.
+        monkeypatch.setattr(
+            "app.agent.executor.permission_prompt",
+            lambda *a, **kw: "Yes",
+        )
+        llm = ScriptedLLM(
+            '{"tool": "read_file", "args": {"path": "main.py"}}',
+            '{"tool": "run_terminal", "args": {"command": "pytest -q"}}',
+        )
+        ex = Executor(llm, NoopTools())
+        plan = {
+            "steps": ["Read main.py", "Run pytest"],
+        }
+        results = ex.execute_plan(plan, allowed_tools=set(ex.READ_ONLY_TOOLS) | set(ex.MUTATING_TOOLS))
+
+        assert len(results) == 2
+        # Direct mappings win, so neither step needed the LLM:
+        # Read main.py → read_file (mapping), Run pytest → run_terminal (mapping).
+        assert llm.calls == []
+
+
+def test_execute_plan_emits_executor_started_and_finished_logs(caplog):
+    with tempfile.TemporaryDirectory() as tmp:
+        # Force LLM path so the [Tool Selector] log is reachable too.
+        llm = ScriptedLLM('{"tool": "list_files", "args": {}}')
+        ex = Executor(llm, NoopTools())
+        caplog.set_level("INFO", logger="Freya")
+
+        ex.execute_plan({"steps": ["Perform complex analysis on the codebase"]},
+                        allowed_tools=set(ex.READ_ONLY_TOOLS))
+
+        info = [r.getMessage() for r in caplog.records if r.levelname == "INFO"]
+        # Exactly one Started / Finished pair per execute_plan call.
+        assert info.count("Started") == 1
+        assert info.count("Finished") == 1
+        # [Executor] appears twice (bracketing) and [Tool Selector] once.
+        assert info.count("[Executor]") == 2
+        assert "[Tool Selector]" in info
+
+
+def test_execute_plan_emits_started_and_finished_even_when_empty(caplog):
+    with tempfile.TemporaryDirectory() as tmp:
+        ex = Executor(ScriptedLLM(), NoopTools())
+        caplog.set_level("INFO", logger="Freya")
+
+        ex.execute_plan({"steps": []}, allowed_tools=set(ex.READ_ONLY_TOOLS))
+
+        info = [r.getMessage() for r in caplog.records if r.levelname == "INFO"]
+        assert info.count("Started") == 1
+        assert info.count("Finished") == 1
+        # No [Tool Selector] call when the plan is empty.
+        assert "[Tool Selector]" not in info

@@ -1,5 +1,59 @@
 # Freya Changelog
 
+## Unreleased - Phase 5: Testing
+
+A focused testing pass that sharpens correctness and observability coverage for
+the LLM-driven Planner, Executor tool selection, prompt generation, and the
+shared logger. No production code changed; only tests were added or repaired.
+
+- **Planner tests (`tests/test_planner_agent.py`, new)** — 11 tests
+  - JSON contract: clean JSON, markdown fence stripping, empty non-engineering
+    plans, 5-step cap, garbage fallback, dict-without-steps fallback.
+  - Prompt construction: task echoed back, max-steps guidance, JSON-only
+    contract, and the no-fences contract are all asserted.
+  - Memory injection: included when `memory.search()` returns entries, omitted
+    when memory is `None`, and swallowed when memory raises.
+  - Stage-bracket logging: exactly one `[Planner] Started` / `[Planner]
+    Finished` pair per `Planner.create_plan` invocation (Phase 4 logging
+    regression guard).
+
+- **Executor tests (`tests/test_executor.py`, expanded)** — 6 additions on top
+  of the existing 14.
+  - `_select_tool_with_llm`: returns an action on clean JSON; tolerates
+    markdown-fenced JSON; returns `None` on garbage.
+  - `decide_action`: prefers direct keyword mapping over the LLM fallback and
+    only consults the LLM when no keyword matches.
+  - `execute_step`: surfaces an error envelope when no action is selected, and
+    blocks mutating tools that fall outside `allowed_tools` even when the LLM
+    is bypassed.
+  - `execute_plan`: emits exactly one `[Executor] Started` / `[Executor]
+    Finished` pair; emits a `[Tool Selector]` line only when at least one step
+    has to be selected; properly runs each step through tool selection.
+
+- **Prompt generation tests (`tests/test_patch_generator.py`, expanded)** —
+  the original single test now sits alongside 10 focused checks for the
+  `PatchGenerator` and its prompt:
+  - Prompt includes task verbatim.
+  - Prompt includes the relevant code context verbatim.
+  - Prompt restricts actions to `create` / `replace`.
+  - Prompt specifies the JSON-only and no-markdown contract.
+  - Markdown fence stripping (with and without the `json` language tag).
+  - Invalid LLM JSON raises `ValueError` with a clear message.
+  - Empty operations list and unsupported actions fail through `PatchEngine`.
+  - Multi-operation responses are returned in order.
+
+- **Logger tests (`tests/test_logger.py`, new)** — 9 tests:
+  - `FreyaLogger.info` / `warning` / `error` / `debug` delegate to the
+    underlying `logging.Logger`.
+  - Logger attributes (`log_file`, `logger`, `name`) are set as expected and
+    `log_file` ends in `.log`.
+  - Shared `app.core.logger.logger` instance is a `FreyaLogger`.
+  - Re-instantiating `FreyaLogger` with the same name does not duplicate
+    handlers (regression guard for bracketed pipeline logs).
+
+- **No behavioural change** — every existing test for `tests/test_planner.py`,
+  `tests/test_llm.py`, and `tests/test_patch_engine.py` still passes.
+
 ## Unreleased - Better Logging (Phase 4)
 
 A focused pass that sharpens Freya's pipeline logs so every major stage is
