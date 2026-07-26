@@ -29,40 +29,37 @@ class Planner:
         # Define task-specific templates and examples for ENGINEERING TASKS ONLY
         # ONLY executable engineering actions that map to TOOLS should appear here
         # REASONING steps (analyze, understand, explain, summarize, describe, identify, provide, answer) are NOT executable
-        task_samples = """Engineering Task Examples (ONLY executable tool actions):
+        task_samples = """Engineering step patterns (each step names ONE tool action):
 
-- Build tasks: Detect project type, Restore dependencies, Build project, Run build command, Fix build errors, Rebuild, Report results
-- Debug/Fix tasks: Read error file, Read code files, Locate relevant code, Fix the code, Run validation tests, Report results
-- Refactor tasks: Read existing implementation, Modify code files, Run tests, Report results
-- Create/Implement tasks: Read requirements, Write implementation files, Add tests, Run validation, Report results
-- Review tasks: Read code files, Write feedback, Suggest fixes
-- Test tasks: Write test files, Run tests, Fix issues, Re-run tests
-- Optimize tasks: Profile performance, Implement optimizations, Run benchmarks, Compare results
+- Build: detect project type, restore dependencies, build, fix build errors, report results
+- Debug/Fix: read the failing file, read related code, fix the code, run the tests
+- Refactor: read the existing code, modify it, run the tests
+- Create/Implement: read requirements, write the code, add tests, validate
+- Review: read the code, then write feedback / suggestions (no tool action needed for the review itself)
+- Test: write tests, run them, fix failures, re-run
+- Optimize: profile, change code, run benchmarks, compare
 
-FORBIDDEN STEPS (these are LLM REASONING, not executable tool actions):
-- Analyze, Understand, Explain, Summarize, Describe, Identify, Provide, Answer, Clarify, Determine, Design, Locate
-- These happen AFTER tools execute, NOT as plan steps
+Forbidden verbs as steps (these are LLM reasoning, not tool actions): analyze,
+understand, explain, summarize, describe, identify, provide, answer, clarify,
+determine, design, locate. Reasoning happens AFTER tools execute.
 """
 
-        prompt = f"""You are Freya, an autonomous coding AI. Create a SHORT EXECUTION PLAN for this ENGINEERING task: {task}
+        prompt = f"""Plan a SHORT execution for this engineering task: {task}
 
-{task_samples}
+{task_samples}{memory_context}Rules:
+- Every step must map to one executable tool: read_file, write_file, replace_in_file, list_files, run_terminal, create_file, delete_file, git_*, http_*, format_file.
+- Max 5 steps. Keep each step one short imperative ("Read file X", "Run pytest", "Fix the code"). Never describe reasoning.
+- If the request is not an engineering task (chat, knowledge, capability, identity, status), return an empty plan: {{"steps": []}}.
+- Return ONLY valid JSON. No markdown fences, no prose around it.
 
-{memory_context}CRITICAL RULES:
-- ONLY generate steps that map to EXECUTABLE TOOLS: read_file, write_file, replace_in_file, list_files, run_terminal, create_file, delete_file, git_*, http_*, format_file
-- NEVER include reasoning steps: NO "analyze", "understand", "explain", "summarize", "describe", "identify", "provide", "answer", "clarify", "determine"
-- If the request is NOT an engineering task (knowledge question, capability question, identity, status), return {{"steps": []}} - empty plan
-- Each step MUST be a concrete TOOL ACTION: "Read file X", "Run command Y", "Write file Z", "List directory"
-- Max 5 steps. Keep steps concise.
-- Return ONLY JSON. No markdown. No explanations.
 Format: {{"steps": ["step 1", "step 2"]}}
 
-EXAMPLES:
+Examples:
 - "Read app/router.py" -> {{"steps": ["Read app/router.py"]}}
 - "Run pytest" -> {{"steps": ["Run pytest"]}}
-- "Fix this bug: <traceback>" -> {{"steps": ["Read error file", "Read relevant code files", "Fix the code", "Run tests"]}}
-- "What is Python?" -> {{"steps": []}}  (not engineering - empty plan)
-- "Explain this function: <code>" -> {{"steps": []}}  (not engineering - empty plan)
+- "Fix this bug: <traceback>" -> {{"steps": ["Read the error file", "Read relevant code files", "Fix the code", "Run tests"]}}
+- "What is Python?" -> {{"steps": []}}
+- "Explain this function: <code>" -> {{"steps": []}}
 """
 
         answer = self.llm.ask(prompt)

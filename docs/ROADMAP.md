@@ -125,6 +125,19 @@ Find relevant code using meaning instead of names.
 
 ---
 
+### System Prompt Quality (v0.4.2 — Prompt Engineering)
+
+Goal:
+
+Define Freya's persona and behaviour in one canonical system prompt
+(Windows-first, Python-first, PowerShell-first, Git-aware, Ollama-aware),
+and tighten the per-task prompts (planner, executor, patch generator,
+brain) so they don't duplicate persona text. Pure prompt change — no
+behaviour, routing, or tool edits. Done; tracked in `docs/changelog.md`
+Phase 3.
+
+---
+
 ## Phase 4 — Editing
 
 Planned

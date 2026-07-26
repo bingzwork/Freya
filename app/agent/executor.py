@@ -300,57 +300,29 @@ class Executor:
         
         # Tool selection guidelines
         selection_guidelines = """
-TOOL SELECTION GUIDELINES:
-1. MATCH TOOL TO STEP: Choose the tool that directly accomplishes the planning step
-2. PREFER LEAST POWERFUL: Always choose the simplest tool capable of completing the task
-3. AVOID UNNECESSARY TERMINAL: Do not use run_terminal when another tool can perform the action
+Pick the single tool that directly does the step; prefer the least powerful tool that can.
 
-TOOL SELECTION EXAMPLES:
-- Read project configuration -> read_file
-- Search for a function -> list_files (then read_file)
-- Build the project -> run_terminal (only if no other tool available)
-- Run tests -> run_terminal (only if no other tool available)
-- Modify a Python file -> replace_in_file
-- Create a new file -> create_file or write_file
-- List project files -> list_files
-- Git operations -> git_* tools
-
-TOOL PREFERENCE ORDER (least powerful to most powerful):
-1. Read operations: list_files, read_file
-2. File operations: create_file, write_file, delete_file, replace_in_file
-3. Git operations: git_* tools
-4. HTTP operations: http_* tools  
-5. Terminal operations: run_terminal (use LAST RESORT)
-
-ONLY use run_terminal when:
-- Building projects
-- Running tests
-- Executing shell commands
-- Using package managers (pip, npm, etc.)
-- Executing scripts directly
+Preference order (least powerful first):
+1. Read: list_files, read_file
+2. Files: create_file, write_file, replace_in_file, delete_file, format_file
+3. Git: git_* tools
+4. HTTP: http_* tools
+5. run_terminal — last resort, only when no other tool can do it
+   (build, test, install/upgrade, package manager, run a script).
 """
-        
-        prompt = f"""You are Freya's tool selector. Choose the SINGLE most appropriate tool for this planning step.
 
-Planning Step: {step}
+        prompt = f"""Pick the single tool that fits this step: {step}
 
 {selection_guidelines}
-
-AVAILABLE TOOLS:
+Available tools:
 {chr(10).join([f'- {tool}: {desc}' for tool, desc in available_tools.items()])}
 
-RETURN ONLY JSON. Format:
+Return ONLY this JSON, no markdown, no extra text:
 {{
-  "tool": "tool_name",
-  "args": {{ "arg1": "value1" }},
-  "reasoning": "Why this tool was selected"
-}}
-
-REMEMBER:
-- Match the tool to the planning step
-- Prefer the least powerful tool capable of the task
-- Avoid run_terminal when another tool can do the job
-- Do NOT return multiple tools - ONLY ONE"""
+  "tool": "<one tool from the list>",
+  "args": {{ "<arg>": "<value>" }},
+  "reasoning": "<short reason>"
+}}"""
 
         answer = self.llm.ask(prompt)  
         answer = re.sub(r"```json|```", "", answer).strip()

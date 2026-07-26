@@ -209,9 +209,7 @@ class FreyaAgent:
         if should_answer_directly(task):
             # Chat, knowledge questions, and system status -> direct LLM response
             conversation_history = self.conversation.get_history_text()
-            prompt = f"""You are Freya, an AI software engineer.
-
-{conversation_history}
+            prompt = f"""{conversation_history}
 
 User: {task}
 
@@ -246,14 +244,10 @@ Answer the user's request directly."""
             allowed_tools.update(Executor.MUTATING_TOOLS)
         results = self.executor.execute_plan(plan, allowed_tools)
         conversation_history = self.conversation.get_history_text()
-        prompt = f"""
-You are Freya, an AI software engineer.
-
-{conversation_history}
+        prompt = f"""{conversation_history}
 
 User request:
 {task}
-
 
 Relevant project code:
 {context}
@@ -267,8 +261,7 @@ Execution plan:
 Tool results:
 {results}
 
-Answer the user's request using the relevant code above.
-"""
+Answer the user's request using the relevant code above. Quote code only when it is the actual answer; otherwise summarize."""
         answer = self.llm.ask(prompt)
         self.memory.record("task", {"request": task, "outcome": answer[:500]})
         self.conversation.add_message("user", task)

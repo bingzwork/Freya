@@ -32,19 +32,14 @@ class AgentBrain:
         )
 
 
-        prompt = f"""
-You are Freya.
-
-Analyze this software project.
+        prompt = f"""Analyze this software project and describe:
+- project purpose
+- important files and their roles
+- a few concrete, high-value improvements
 
 Files:
 
 {file_list}
-
-Explain:
-- project purpose
-- important files
-- possible improvements
 """
 
 
@@ -58,13 +53,10 @@ Explain:
         )
 
 
-        prompt = f"""
-You are Freya, an autonomous AI coding agent.
+        prompt = f"""Solve the following task with a focused, detailed solution. Include each step the engineer should take and the smallest change that solves it.
 
 Task:
 {task}
-
-Give a detailed solution.
 """
 
 

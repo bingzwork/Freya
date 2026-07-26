@@ -288,8 +288,11 @@ class JSONValidator:
 
         for attempt in range(self.max_retries):
             # Build system prompt with JSON requirement
-            effective_system = system or "You are Freya, an AI software engineer."
-            json_system = f"{effective_system}\n\nIMPORTANT: Return ONLY valid JSON. Do not add any text before or after the JSON."
+            effective_system = system or "You are Freya, an autonomous AI software engineer. Respond as a focused engineer."
+            json_system = (
+                f"{effective_system}\n\n"
+                "IMPORTANT: Return ONLY valid JSON. Do not add any text before or after the JSON."
+            )
 
             try:
                 response = self.llm.ask(prompt, system=json_system, timeout=timeout)

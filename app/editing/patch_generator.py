@@ -12,8 +12,7 @@ class PatchGenerator:
         self.patch_engine = patch_engine or PatchEngine()
 
     def propose(self, task, context):
-        prompt = f"""
-You are Freya, an AI software engineer. Propose a minimal code patch.
+        prompt = f"""Propose the minimal patch for this task.
 
 Task:
 {task}
@@ -21,7 +20,7 @@ Task:
 Relevant code:
 {context}
 
-Return ONLY JSON in this exact form:
+Return ONLY this JSON (no markdown, no commentary):
 {{
   "operations": [
     {{"action": "replace", "path": "relative/file.py", "old_text": "exact existing text", "new_text": "replacement"}},
@@ -29,9 +28,11 @@ Return ONLY JSON in this exact form:
   ]
 }}
 
-Allowed actions are create and replace. A replace operation must include text
-that occurs exactly once. Do not include markdown fences or terminal commands.
-"""
+Rules:
+- Only "create" or "replace" actions.
+- Each "replace" old_text must occur exactly once in the file.
+- No terminal commands, no extra keys.
+- Prefer one operation that solves the task; add more only when needed."""
         answer = re.sub(r"```json|```", "", self.llm.ask(prompt)).strip()
         try:
             payload = json.loads(answer)

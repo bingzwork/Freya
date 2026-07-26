@@ -40,6 +40,16 @@ Responsibilities:
 - Explain code
 - Assist tool selection
 
+### System Prompt
+
+Freya's persona and behaviour are defined once in `app/core/llm.py` as the
+`FREYA_SYSTEM_PROMPT` constant, used as the default system message for every
+LLM call. The prompt establishes Freya as an autonomous AI Software Engineer
+with a Windows-first, Python-first, PowerShell-first focus that is also
+Git-aware and Ollama-aware. Per-task prompts (planner, executor, patch
+generator, etc.) stay focused on their task and don't restate the persona —
+see `docs/changelog.md` Phase 3 for the current prompt layout.
+
 ---
 
 ## Tool Manager

@@ -1,5 +1,44 @@
 # Freya Changelog
 
+## Unreleased - Better System Prompt (Phase 3)
+
+A prompt-only pass that sharpens Freya's reasoning without changing routing, tools,
+or runtime behaviour. Persona and behaviour traits now live in one canonical place
+so per-task prompts stay focused.
+
+- **Canonical system prompt (`app/core/llm.py`)**
+  - New module-level `FREYA_SYSTEM_PROMPT` holds the single source of truth for
+    Freya's persona, environment focus (Windows-first, Python-first,
+    PowerShell-first), and Git/Ollama awareness.
+  - `LLM.ask()` now defaults to this prompt instead of the previous one-liner.
+  - Behaviour: think briefly, act deliberately, produce concise plans and clean
+    minimal code, reason from the given context, prefer the smallest correct
+    change, skip hedging / invented tools / unjustified steps.
+
+- **De-duplicated persona text**
+  - Removed the redundant "You are Freya, an AI software engineer." prefix from:
+    - `app/agent/core_agent.py` (direct chat and engineering pipeline prompts)
+    - `app/agent/planner.py` (planning prompt)
+    - `app/agent/executor.py` (LLM-fallback tool-selection prompt)
+    - `app/editing/patch_generator.py` (patch proposal prompt)
+    - `app/agent/brain.py` (`analyze_project`, `solve`)
+    - `app/intent/json_utils.py` (JSON validator fallback)
+  - Each prompt now contains only the task-specific scaffolding it needs.
+
+- **Tighter per-task prompts**
+  - Planner: smaller step-pattern set, fewer forbidden words, clearer
+    engineering-vs-non-engineering boundary, max-5 steps rule kept.
+  - Executor tool-selection: collapsed verbose guidelines into a 5-line
+    preference list; keeps the single-tool JSON contract.
+  - Patch generator: trimmed prose, kept the JSON schema and rules crisp.
+  - Core agent engineering pipeline: minor tightening of the closing
+    instruction.
+
+- **No behavioural change**
+  - Routing, tools, executor mappings, and verification flow are untouched.
+  - `tests/test_llm.py` and other suites still assert via role/message
+    shape rather than prompt text, so all existing checks remain valid.
+
 ## Unreleased - Comprehensive Engineering Audit (v0.4.1)
 
 ### Audit and Cleanup (2026-07-26)
