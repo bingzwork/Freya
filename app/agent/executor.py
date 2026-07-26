@@ -1,9 +1,26 @@
 import json
 import re
-import sys
 from typing import Any
 from app.core.logger import logger
 from app.ui.permission_menu import permission_prompt
+
+
+# File extensions recognized when extracting a path from a planning step.
+# `read_file` accepts the broader set; write/replace tools only target source
+# formats so unknown extensions like `.css`/`.html` aren't mis-routed.
+_READ_PATH_EXTENSIONS = (
+    ".py", ".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".cfg",
+    ".ini", ".js", ".ts", ".css", ".html",
+)
+_WRITE_PATH_EXTENSIONS = (
+    ".py", ".md", ".txt", ".json", ".yaml", ".yml",
+)
+
+# Well-known config / manifest filenames (no spaces, no extension tail) that
+# `read_file` should match even when the planner doesn't quote the extension.
+_COMMON_FILE_NAMES = (
+    "requirements.txt", "package.json", "pyproject.toml", "setup.py", "README.md",
+)
 
 
 class Executor:
@@ -12,7 +29,7 @@ class Executor:
         "http_patch", "http_head", "http_request", "git_status", "git_diff",
         "git_log", "git_branch_list", "git_is_repo",
     }
-    
+
     MUTATING_TOOLS = {
         "write_file", "replace_in_file", "run_terminal", "create_file", "delete_file",
         "format_file", "git_add", "git_commit", "git_push", "git_pull", "git_checkout",
@@ -159,29 +176,19 @@ class Executor:
                 # Extract arguments based on tool type
                 args = {}
                 if tool == "read_file":
-                    # Try to extract filename from step
-                    file_extensions = [".py", ".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".cfg", ".ini", ".js", ".ts", ".css", ".html"]
                     for word in step.split():
-                        if any(word.endswith(ext) for ext in file_extensions):
+                        if any(word.endswith(ext) for ext in _READ_PATH_EXTENSIONS):
                             args["path"] = word
                             break
                     if "path" not in args:
-                        # Check for common config files
-                        common_files = ["requirements.txt", "package.json", "pyproject.toml", "setup.py", "README.md"]
-                        for f in common_files:
-                            if f in step_lower:
-                                args["path"] = f
+                        for name in _COMMON_FILE_NAMES:
+                            if name in step_lower:
+                                args["path"] = name
                                 break
-                elif tool == "write_file" or tool == "create_file":
-                    # Try to extract filename
+                elif tool in ("write_file", "create_file", "replace_in_file"):
+                    # Write/create/replace all share the same source-format extension set.
                     for word in step.split():
-                        if word.endswith((".py", ".md", ".txt", ".json", ".yaml", ".yml")):
-                            args["path"] = word
-                            break
-                elif tool == "replace_in_file":
-                    # Look for file mention in the step
-                    for word in step.split():
-                        if word.endswith((".py", ".md", ".txt", ".json", ".yaml", ".yml")):
+                        if any(word.endswith(ext) for ext in _WRITE_PATH_EXTENSIONS):
                             args["path"] = word
                             break
 
@@ -192,69 +199,6 @@ class Executor:
                 return {"tool": tool, "args": args}
 
         return None
-
-    def _generate_reason(self, tool: str, step: str) -> str:
-        """Generate a descriptive reason for the tool selection based on the planning step."""
-        step_lower = step.lower()
-
-        # Specific reasons for common patterns
-        if tool == "run_terminal":
-            if "build" in step_lower:
-                return "Project build required."
-            elif "test" in step_lower or "pytest" in step_lower:
-                return "Test execution required."
-            elif "install" in step_lower or "pip" in step_lower or "npm" in step_lower:
-                return "Dependency installation required."
-            elif "lint" in step_lower or "format" in step_lower:
-                return "Code quality check required."
-            else:
-                return "Terminal command execution required."
-
-        elif tool == "read_file":
-            return "Reading file content to analyze or explain."
-
-        elif tool == "write_file" or tool == "create_file":
-            return "Creating new file with content."
-
-        elif tool == "replace_in_file":
-            if "fix" in step_lower or "debug" in step_lower:
-                return "Applying fix to resolve issue."
-            elif "refactor" in step_lower:
-                return "Refactoring code to improve structure."
-            else:
-                return "Modifying file content."
-
-        elif tool == "list_files":
-            return "Listing files to explore project structure."
-
-        elif tool == "delete_file":
-            return "Removing file from project."
-
-        elif tool.startswith("git_"):
-            if "status" in step_lower:
-                return "Checking repository status."
-            elif "diff" in step_lower:
-                return "Viewing repository changes."
-            elif "log" in step_lower:
-                return "Viewing commit history."
-            elif "commit" in step_lower:
-                return "Committing changes to repository."
-            elif "push" in step_lower:
-                return "Pushing changes to remote."
-            elif "pull" in step_lower:
-                return "Pulling changes from remote."
-            elif "checkout" in step_lower or "branch" in step_lower:
-                return "Switching or managing branches."
-            else:
-                return "Performing git operation."
-
-        elif tool.startswith("http_"):
-            return "Making HTTP request."
-
-        elif tool == "format_file":
-            return "Formatting code file."
-
-        return "Executing planning step."
 
     def _select_tool_with_llm(self, step: str) -> dict[str, Any] | None:
         """

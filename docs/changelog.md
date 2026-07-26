@@ -1,5 +1,41 @@
 # Freya Changelog
 
+## Unreleased - Phase 6 & 7: Cleanup and Final Validation
+
+A no-behaviour-change cleanup pass on the modules touched by Phase 4/5, plus
+re-validation of the affected tests. No new features, no refactor of unrelated
+modules, no architectural changes.
+
+- **`app/agent/executor.py`** (Section: `_map_step_to_tool`)
+  - Removed the dead `_generate_reason` helper that survived after Phase 4
+    trimmed the verbose `[Tool Selector]` log block. Only `changelog.md` still
+    mentioned it; no callers anywhere in `app/` or `tests/`.
+  - Extracted three module-level constants for the path extractor:
+    `_READ_PATH_EXTENSIONS`, `_WRITE_PATH_EXTENSIONS`, `_COMMON_FILE_NAMES`.
+    They replace the inline `file_extensions`, `common_files`, and the two
+    duplicated short extension tuples that previously lived inside the
+    `read_file` / `write_file` / `create_file` / `replace_in_file` branches.
+  - Merged the three identical source-format-extension branches
+    (`write_file`, `create_file`, `replace_in_file`) into a single `elif` so
+    the only difference between read and write-style routing is the extension
+    tuple it consults. Selection behaviour is identical: each entry in
+    `TOOL_MAPPING` keeps the same tool and the same path extraction.
+  - Removed the unused `import sys`.
+
+- **Phase 4 stage-bracket logging preserved** — the paired
+  `logger.info("[Stage]")` / `logger.info("Started"/"Finished"/<value>)`
+  pattern in `planner.py`, `executor.py`, `classifier.py`, and `runner.py` is
+  unchanged because Phase 4 introduced it on purpose and Phase 5 added tests
+  that pin the bracket shape (`tests/test_planner_agent.py`, the new executor
+  bracket-logging cases).
+
+- **No behavioural change.** Every Phase 5 test in `tests/test_executor.py`,
+  `tests/test_planner_agent.py`, `tests/test_logger.py`, and
+  `tests/test_patch_generator.py` continues to pass with no edits. Dependent
+  suites (`tests/test_autonomous_approval.py`, `tests/test_repair_loop.py`,
+  `tests/test_verification_runner.py`, `tests/test_llm.py`,
+  `tests/test_json_robustness.py`) also pass unchanged.
+
 ## Unreleased - Phase 5: Testing
 
 A focused testing pass that sharpens correctness and observability coverage for
