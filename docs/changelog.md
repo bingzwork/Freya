@@ -1,5 +1,37 @@
 # Freya Changelog
 
+## Unreleased - Better Logging (Phase 4)
+
+A focused pass that sharpens Freya's pipeline logs so every major stage is
+visible at a glance. The existing `FreyaLogger` infrastructure is reused as-is;
+only stage labels and content were added or simplified.
+
+- **Stage labels for every pipeline phase**
+  - `[Intent]` followed by the classified intent type
+    (`app/intent/classifier.py`).
+  - `[Planner] Started` / `[Planner] Finished` bracketing `Planner.create_plan`
+    (`app/agent/planner.py`).
+  - `[Tool Selector] <tool>` per planning step — replaces the prior 5–6 line
+    verbose block (`app/agent/executor.py`).
+  - `[Executor] Started` / `[Executor] Finished` bracketing `Executor.execute_plan`
+    (`app/agent/executor.py`).
+  - `[Verification] Started` / `Passed` / `Failed` bracketing
+    `VerificationRunner.run` (`app/verification/runner.py`).
+
+- **Reduced per-step noise**
+  - Dropped the per-step `Executing: <step>` line (per-stage brackets now
+    carry that signal).
+  - Dropped the dead `reason = self._generate_reason(...)` assignment left
+    over from the removed verbose log.
+  - Consolidated the `[Tool Selector]` block to two lines: header and chosen
+    tool name. Reason / Args are no longer logged because the verbose form
+    was internal detail.
+
+- **No behavioural change**
+  - Tool selection keys, mapping dictionary, planner / executor / verifier
+    control flow, and verification result dataclass are all unchanged.
+  - Existing tests continue to pass with no edits.
+
 ## Unreleased - Better System Prompt (Phase 3)
 
 A prompt-only pass that sharpens Freya's reasoning without changing routing, tools,

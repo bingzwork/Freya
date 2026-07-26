@@ -185,19 +185,9 @@ class Executor:
                             args["path"] = word
                             break
 
-                # Generate descriptive reason based on tool and step
-                reason = self._generate_reason(tool, step)
-
-                # Log in the format matching documentation example
-                logger.info(f"[Tool Selector]")
-                logger.info(f"Planning Step:\n{step}")
-                logger.info(f"")
-                logger.info(f"Selected Tool:\n{tool}")
-                logger.info(f"")
-                logger.info(f"Reason:\n{reason}")
-                logger.info(f"")
-                if args:
-                    logger.info(f"Args: {args}")
+                # Log a concise per-step tool selection
+                logger.info("[Tool Selector]")
+                logger.info(tool)
 
                 return {"tool": tool, "args": args}
 
@@ -333,16 +323,9 @@ Return ONLY this JSON, no markdown, no extra text:
             args = result.get("args", {})
             reasoning = result.get("reasoning", "")
 
-            # Log in the format matching documentation example
-            logger.info(f"[Tool Selector]")
-            logger.info(f"Planning Step:\n{step}")
-            logger.info(f"")
-            logger.info(f"Selected Tool:\n{tool_name}")
-            logger.info(f"")
-            logger.info(f"Reason:\n{reasoning}")
-            logger.info(f"")
-            if args:
-                logger.info(f"Args: {args}")
+            # Log a concise per-step tool selection (LLM fallback)
+            logger.info("[Tool Selector]")
+            logger.info(str(tool_name))
 
             return {"tool": tool_name, "args": args}
         except Exception as e:
@@ -366,7 +349,6 @@ Return ONLY this JSON, no markdown, no extra text:
     def execute_step(
         self, step: str, allowed_tools: set[str] | None = None,
     ) -> dict[str, Any]:
-        logger.info(f"Executing: {step}")
         action = self.decide_action(step)
         if not isinstance(action, dict):
             return {"error": "No valid action selected"}
@@ -406,12 +388,24 @@ Return ONLY this JSON, no markdown, no extra text:
     def execute_plan(
         self, plan: dict[str, Any], allowed_tools: set[str] | None = None,
     ) -> list[dict[str, Any]]:
+        logger.info("[Executor]")
+        logger.info("Started")
+
         results = []
-        for step in plan.get("steps", [])[:8]:
+        steps = plan.get("steps", [])[:8]
+        if not steps:
+            logger.info("[Executor]")
+            logger.info("Finished")
+            return results
+
+        for step in steps:
             results.append(
                 {
                     "step": step,
                     "result": self.execute_step(step, allowed_tools)
                 }
             )
+
+        logger.info("[Executor]")
+        logger.info("Finished")
         return results

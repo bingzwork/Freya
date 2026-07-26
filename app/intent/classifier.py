@@ -257,7 +257,8 @@ class IntentClassifier:
         if best_keywords:
             reason += f" (keywords: {', '.join(best_keywords[:3])})"
 
-        logger.debug(f"[IntentClassifier] Classified '{message[:50]}...' as {best_intent_type.value} (score: {best_score:.2f})")
+        logger.info("[Intent]")
+        logger.info(best_intent_type.value)
 
         return IntentClassification(
             intent=best_intent_type,

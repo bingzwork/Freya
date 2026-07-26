@@ -1,12 +1,18 @@
 import json
 import re
 
+from app.core.logger import logger
+
+
 class Planner:
     def __init__(self, llm, memory=None):
         self.llm = llm
         self.memory = memory
 
     def create_plan(self, task):
+        logger.info("[Planner]")
+        logger.info("Started")
+
         # Get relevant memory
         memory_context = ""
         if self.memory is not None:
@@ -79,4 +85,7 @@ Examples:
         else:
             # Fallback: wrap the whole response as a single step
             plan = {"steps": [str(plan)]}
+
+        logger.info("[Planner]")
+        logger.info("Finished")
         return plan

@@ -5,6 +5,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.core.logger import logger
+
 
 @dataclass(frozen=True)
 class VerificationResult:
@@ -72,6 +74,10 @@ class VerificationRunner:
     def run(self, command):
         if not isinstance(command, list) or not all(isinstance(item, str) for item in command):
             raise ValueError("Verification commands must be a list of strings.")
+
+        logger.info("[Verification]")
+        logger.info("Started")
+
         try:
             completed = subprocess.run(
                 command,
@@ -82,6 +88,8 @@ class VerificationRunner:
                 shell=False,
             )
         except subprocess.TimeoutExpired as error:
+            logger.info("[Verification]")
+            logger.info("Failed")
             return VerificationResult(
                 False,
                 command,
@@ -89,10 +97,15 @@ class VerificationRunner:
                 f"Verification timed out after {self.timeout_seconds} seconds.",
                 -1,
             )
-        return VerificationResult(
+
+        result = VerificationResult(
             completed.returncode == 0,
             command,
             completed.stdout,
             completed.stderr,
             completed.returncode,
         )
+
+        logger.info("[Verification]")
+        logger.info("Passed" if result.success else "Failed")
+        return result
