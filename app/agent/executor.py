@@ -265,11 +265,18 @@ Return ONLY this JSON, no markdown, no extra text:
             result = json.loads(answer)
             tool_name = result.get("tool")
             args = result.get("args", {})
-            reasoning = result.get("reasoning", "")
+            reasoning = (result.get("reasoning") or "").strip()
 
             # Log a concise per-step tool selection (LLM fallback)
             logger.info("[Tool Selector]")
             logger.info(str(tool_name))
+
+            # Surface the LLM's reasoning as a second concise block; omit it
+            # entirely when the field is missing or empty so behaviour is
+            # identical to the direct-mapping path.
+            if reasoning:
+                logger.info("[Tool Selector]")
+                logger.info(f"Reason: {reasoning}")
 
             return {"tool": tool_name, "args": args}
         except Exception as e:

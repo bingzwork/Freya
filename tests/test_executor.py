@@ -450,3 +450,103 @@ def test_execute_plan_emits_started_and_finished_even_when_empty(caplog):
         assert info.count("Finished") == 1
         # No [Tool Selector] call when the plan is empty.
         assert "[Tool Selector]" not in info
+
+
+# ---------------------------------------------------------------------------
+# LLM tool-selection reasoning logging
+#
+# The LLM-fallback prompt declares a `reasoning` field on its expected JSON
+# response. The Executor used to drop it on the floor; it now surfaces the
+# field as a second, optional `[Tool Selector]` block. The two-line
+# header+value shape mirrors the existing bracket convention (and matches
+# the [Executor] / [Planner] bracketing already exercised elsewhere).
+# ---------------------------------------------------------------------------
+
+
+def test_llm_fallback_logs_reason_when_present(caplog):
+    """reasoning present → emitted as a second `[Tool Selector]` block."""
+    with tempfile.TemporaryDirectory() as tmp:
+        llm = ScriptedLLM(
+            '{"tool": "run_terminal", "args": {"command": "pytest -q"},'
+            ' "reasoning": "Running pytest because the task requests test execution."}'
+        )
+        ex = Executor(llm, NoopTools())
+        caplog.set_level("INFO", logger="Freya")
+
+        ex.decide_action("Perform complex analysis on the codebase")
+
+        info = [r.getMessage() for r in caplog.records if r.levelname == "INFO"]
+        # Tool block: header then tool name.
+        assert info.count("[Tool Selector]") == 2
+        assert "run_terminal" in info
+        # Reason block: header then `Reason: <text>` exactly once.
+        reason_lines = [m for m in info if m.startswith("Reason:")]
+        assert reason_lines == [
+            "Reason: Running pytest because the task requests test execution."
+        ]
+
+
+def test_llm_fallback_skips_reason_when_missing(caplog):
+    """reasoning absent → no Reason log, but behaviour is otherwise unchanged."""
+    with tempfile.TemporaryDirectory() as tmp:
+        llm = ScriptedLLM('{"tool": "list_files", "args": {}}')
+        ex = Executor(llm, NoopTools())
+        caplog.set_level("INFO", logger="Freya")
+
+        ex.decide_action("Perform complex analysis on the codebase")
+
+        info = [r.getMessage() for r in caplog.records if r.levelname == "INFO"]
+        # Only the tool block — no Reason block.
+        assert info.count("[Tool Selector]") == 1
+        assert not any(m.startswith("Reason:") for m in info)
+
+
+def test_llm_fallback_skips_reason_when_empty(caplog):
+    """Empty reasoning string is treated as absent — no empty Reason log."""
+    with tempfile.TemporaryDirectory() as tmp:
+        llm = ScriptedLLM('{"tool": "list_files", "args": {}, "reasoning": ""}')
+        ex = Executor(llm, NoopTools())
+        caplog.set_level("INFO", logger="Freya")
+
+        ex.decide_action("Perform complex analysis on the codebase")
+
+        info = [r.getMessage() for r in caplog.records if r.levelname == "INFO"]
+        assert info.count("[Tool Selector]") == 1
+        assert not any(m.startswith("Reason:") for m in info)
+
+
+def test_direct_mapping_does_not_emit_reason(caplog):
+    """Direct-mapping path has no reasoning concept → unchanged behaviour."""
+    with tempfile.TemporaryDirectory() as tmp:
+        ex = Executor(ScriptedLLM(), NoopTools())
+        caplog.set_level("INFO", logger="Freya")
+
+        # 'Read' is a direct-mapping keyword → LLM is never consulted.
+        ex.decide_action("Read main.py")
+
+        info = [r.getMessage() for r in caplog.records if r.levelname == "INFO"]
+        assert info.count("[Tool Selector]") == 1
+        assert not any(m.startswith("Reason:") for m in info)
+
+
+def test_llm_fallback_does_not_duplicate_log_entries(caplog):
+    """Each event block emits exactly one header + one body line; no extras."""
+    with tempfile.TemporaryDirectory() as tmp:
+        llm = ScriptedLLM(
+            '{"tool": "run_terminal", "args": {"command": "pytest"},'
+            ' "reasoning": "Need to run tests."}'
+        )
+        ex = Executor(llm, NoopTools())
+        caplog.set_level("INFO", logger="Freya")
+
+        ex.decide_action("Perform complex analysis on the codebase")
+
+        info = [r.getMessage() for r in caplog.records if r.levelname == "INFO"]
+        # Tool block + Reason block = exactly two `[Tool Selector]` headers.
+        assert info.count("[Tool Selector]") == 2
+        # Tool name appears once (in the tool block) — never inside Reason:.
+        assert "run_terminal" in info
+        tool_lines = info.count("run_terminal")
+        assert tool_lines == 1
+        # Reasoning text appears exactly once.
+        assert info.count("Reason: Need to run tests.") == 1

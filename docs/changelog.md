@@ -1,5 +1,50 @@
 # Freya Changelog
 
+## Unreleased - LLM Tool Selection Reasoning Logging
+
+The Executor's LLM-fallback prompt has always asked the model for a
+`reasoning` field in its JSON response, but the field was parsed and then
+silently dropped. This change surfaces the reasoning through the existing
+concise `[Tool Selector]` log so operators can see why the model picked a
+given tool without having to replay the request.
+
+- **Implementation (`app/agent/executor.py`)**
+  - `_select_tool_with_llm` now reads `reasoning` from the parsed JSON and
+    emits it as a second two-line `[Tool Selector]` block right after the
+    tool block:
+    ```
+    [Tool Selector]
+    run_terminal
+
+    [Tool Selector]
+    Reason: Running pytest because the task requests test execution.
+    ```
+  - Behaviour is unchanged when `reasoning` is missing, `None`, or an empty
+    (whitespace-only) string: only the existing tool block is logged.
+  - The direct-mapping path (`_map_step_to_tool`) has no reasoning concept
+    and is untouched, so its log shape stays one header + one tool line.
+  - Phase 4's verbose 5–6 line log block stays retired — no restoration.
+
+- **Prompt** — unchanged. `_select_tool_with_llm` already declared
+  `"reasoning": "<short reason>"` in its expected JSON; no prompt edits
+  needed.
+
+- **Tests (`tests/test_executor.py`, +5)**
+  - `test_llm_fallback_logs_reason_when_present` — exact two-block shape,
+    and the `Reason:` line carries the LLM-provided text.
+  - `test_llm_fallback_skips_reason_when_missing` — `reasoning` absent →
+    single tool block, no `Reason:` line.
+  - `test_llm_fallback_skips_reason_when_empty` — empty string treated as
+    absent.
+  - `test_direct_mapping_does_not_emit_reason` — direct-mapping path stays
+    a single block.
+  - `test_llm_fallback_does_not_duplicate_log_entries` — each event is
+    emitted exactly once; tool name appears once; reasoning text appears
+    once.
+
+- **No behavioural or API change** for callers; `Executor.execute_plan` /
+  `execute_step` return shape is identical.
+
 ## Unreleased - Phase 6 & 7: Cleanup and Final Validation
 
 A no-behaviour-change cleanup pass on the modules touched by Phase 4/5, plus
