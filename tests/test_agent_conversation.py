@@ -215,3 +215,47 @@ class TestFreyaAgentConversation:
         mock_agent.load_conversation(save_path)
         assert len(mock_agent.conversation) == 1
         assert mock_agent.get_conversation_history()[0].content == "Saved message"
+
+
+class TestFreyaAgentConversationalControl:
+    """Tests verifying that CONVERSATIONAL_CONTROL commands short-circuit the
+    LLM pipeline in FreyaAgent.run.
+    """
+
+    def test_stop_short_circuits_before_llm(self, mock_agent):
+        """A 'stop' command must NOT call MockLLM.ask and return its default 'Test answer'."""
+        # The MockLLM always returns 'Test answer'. If short-circuit fails,
+        # the agent would invoke the LLM and we'd see 'Test answer' in the
+        # reply.
+        result = mock_agent.run("stop")
+        assert "Test answer" not in result
+        assert "Stopped" in result or "stop" in result.lower()
+
+    def test_cancel_short_circuits_before_llm(self, mock_agent):
+        result = mock_agent.run("cancel")
+        # The MockLLM returns 'Test answer'. If short-circuit fails, the
+        # LLM is invoked and 'Test answer' shows up in the reply.
+        assert "Test answer" not in result
+        assert "cancel" in result.lower()
+
+    def test_undo_short_circuits_before_llm(self, mock_agent):
+        result = mock_agent.run("undo")
+        assert "Test answer" not in result
+        assert "undo" in result.lower()
+
+    def test_status_short_circuits_before_llm(self, mock_agent):
+        result = mock_agent.run("status")
+        assert "Test answer" not in result
+
+    def test_control_command_added_to_conversation_history(self, mock_agent):
+        mock_agent.run("stop")
+        history = mock_agent.get_conversation_history()
+        assert len(history) == 2
+        assert history[0].role == "user"
+        assert history[0].content == "stop"
+        assert history[1].role == "assistant"
+
+    def test_compound_control_with_greeting_still_short_circuits(self, mock_agent):
+        """'hi stop' should still trigger conversational control (control wins)."""
+        result = mock_agent.run("hi stop")
+        assert "Test answer" not in result

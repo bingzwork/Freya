@@ -2,7 +2,7 @@
 
 **Version:** v0.4.x
 
-**Last Updated:** 2026-07-27 (NATURAL_CONVERSATION.md spec hardened: Routing Semantics, When Ambiguous, Conversational Control, Acceptance Tests)
+**Last Updated:** 2026-07-27 (NATURAL_CONVERSATION.md P0 items implemented in code: CONVERSATIONAL_CONTROL intent, ConversationalControlHandler, agent-level short-circuit, low-confidence/ambiguity flags; new tests added)
 
 **Purpose**
 

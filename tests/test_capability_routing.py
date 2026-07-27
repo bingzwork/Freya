@@ -358,3 +358,59 @@ class TestIntentClassification:
         result_git = classify_intent("git status")
         assert result_git.intent == IntentType.GIT_OPERATION
         assert result_git.should_plan is True  # Git operations require planning
+
+
+class TestConversationalControlCapabilities:
+    """Tests for the ConversationalControlHandler registered in app.capabilities.handlers.
+
+    These capabilities short-circuit routing per NATURAL_CONVERSATION.md
+    "Conversational Control".
+    """
+
+    def test_control_capabilities_registered(self):
+        from app.capabilities.router import router
+        names = set(router.get_capabilities())
+        assert "control_stop" in names
+        assert "control_cancel" in names
+        assert "control_undo" in names
+        assert "control_redo" in names
+        assert "control_status" in names
+
+    @pytest.mark.parametrize("phrase,expected_capability", [
+        ("stop", "control_stop"),
+        ("halt", "control_stop"),
+        ("wait", "control_stop"),
+        ("cancel", "control_cancel"),
+        ("nevermind", "control_cancel"),
+        ("abort", "control_cancel"),
+        ("undo", "control_undo"),
+        ("revert", "control_undo"),
+        ("redo", "control_redo"),
+        ("status", "control_status"),
+        ("what are you doing?", "control_status"),
+        ("current plan", "control_status"),
+        ("current step", "control_status"),
+    ])
+    def test_control_capability_routing(self, phrase, expected_capability):
+        from app.capabilities.router import route_query
+        result = route_query(phrase, intent_type="conversational_control")
+        assert result is not None
+        assert result.success is True
+        assert result.capability_name == expected_capability
+        assert result.data is not None
+        assert "control_command" in result.data
+
+    def test_stop_message_short_circuits(self):
+        """A 'stop' command returns its acknowledgement; no error."""
+        from app.capabilities.router import route_query
+        from app.capabilities.formatter import format_capability_result
+        result = route_query("stop", intent_type="conversational_control")
+        formatted = format_capability_result(result)
+        assert "stop" in formatted.lower() or "Stopped" in formatted
+
+    def test_undo_message_does_not_error_when_no_mutations(self):
+        """'undo' is a no-op when nothing has been mutated and must not error."""
+        from app.capabilities.router import route_query
+        result = route_query("undo", intent_type="conversational_control")
+        assert result is not None
+        assert result.success is True

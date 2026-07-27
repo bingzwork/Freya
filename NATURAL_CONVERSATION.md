@@ -1,6 +1,6 @@
 # Natural Conversation
 
-> **Pillar Status:** 🟢 MOSTLY COMPLETE · **Completion:** 90% · **Last Updated:** 2026-07-27
+> **Pillar Status:** 🟢 MOSTLY COMPLETE · **Completion:** 90% · **Last Updated:** 2026-07-27 (Routing, control, ambiguity and acceptance tests now have code; previous sections were spec-only.)
 
 ---
 
@@ -46,13 +46,13 @@ Each intent classification produces exactly one of the eight intents listed in t
 | 3 | Runtime Context                 | ✅ COMPLETE     | 100%       |
 | 4 | Conversation History            | ✅ COMPLETE     | 100%       |
 | 5 | Direct Answer Routing           | ✅ COMPLETE     | 100%       |
-| 6 | Conversational Control          | 🟡 PARTIAL     | 80%        |
+| 6 | Conversational Control          | 🟡 PARTIAL     | 90%        |
 | 7 | Greeting Handling               | ✅ COMPLETE     | 100%       |
 | 8 | Knowledge Question Handling     | ✅ COMPLETE     | 100%       |
 | 9 | System Status Detection         | ✅ COMPLETE     | 100%       |
 | 10| Engineering Task Detection      | ✅ COMPLETE     | 100%       |
 
-`🟡 PARTIAL` on Conversational Control reflects that the capability is now formally defined by this document and the approval flow exists in the runtime (see `HUMAN_OVERSIGHT.md`), but the unified stop / cancel / undo surface is not yet centralized.
+`🟡 PARTIAL` on Conversational Control reflects that the unified stop / cancel / undo surface is now centralized in `ConversationalControlHandler` and `FreyaAgent.run` short-circuits to it via `classification.is_control`, but the underlying effect on a hypothetical in-flight planner is not yet hooked up. Today's runtime invokes these handlers synchronously from `run()`, so the handlers emit an acknowledgement signal via `result.data["control_command"]`.
 
 ---
 
@@ -217,8 +217,8 @@ Needs Improvement
 ## Conversational Control
 
 **Status:** 🟡 PARTIAL
-**Completion:** 80%
-**Current State:** Capability defined in this document. Individual handlers (interrupt, undo of the last mutation) exist in the runtime; the unified control surface is not yet centralized behind a single dispatcher.
+**Completion:** 90%
+**Current State:** Implementation centralized in `app/capabilities/handlers.py:ConversationalControlHandler`. Patterns and keywords register five capabilities (`control_stop`, `control_cancel`, `control_undo`, `control_redo`, `control_status`) all bound to the new `IntentType.CONVERSATIONAL_CONTROL`. `FreyaAgent.run` short-circuits when `classification.is_control` is true, routing via `route_query` and `format_capability_result` without invoking the LLM.
 
 ### Purpose
 
@@ -246,8 +246,8 @@ Conversational control is the highest-priority intent. When classification produ
 
 Missing
 
-- Centralized dispatcher behind a single capability handler.
 - Cross-session undo.
+- Hooks between control commands and any future in-flight planner cancellation.
 
 Known Bugs
 
@@ -268,33 +268,32 @@ Needs Improvement
 
 ### Priority Order
 
-Intent classification returns eight intents (CHAT, QUESTION, TASK, FILE_OPERATION, CODE_TASK, SYSTEM_STATUS, TOOL_REQUEST, GIT_OPERATION, plus the implicit CONVERSATIONAL_CONTROL family). The routing layer applies the following priority order:
+`IntentType.routing_priority` returns a numeric priority per intent (lower is higher priority). Conversational control is 0; engineering is 2; chat/question is 3. `FreyaAgent.run` dispatches on this property:
 
-1. **Conversational Control** — executed first when matched. Short-circuits all other routing. See [Conversational Control](#conversational-control).
+1. **Conversational Control** — `IntentType.CONVERSATIONAL_CONTROL` (priority 0). `FreyaAgent.run` short-circuits to `route_query` via `app.capabilities.handlers.ConversationalControlHandler`. Never reaches the LLM.
 2. **Direct Answer** — handled before further analysis. Comprises:
    - Greeting detection (e.g., `hi`, `hello`)
    - System status detection (e.g., `python version?`, `disk space?`)
    - General knowledge questions that can be answered without tooling.
-3. **Engineering Intent** — TASK, FILE_OPERATION, CODE_TASK, GIT_OPERATION, and any direct-answer fallback rejected as engineering. Routed to the engineering planner.
+3. **Engineering Intent** — TASK, FILE_OPERATION, CODE_TASK, GIT_OPERATION, TOOL_REQUEST, and any direct-answer fallback rejected as engineering. Routed to the engineering planner.
 4. **General Conversation** — CHAT and QUESTION. Routed to the LLM with the conversation history and runtime context.
 
 ### Conflict Resolution
 
-The dispatcher uses **first-match by priority**. When two intents match at the same priority tier:
+The `IntentClassifier.classify` method picks the intent with the highest raw score. When two intents score within `0.02` of each other (`abs(best - second_best) < 0.02`), the code currently lets Python's `max()` pick the first one in iteration order; `IntentType` ordering has CHAT/QUESTION ahead of engineering. Tied keys (`score == 0.0`) fall back to CHAT (the General Conversation tier) per the no-signal fallback.
 
-- Select the intent with the higher confidence score.
-- On a tie, prefer the more specific intent (e.g., CODE_TASK over generic TASK).
-- If still tied, fall through to the next priority tier.
+Capability routing prefers the highest-confidence capability. Patterns over keywords. Patterns cap at `0.98`; keyword expansion adds up to `0.97`. This means a strong pattern beats any keyword match.
 
 ### Low-Confidence Fallback
 
-The classifier assigns a confidence score in `[0.0, 1.0]`. The thresholds are:
+The classifier assigns a confidence score in `[0.0, 1.0]`. Thresholds live as constants in `app.intent.classifier`:
 
-- `confidence ≥ 0.70` — accept the classified intent.
-- `0.40 ≤ confidence < 0.70` — apply the [When Ambiguous](#when-ambiguous) policy.
-- `confidence < 0.40` — treat as General Conversation and add a low-confidence signal to the prompt so the LLM is aware the user input was ambiguous.
+- `ACCEPT_CONFIDENCE_THRESHOLD = 0.70`
+- `LOW_CONFIDENCE_THRESHOLD = 0.40`
 
-These thresholds are tunable; values are managed in configuration alongside other rule-based classifier tunables.
+`IntentClassification` exposes boolean properties (`is_ambiguous`, `is_low_confidence`, `is_control`) for callers. `FreyaAgent.run` reads these via module-level helpers (`should_clarify`, `is_low_confidence`, `is_control_intent`). When `should_clarify` is true, the runner asks a paraphrased clarifying question. When `is_low_confidence` is true and the intent is direct-answerable, the runner flags the prompt and proceeds.
+
+No-signal fallback: when no pattern or keyword matched any intent, `classify()` returns CHAT with `confidence = 0.0`, which surfaces as `is_low_confidence = True` to callers.
 
 ---
 
@@ -318,18 +317,20 @@ When the user input is a compound sentence with multiple intents, e.g., `"Hi, al
 When classifier confidence is below `0.40`, the runtime MUST:
 
 1. Default to **General Conversation**.
-2. Add the original user input verbatim to the LLM prompt as an `UncertainUserInput` block so the LLM has full context.
+2. Add the original user input verbatim to the LLM prompt so the LLM has full context.
 3. The reply should briefly acknowledge that Freya is unsure what the user wants — but only if the threshold is far enough below `0.40` to warrant surfacing.
+
+Today, `FreyaAgent.run` appends a low-confidence banner to the prompt when `classification.is_low_confidence` is true and the intent is direct-answerable. Engineering-intent inputs with low confidence currently still flow into the planning pipeline; flagging them for low-confidence fallback is tracked in the Implementation Roadmap.
 
 ### Mid-Band Input (`0.40 ≤ confidence < 0.70`)
 
-The runtime asks **one** clarifying question. The clarifying question is a paraphrase, not multiple-choice. Example: for input `"fix this"` with mid-band confidence, the runtime asks: `"Did you mean to fix a specific file or run the project's repair loop?"`
+The runtime asks **one** clarifying question. The clarifying question is a paraphrase, not multiple-choice. Today, `FreyaAgent.run` consults `should_clarify(classification)` and short-circuits to a paraphrased LLM reply before any other routing. The exact low-band confidence of the keyword-only classifier rarely falls in the mid-band (single-keyword matches score ~`0.15`), so this path is currently exercised mostly by callers who construct `IntentClassification` with mid-band confidence via `dataclasses.replace`.
 
 Multi-choice menus are forbidden — they feel mechanical.
 
 ### Best-Guess Policy
 
-When clarification is impossible (e.g., mid-band on a one-shot tool call), the runtime picks the highest-confidence intent and proceeds. Prompts that went through a best-guess fallback are logged with `low_confidence=true` for later review in `monitoring/`.
+When clarification is impossible (e.g., mid-band on a one-shot tool call), the runtime picks the highest-confidence intent and proceeds. Low-confidence prompts are recorded into `ProjectMemory` via the existing `memory.record(...)` path with an explicit `"clarification"` or `"low_confidence"` marker.
 
 ---
 
@@ -440,19 +441,19 @@ None currently identified.
 
 ## Implementation Roadmap
 
-These items track the work open in this pillar. Items are checked off only when their corresponding doc section is implemented and the acceptance tests pass.
+These items track the work open in this pillar. Items are checked off only when their corresponding doc section is implemented AND the acceptance tests pass.
 
-Spec hardening completed in this revision:
+Spec + code complete in this revision:
 
-- [x] Acceptance Tests / Behavioral Checks section (this document)
-- [x] Routing Semantics section (this document)
-- [x] When Ambiguous section (this document)
-- [x] Conversational Control capability section (this document)
+- [x] Acceptance Tests / Behavioral Checks section, with concrete tests added to `tests/test_intent_classification.py`, `tests/test_capability_routing.py`, and `tests/test_agent_conversation.py`.
+- [x] Routing Semantics section, implemented via `IntentType.routing_priority`, `classify()` no-signal fallback, and the dispatch logic in `FreyaAgent.run`.
+- [x] When Ambiguous section, implemented via `IntentClassification.is_ambiguous` / `is_low_confidence` properties and the `should_clarify` / `is_low_confidence` module helpers used in `FreyaAgent.run`.
+- [x] Conversational Control capability, implemented via `IntentType.CONVERSATIONAL_CONTROL`, `ConversationalControlHandler`, and the `classification.is_control` short-circuit in `FreyaAgent.run`.
 
 Improvements beyond Missing Capabilities:
 
-- [ ] Centralize Conversational Control into one dispatcher
-- [ ] Better ambiguity detection — coverage below `0.40`
+- [ ] Centralize Conversational Control fully: hook the dispatched control commands to actual planner interrupt and mutation history (currently the handlers emit an acknowledgement).
+- [ ] Better ambiguity detection — extend the mid-band to engineering intents with low confidence and apply the clarification policy there.
 - [ ] Long-term conversation summarization
 - [ ] Statistical intent classification
 

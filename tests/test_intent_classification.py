@@ -520,3 +520,117 @@ class TestRoutingBehavior:
             result = classifier.classify(msg)
             assert result.should_include_runtime_context is False, \
                 f"Non-engineering message '{msg}' should NOT include runtime context"
+
+
+class TestConversationalControl:
+    """Tests for CONVERSATIONAL_CONTROL intent (stop / cancel / undo / redo / status)."""
+
+    @pytest.fixture
+    def classifier(self):
+        return IntentClassifier()
+
+    @pytest.mark.parametrize("msg", [
+        "stop", "halt", "wait",
+        "cancel", "nevermind", "abort",
+        "undo", "revert", "redo",
+        "status",
+        "what are you doing?",
+        "current plan",
+        "current step",
+    ])
+    def test_control_intent_recognized(self, classifier, msg):
+        result = classifier.classify(msg)
+        assert result.intent == IntentType.CONVERSATIONAL_CONTROL, \
+            f"'{msg}' should be CONVERSATIONAL_CONTROL, got {result.intent.value}"
+        assert result.is_control is True
+        assert result.should_answer_directly is True
+        assert result.should_plan is False
+
+    def test_control_wins_over_greeting(self, classifier):
+        """Compound input with a greeting should still be CONVERSATIONAL_CONTROL."""
+        result = classifier.classify("hi stop")
+        assert result.intent == IntentType.CONVERSATIONAL_CONTROL
+
+    def test_routing_priority_is_zero(self, classifier):
+        """Conversational control has the highest routing priority (lowest number)."""
+        assert IntentType.CONVERSATIONAL_CONTROL.routing_priority == 0
+        for intent in (IntentType.TASK, IntentType.FILE_OPERATION,
+                       IntentType.CODE_TASK, IntentType.TOOL_REQUEST,
+                       IntentType.GIT_OPERATION):
+            assert intent.routing_priority >= 1
+        assert IntentType.CHAT.routing_priority == 3
+        assert IntentType.QUESTION.routing_priority == 3
+
+
+class TestConfidenceThresholds:
+    """Tests for low-confidence / ambiguous classification flags."""
+
+    @pytest.fixture
+    def classifier(self):
+        return IntentClassifier()
+
+    def test_low_confidence_flag_on_no_signal(self, classifier):
+        """A message that matches no pattern or keyword reports low_confidence=True."""
+        result = classifier.classify("xxxxxnomatchxxxxx")
+        assert result.confidence < 0.40
+        assert result.is_low_confidence is True
+
+    def test_low_confidence_flag_false_on_pattern_match(self, classifier):
+        """A pattern-matched input has high confidence, not low."""
+        result = classifier.classify("stop")
+        assert result.confidence >= 0.40
+        assert result.is_low_confidence is False
+        assert result.is_ambiguous is False
+
+    def test_accept_threshold_constant(self):
+        from app.intent.classifier import ACCEPT_CONFIDENCE_THRESHOLD
+        assert ACCEPT_CONFIDENCE_THRESHOLD == 0.70
+
+    def test_low_confidence_threshold_constant(self):
+        from app.intent.classifier import LOW_CONFIDENCE_THRESHOLD
+        assert LOW_CONFIDENCE_THRESHOLD == 0.40
+
+    def test_ambiguous_flag_in_mid_band(self, classifier):
+        """Mid-band confidence produces is_ambiguous=True.
+
+        Constructed by mocking confidence to land in the mid-band; the
+        keyword-only classifier typically produces scores below the
+        low-confidence threshold, so the mid-band is exercised via the
+        property directly.
+        """
+        import dataclasses
+        # Use a manually-constructed classification in the mid-band.
+        c = dataclasses.replace(
+            classifier.classify("hello"),
+            confidence=0.55,
+        )
+        assert 0.40 <= c.confidence < 0.70
+        assert c.is_ambiguous is True
+        assert c.is_low_confidence is False
+
+
+class TestRoutingHelpers:
+    """Tests for module-level routing helpers."""
+
+    def test_should_clarify_true_at_mid_band(self):
+        """should_clarify returns True for classifications in the mid-band."""
+        import dataclasses
+        from app.intent import classify_intent, should_clarify
+        # Force a mid-band confidence via dataclass replace.
+        c = dataclasses.replace(classify_intent("hello"), confidence=0.55)
+        assert should_clarify(c) is True
+
+    def test_should_clarify_false_on_high_confidence(self):
+        from app.intent import classify_intent, should_clarify
+        c = classify_intent("stop")
+        assert should_clarify(c) is False
+
+    def test_is_control_intent_helper(self):
+        from app.intent import classify_intent, is_control_intent
+        assert is_control_intent(classify_intent("stop")) is True
+        assert is_control_intent(classify_intent("hi")) is False
+
+    def test_is_low_confidence_helper(self):
+        from app.intent import classify_intent, is_low_confidence
+        assert is_low_confidence(classify_intent("xxxxxnomatchxxxxx")) is True
+        assert is_low_confidence(classify_intent("hello")) is False

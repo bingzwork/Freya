@@ -13,8 +13,16 @@ from typing import Any, Dict, List, Optional, Tuple
 from app.core.logger import logger
 
 
+# Routing confidence thresholds (see NATURAL_CONVERSATION.md "Routing Semantics").
+ACCEPT_CONFIDENCE_THRESHOLD = 0.70
+LOW_CONFIDENCE_THRESHOLD = 0.40
+
+
 class IntentType(Enum):
     """Intent types for user messages."""
+
+    # Meta-commands (stop / cancel / undo / status) - short-circuit all routing
+    CONVERSATIONAL_CONTROL = "conversational_control"
 
     # Direct chat/conversation - answer immediately via LLM
     CHAT = "chat"
@@ -41,6 +49,26 @@ class IntentType(Enum):
     GIT_OPERATION = "git_operation"
 
     @property
+    def routing_priority(self) -> int:
+        """Dispatch priority for routing (lower number = higher priority).
+
+        Conversation Control short-circuits all other tiers. Direct Answer
+        runs before the engineering pipeline. General Conversation is the
+        last tier.
+        """
+        return {
+            IntentType.CONVERSATIONAL_CONTROL: 0,
+            IntentType.CHAT: 3,
+            IntentType.QUESTION: 3,
+            IntentType.SYSTEM_STATUS: 1,
+            IntentType.TASK: 2,
+            IntentType.FILE_OPERATION: 2,
+            IntentType.CODE_TASK: 2,
+            IntentType.TOOL_REQUEST: 2,
+            IntentType.GIT_OPERATION: 2,
+        }.get(self, 3)
+
+    @property
     def requires_planning(self) -> bool:
         """Check if this intent requires the planning pipeline."""
         return self in {
@@ -55,6 +83,7 @@ class IntentType(Enum):
     def can_answer_directly(self) -> bool:
         """Check if this intent can be answered directly via LLM."""
         return self in {
+            IntentType.CONVERSATIONAL_CONTROL,
             IntentType.CHAT,
             IntentType.QUESTION,
             IntentType.SYSTEM_STATUS,
@@ -75,6 +104,11 @@ class IntentType(Enum):
             IntentType.GIT_OPERATION,
         }
 
+    @property
+    def is_conversational_control(self) -> bool:
+        """Check if this intent is a meta-command (stop / cancel / undo)."""
+        return self is IntentType.CONVERSATIONAL_CONTROL
+
 @dataclass
 class IntentClassification:
     """Result of intent classification."""
@@ -90,6 +124,21 @@ class IntentClassification:
         self.should_plan = self.intent.requires_planning
         self.should_answer_directly = self.intent.can_answer_directly
         self.should_include_runtime_context = self.intent.is_engineering
+
+    @property
+    def is_low_confidence(self) -> bool:
+        """Confidence below the low-confidence threshold (defaults to chat)."""
+        return self.confidence < LOW_CONFIDENCE_THRESHOLD
+
+    @property
+    def is_ambiguous(self) -> bool:
+        """Confidence in the mid-band — ask a clarifying question."""
+        return LOW_CONFIDENCE_THRESHOLD <= self.confidence < ACCEPT_CONFIDENCE_THRESHOLD
+
+    @property
+    def is_control(self) -> bool:
+        """Conversational control intent — short-circuit all other routing."""
+        return self.intent.is_conversational_control
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -110,6 +159,11 @@ class IntentClassifier:
     """Classifies user messages into intent categories."""
 
     INTENT_KEYWORDS: Dict[IntentType, List[str]] = {
+        IntentType.CONVERSATIONAL_CONTROL: [
+            "stop", "halt", "wait", "cancel", "nevermind", "abort",
+            "undo", "revert", "redo",
+            "what are you doing", "current plan", "current step",
+        ],
         IntentType.CHAT: [
             "hello", "hi", "hey", "good morning", "good afternoon", "good evening",
             "how are you", "what's up", "thanks", "thank you", "bye", "goodbye",
@@ -170,6 +224,13 @@ class IntentClassifier:
     }
 
     INTENT_PATTERNS: Dict[IntentType, List[str]] = {
+        IntentType.CONVERSATIONAL_CONTROL: [
+            r"^\s*(stop|halt|wait)\s*[!.]?\s*$",
+            r"^\s*(cancel|nevermind|abort)\s*[!.]?\s*$",
+            r"^\s*(undo|revert|redo)\s*[!.]?\s*$",
+            r"^\s*what\s+are\s+you\s+doing\s*\?\s*$",
+            r"^\s*(status|current\s+plan|current\s+step)\s*[!.]?\s*$",
+        ],
         IntentType.CHAT: [
             r"^\s*(hello|hi|hey|yo|howdy|greetings)\s*[!.]?\s*$",
             r"^\s*(good\s+(morning|afternoon|evening)|bye|goodbye)\s*[!.]?\s*$",
@@ -246,6 +307,14 @@ class IntentClassifier:
         best_score, best_keywords = best_intent[1]
         best_intent_type = best_intent[0]
 
+        # No-signal fallback: when no pattern or keyword matched any intent,
+        # default to CHAT (the General Conversation tier). Confidence stays
+        # low so callers see `is_low_confidence=True` and can apply the
+        # NATURAL_CONVERSATION.md low-confidence policy.
+        if best_score == 0.0:
+            best_intent_type = IntentType.CHAT
+            best_keywords = []
+
         # Build reason
         if best_score > 0.8:
             reason = f"High confidence match for {best_intent_type.value}"
@@ -284,7 +353,13 @@ class IntentClassifier:
         for pattern in self._compiled_patterns.get(intent, []):
             if pattern.match(message):
                 # SYSTEM_STATUS and CODE_TASK get a slight priority boost to win ties with QUESTION
-                pattern_score = 0.96 if intent in (IntentType.SYSTEM_STATUS, IntentType.CODE_TASK) else 0.95
+                # CONVERSATIONAL_CONTROL gets the highest priority to short-circuit all other routing
+                if intent is IntentType.CONVERSATIONAL_CONTROL:
+                    pattern_score = 0.99
+                elif intent in (IntentType.SYSTEM_STATUS, IntentType.CODE_TASK):
+                    pattern_score = 0.96
+                else:
+                    pattern_score = 0.95
                 score = max(score, pattern_score)
                 break
 
@@ -393,3 +468,23 @@ def should_include_runtime_context(message: str) -> bool:
         True if runtime context should be included for this message.
     """
     return classifier.classify(message).should_include_runtime_context
+
+
+def should_clarify(classification: IntentClassification) -> bool:
+    """Return True when the confidence is in the mid-band and a paraphrased
+    clarifying question should be asked instead of acting on the intent."""
+    return classification.is_ambiguous
+
+
+def is_low_confidence(classification: IntentClassification) -> bool:
+    """Return True when confidence is below the low-confidence threshold.
+
+    The caller should default to General Conversation and add a low-confidence
+    signal to the LLM prompt.
+    """
+    return classification.is_low_confidence
+
+
+def is_control_intent(classification: IntentClassification) -> bool:
+    """Return True when the classification is a conversational control command."""
+    return classification.is_control

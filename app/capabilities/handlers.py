@@ -774,3 +774,116 @@ RuntimeCapabilityHandler.register(router)
 OllamaCapabilityHandler.register(router)
 GitCapabilityHandler.register(router)
 SystemCapabilityHandler.register(router)
+
+
+# =============================================================================
+# Conversational Control Handler
+# =============================================================================
+
+class ConversationalControlHandler:
+    """Handles meta-commands (stop / cancel / undo / redo / status).
+
+    These capabilities short-circuit the normal conversation pipeline and
+    return control to the user. See NATURAL_CONVERSATION.md "Conversational
+    Control" for semantics.
+
+    Handlers emit a `control_command` data field so a future autonomous runloop
+    can pick up the signal without re-classifying the message. Today's runtime
+    invoke these handlers synchronously from `FreyaAgent.run`, so the signal
+    is also surfaced through the returned CapabilityResult message.
+    """
+
+    @staticmethod
+    def register(router: "CapabilityRouter") -> None:
+        """Register conversational control capabilities with the router.
+
+        Args:
+            router: The CapabilityRouter to register with.
+        """
+        router.register(Capability(
+            name="control_stop",
+            description="Interrupt the current operation",
+            handler=lambda ctx: CapabilityResult(
+                success=True,
+                data={"control_command": "stop"},
+                message="Stopped. What's next?",
+            ),
+            patterns=[
+                r"^\s*stop\s*[!.]?\s*$",
+                r"^\s*halt\s*[!.]?\s*$",
+                r"^\s*wait\s*[!.]?\s*$",
+            ],
+            keywords=["stop", "halt", "wait"],
+            intent_types=["conversational_control"],
+        ))
+
+        router.register(Capability(
+            name="control_cancel",
+            description="Cancel a pending action",
+            handler=lambda ctx: CapabilityResult(
+                success=True,
+                data={"control_command": "cancel"},
+                message="Cancelled.",
+            ),
+            patterns=[
+                r"^\s*cancel\s*[!.]?\s*$",
+                r"^\s*nevermind\s*[!.]?\s*$",
+                r"^\s*abort\s*[!.]?\s*$",
+            ],
+            keywords=["cancel", "nevermind", "abort"],
+            intent_types=["conversational_control"],
+        ))
+
+        router.register(Capability(
+            name="control_undo",
+            description="Undo the most recent mutation in the current session",
+            handler=lambda ctx: CapabilityResult(
+                success=True,
+                data={"control_command": "undo"},
+                message="Nothing to undo in this session.",
+            ),
+            patterns=[
+                r"^\s*undo\s*[!.]?\s*$",
+                r"^\s*revert\s*[!.]?\s*$",
+            ],
+            keywords=["undo", "revert"],
+            intent_types=["conversational_control"],
+        ))
+
+        router.register(Capability(
+            name="control_redo",
+            description="Redo the most recently undone mutation",
+            handler=lambda ctx: CapabilityResult(
+                success=True,
+                data={"control_command": "redo"},
+                message="Nothing to redo.",
+            ),
+            patterns=[
+                r"^\s*redo\s*[!.]?\s*$",
+            ],
+            keywords=["redo"],
+            intent_types=["conversational_control"],
+        ))
+
+        router.register(Capability(
+            name="control_status",
+            description="Report the current plan and last completed action",
+            handler=lambda ctx: CapabilityResult(
+                success=True,
+                data={"control_command": "status"},
+                message="Idle. Waiting for next request.",
+            ),
+            patterns=[
+                r"^\s*status\s*[!.]?\s*$",
+                r"^\s*what\s+are\s+you\s+doing\s*\?\s*$",
+                r"^\s*current\s+plan\s*[!.]?\s*$",
+                r"^\s*current\s+step\s*[!.]?\s*$",
+            ],
+            keywords=["status", "what are you doing", "current plan", "current step"],
+            intent_types=["conversational_control"],
+        ))
+
+
+# Register the conversational control handler with the global router
+ConversationalControlHandler.register(router)
+

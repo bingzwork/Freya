@@ -8,12 +8,19 @@ from app.core.project_index import ProjectIndex
 from app.core.symbol_index import SymbolIndex
 from app.core.tool_manager import ToolManager
 from app.editing.patch_engine import PatchEngine
+from app.capabilities.router import route_query
+from app.capabilities.formatter import format_capability_result
 from app.editing.patch_generator import PatchGenerator
 from app.intelligence.context_builder import ContextBuilder
 from app.intelligence.dependency_graph import DependencyGraph
 from app.intelligence.file_locator import FileLocator
 from app.intelligence.lexical_search import LexicalSearch
-from app.intent import should_answer_directly, classify_intent, IntentType
+from app.intent import (
+    should_answer_directly,
+    classify_intent,
+    should_clarify,
+    IntentType,
+)
 from app.memory.project_memory import ProjectMemory
 from app.verification.repair_loop import RepairLoop
 from app.verification.runner import VerificationRunner
@@ -205,14 +212,56 @@ class FreyaAgent:
 
     def run(self, task, allow_mutations=True):
         """Plan, execute bounded workspace actions, and summarize the result. Mutating tools will prompt for confirmation before each use."""
+        classification = classify_intent(task)
+
+        # Conversational control short-circuits all routing and bypasses the LLM.
+        if classification.is_control:
+            result = route_query(
+                task, intent_type=classification.intent.value
+            )
+            if result is not None:
+                answer = format_capability_result(result)
+                self.conversation.add_message("user", task)
+                self.conversation.add_message("assistant", answer)
+                if self.conversation._persistence_path:
+                    self.conversation.save()
+                return answer
+
+        # Mid-band confidence: ask a paraphrased clarifying question.
+        if should_clarify(classification):
+            clarifying_prompt = (
+                "I want to make sure I understand. Could you rephrase or add a "
+                "bit more detail about what you'd like me to do? "
+                f"(user input: {task})"
+            )
+            answer = self.llm.ask(clarifying_prompt)
+            self.memory.record(
+                "clarification",
+                {"request": task, "intent": classification.intent.value,
+                 "confidence": classification.confidence, "outcome": answer[:500]},
+            )
+            self.conversation.add_message("user", task)
+            self.conversation.add_message("assistant", answer)
+            if self.conversation._persistence_path:
+                self.conversation.save()
+            return answer
+
         # Classify intent to determine if we need the engineering pipeline
         if should_answer_directly(task):
-            # Chat, knowledge questions, and system status -> direct LLM response
+            # Chat, knowledge questions, and system status -> direct LLM response.
+            # Low-confidence inputs are still routed here, but flagged for the LLM.
             conversation_history = self.conversation.get_history_text()
+            low_confidence_block = ""
+            if classification.is_low_confidence:
+                low_confidence_block = (
+                    "\n\nNote: Your previous classifier flagged this input "
+                    "as low-confidence; please ask for clarification if intent "
+                    "is unclear.\n"
+                )
             prompt = f"""{conversation_history}
 
 User: {task}
-
+{low_confidence_block}
 Answer the user's request directly."""
             answer = self.llm.ask(prompt)
             self.memory.record("task", {"request": task, "outcome": answer[:500]})
@@ -223,7 +272,6 @@ Answer the user's request directly."""
             return answer
 
         # Validate that engineering tasks have sufficient context
-        classification = classify_intent(task)
         if not _has_sufficient_context(task, classification.intent):
             # Missing essential information - ask user instead of inventing fake plans
             prompt = _get_missing_context_prompt(task, classification.intent)

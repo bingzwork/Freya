@@ -6,6 +6,7 @@ the full autonomous execution pipeline - simple chat and questions should
 be answered directly.
 
 Intent Types:
+- CONVERSATIONAL_CONTROL: Meta-commands (stop / cancel / undo); short-circuits routing.
 - CHAT: Casual conversation, greetings
 - QUESTION: Asking about something (how, what, why, etc.)
 - TASK: Request to perform a task/action
@@ -19,13 +20,18 @@ planning and execution pipeline. Others should be answered directly via LLM.
 """
 
 from app.intent.classifier import (
+    ACCEPT_CONFIDENCE_THRESHOLD,
+    LOW_CONFIDENCE_THRESHOLD,
     IntentClassifier,
     IntentType,
     IntentClassification,
     classify_intent,
     is_task,
     should_answer_directly,
+    should_clarify,
     should_include_runtime_context,
+    is_control_intent,
+    is_low_confidence,
 )
 from app.intent.runtime_context import (
     RuntimeContext,
@@ -46,13 +52,18 @@ from app.intent.json_utils import (
 
 __all__ = [
     # Intent classification
+    "ACCEPT_CONFIDENCE_THRESHOLD",
+    "LOW_CONFIDENCE_THRESHOLD",
     "IntentClassifier",
     "IntentType",
     "IntentClassification",
     "classify_intent",
     "is_task",
     "should_answer_directly",
+    "should_clarify",
     "should_include_runtime_context",
+    "is_control_intent",
+    "is_low_confidence",
     # Runtime context
     "RuntimeContext",
     "get_runtime_context",
