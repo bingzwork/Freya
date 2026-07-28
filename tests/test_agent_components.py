@@ -7,6 +7,7 @@ from unittest.mock import patch
 from app.agent.planner import Planner
 from app.agent.executor import Executor
 from app.agent.core_agent import FreyaAgent, _classify_engineering_category
+from app.memory.engineering_lessons import LessonSeverity, LessonType
 
 
 class StubLLM:
@@ -213,5 +214,133 @@ def test_repair_outcome_stores_lesson() -> None:
         lessons = agent.engineering_lessons.recent(limit=1)
         assert lessons[-1].lesson_type == "pattern"
         assert lessons[-1].severity == "recommended"
+    finally:
+        temp.cleanup()
+
+
+# --- Self-Learning Priority 3: engineered lesson retrieval in repair() ---
+
+
+def test_repair_prepends_seeded_anti_pattern_on_retry() -> None:
+    """After a failed attempt, the next propose() prompt must include past failures."""
+    agent, temp = _make_isolated_agent()
+    try:
+        # Seed an anti-pattern lesson that matches the inferred category.
+        agent.engineering_lessons.store(
+            title="Do not silence failing tests",
+            description="Commenting out the failing assertion hides the regression.",
+            lesson_type=LessonType.ANTI_PATTERN,
+            category="test",
+            severity=LessonSeverity.IMPORTANT,
+        )
+        # Seed a builder-pattern lesson on the same category to make sure
+        # the repair filter (ANTI_PATTERN only) excludes it.
+        agent.engineering_lessons.store(
+            title="Prefer pytest fixtures",
+            description="Reuse fixtures to express shared state.",
+            lesson_type=LessonType.PATTERN,
+            category="test",
+            severity=LessonSeverity.RECOMMENDED,
+        )
+
+        # Capture every propose() invocation so we can assert on the prompt.
+        seen_prompts = []
+
+        def _fake_propose(prompt, _context):
+            seen_prompts.append(prompt)
+            return {"operations": []}
+
+        # First apply_and_verify fails, second succeeds.
+        outcomes = [
+            {
+                "verification": _StubVerify(success=False, stdout="", stderr="boom", return_code=1),
+                "rolled_back": False,
+                "changes": [],
+            },
+            {
+                "verification": _StubVerify(success=True),
+                "rolled_back": False,
+                "changes": [],
+            },
+        ]
+
+        def _fake_apply_and_verify(_tools, _operations, _verifier):
+            return outcomes.pop(0)
+
+        agent.patch_generator.propose = _fake_propose
+        agent.patch_engine.apply_and_verify = _fake_apply_and_verify
+        agent.verifier.dry_run_verify = lambda: _StubVerify(success=True)
+
+        # A task string that the keyword classifier resolves to ``"test"``
+        # so the seeded lesson is in scope. "pytest" wins before any other
+        # keyword class so we keep the task minimal.
+        result = agent.repair("Run pytest this morning", allow_mutations=True, max_attempts=2)
+
+        assert result["success"] is True
+        # Two attempts: the first with empty feedback, the second after a failure.
+        assert len(seen_prompts) == 2
+
+        # The first attempt has no past-failures block (RepairLoop starts
+        # with empty feedback, mirroring the real-world first attempt).
+        assert "Past Similar Failures" not in seen_prompts[0]
+
+        # The retry prompt must contain the seeded ANTI_PATTERN lesson, and
+        # must NOT contain the PATTERN-only lesson (filter by lesson_type).
+        retry_prompt = seen_prompts[1]
+        assert "Past Similar Failures" in retry_prompt
+        assert "Do not silence failing tests" in retry_prompt
+        assert "Prefer pytest fixtures" not in retry_prompt
+        # The original verification feedback still rides along at the end.
+        assert "Previous verification failed" in retry_prompt
+    finally:
+        temp.cleanup()
+
+
+def test_repair_omits_past_failures_when_nothing_matches() -> None:
+    """If no ANTI_PATTERN lesson matches the category, the block is skipped."""
+    agent, temp = _make_isolated_agent()
+    try:
+        # Seed an anti-pattern on a category that the task does NOT match.
+        agent.engineering_lessons.store(
+            title="Avoid global mutable state",
+            description="Singletons make tests hard to isolate.",
+            lesson_type=LessonType.ANTI_PATTERN,
+            category="build",
+            severity=LessonSeverity.CRITICAL,
+        )
+
+        seen_prompts = []
+
+        def _fake_propose(prompt, _context):
+            seen_prompts.append(prompt)
+            return {"operations": []}
+
+        outcomes = [
+            {
+                "verification": _StubVerify(success=False, stdout="", stderr="boom", return_code=1),
+                "rolled_back": False,
+                "changes": [],
+            },
+            {
+                "verification": _StubVerify(success=True),
+                "rolled_back": False,
+                "changes": [],
+            },
+        ]
+
+        def _fake_apply_and_verify(_tools, _operations, _verifier):
+            return outcomes.pop(0)
+
+        agent.patch_generator.propose = _fake_propose
+        agent.patch_engine.apply_and_verify = _fake_apply_and_verify
+        agent.verifier.dry_run_verify = lambda: _StubVerify(success=True)
+
+        # "Refactor" task: the seeded lesson sits in "build" and must not match.
+        result = agent.repair("Refactor the messy module", allow_mutations=True, max_attempts=2)
+        assert result["success"] is True
+        assert len(seen_prompts) == 2
+        assert "Past Similar Failures" not in seen_prompts[1]
+        # The retry still carries the verification feedback from RepairLoop.
+        assert "Previous verification failed" in seen_prompts[1]
     finally:
         temp.cleanup()

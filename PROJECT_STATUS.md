@@ -39,7 +39,7 @@ Freya implements a **modular architecture** with 25+ distinct modules and 127+ P
 | 6. Intent & Routing | COMPLETE | app/intent/ + app/capabilities/ - 8 intents, 15+ handlers |
 | 7. Vector DB | COMPLETE | app/vector_db/ - FAISS with adaptive indexing |
 | 8. Agent Core | COMPLETE | app/agent/ - FreyaAgent, Planner, Executor |
-| 9. Memory | COMPLETE | app/memory/ + app/brain/ - ProjectMemory, ExperienceMemory, EngineeringLessons, ConversationState (all three storages owned by FreyaAgent at runtime; engineering lessons are written automatically after solve()/repair() — Priority 2; read-side wiring tracked in SELF_LEARNING.md) |
+| 9. Memory | COMPLETE | app/memory/ + app/brain/ - ProjectMemory, ExperienceMemory, EngineeringLessons, ConversationState (all three storages owned by FreyaAgent at runtime; engineering lessons are written automatically after solve()/repair() — Priority 2; the Planner surfaces matching PATTERN lessons and the Repair loop surfaces matching ANTI_PATTERN lessons on retry — Priority 3; read-side wiring status tracked in SELF_LEARNING.md) |
 | 10. Editing | PARTIAL | app/editing/ - Patch engine + generator (no delete/line-edit yet) |
 | 11. Verification | COMPLETE | app/verification/ - Validation runner, repair loop |
 | 12. Monitoring | COMPLETE | app/monitoring/ - System + metrics + alerts |

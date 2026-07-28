@@ -4,10 +4,16 @@ Covers Phase 1 (planning behaviour) and Phase 4 (bracket logging).
 """
 
 import json
+import tempfile
 
 import pytest
 
 from app.agent.planner import Planner
+from app.memory.engineering_lessons import (
+    EngineeringLessonStorage,
+    LessonSeverity,
+    LessonType,
+)
 
 
 class StubLLM:
@@ -141,3 +147,152 @@ def test_planner_emits_started_and_finished_stage_logs(caplog):
     assert len(p_idx) == 2
     assert info_messages[p_idx[0] + 1] == "Started"
     assert info_messages[p_idx[1] + 1] == "Finished"
+
+
+# ---------- Self-Learning Priority 3: Engineering Lesson retrieval ----------
+
+
+def _seeded_lessons() -> tuple:
+    """Return a fully-populated EngineeringLessonStorage in an isolated workspace."""
+    storage = EngineeringLessonStorage(workspace=tempfile.mkdtemp())
+    storage.store(
+        title="Traceback triage",
+        description="Read the traceback first, then locate the failing line.",
+        lesson_type=LessonType.PATTERN,
+        category="debug",
+        severity=LessonSeverity.RECOMMENDED,
+    )
+    storage.store(
+        title="Skip failing test",
+        description="Disable the test instead of fixing.",
+        lesson_type=LessonType.ANTI_PATTERN,
+        category="debug",
+        severity=LessonSeverity.IMPORTANT,
+    )
+    storage.store(
+        title="Soft hint",
+        description="A nice-to-know tip.",
+        lesson_type=LessonType.PATTERN,
+        category="debug",
+        severity=LessonSeverity.INFO,
+    )
+    storage.store(
+        title="Build tip",
+        description="Use --no-cache.",
+        lesson_type=LessonType.PATTERN,
+        category="build",
+        severity=LessonSeverity.RECOMMENDED,
+    )
+    return storage
+
+
+def test_planner_prompt_includes_seeded_pattern_lesson():
+    """A seeded PATTERN lesson that matches the task category is surfaced."""
+    storage = _seeded_lessons()
+    llm = StubLLM('{"steps": ["Debug the failing test"]}')
+    Planner(llm, engineering_lessons=storage).create_plan("Debug the failing import")
+    prompt = llm.calls[0]
+    assert "Past Engineering Lessons:" in prompt
+    assert "Traceback triage" in prompt
+    # The pattern lesson should be tagged with its severity.
+    assert "[recommended]" in prompt
+
+
+def test_planner_prompt_excludes_anti_pattern_lesson():
+    """ANTI_PATTERN lessons must not appear in the planner prompt."""
+    storage = _seeded_lessons()
+    llm = StubLLM('{"steps": []}')
+    Planner(llm, engineering_lessons=storage).create_plan("Debug the failing import")
+    prompt = llm.calls[0]
+    assert "Skip failing test" not in prompt
+
+
+def test_planner_prompt_excludes_info_severity():
+    """INFO-severity lessons are filtered out of the planner prompt."""
+    storage = _seeded_lessons()
+    llm = StubLLM('{"steps": []}')
+    Planner(llm, engineering_lessons=storage).create_plan("Debug the failing import")
+    assert "Soft hint" not in llm.calls[0]
+
+
+def test_planner_prompt_excludes_other_categories():
+    """Only lessons whose category matches the inferred task category are surfaced."""
+    storage = _seeded_lessons()
+    llm = StubLLM('{"steps": []}')
+    Planner(llm, engineering_lessons=storage).create_plan("Debug the failing import")
+    assert "Build tip" not in llm.calls[0]
+
+
+def test_planner_prompt_scopes_lesson_section_with_severity_and_recency():
+    """Up to three lessons are surfaced, ordered CRITICAL > IMPORTANT > RECOMMENDED."""
+    storage = EngineeringLessonStorage(workspace=tempfile.mkdtemp())
+    storage.store(
+        title="R1", description="r1",
+        lesson_type=LessonType.PATTERN, category="debug",
+        severity=LessonSeverity.RECOMMENDED,
+    )
+    storage.store(
+        title="I1", description="i1",
+        lesson_type=LessonType.PATTERN, category="debug",
+        severity=LessonSeverity.IMPORTANT,
+    )
+    storage.store(
+        title="C1", description="c1",
+        lesson_type=LessonType.PATTERN, category="debug",
+        severity=LessonSeverity.CRITICAL,
+    )
+    storage.store(
+        title="R2", description="r2",
+        lesson_type=LessonType.PATTERN, category="debug",
+        severity=LessonSeverity.RECOMMENDED,
+    )
+    storage.store(
+        title="C2", description="c2",
+        lesson_type=LessonType.PATTERN, category="debug",
+        severity=LessonSeverity.CRITICAL,
+    )
+    storage.store(
+        title="I2", description="i2",
+        lesson_type=LessonType.PATTERN, category="debug",
+        severity=LessonSeverity.IMPORTANT,
+    )
+
+    llm = StubLLM('{"steps": []}')
+    # Task explicitly avoids "test" / "build" keywords so it classifies as "debug".
+    Planner(llm, engineering_lessons=storage).create_plan("Fix this bug")
+    prompt = llm.calls[0]
+
+    section = prompt[prompt.index("Past Engineering Lessons:"):]
+    # Only the lines formatted as lesson bullets share the ``[severity]`` prefix.
+    listed = [
+        line for line in section.splitlines()
+        if line.startswith("- [") and "]" in line
+    ]
+    # Section is capped at three lessons, in the expected severity order.
+    assert len(listed) == 3
+    assert "C2" in listed[0]
+    assert "[critical]" in listed[0]
+    assert "C1" in listed[1]
+    assert "[critical]" in listed[1]
+    assert "I2" in listed[2]
+    assert "[important]" in listed[2]
+    # Lower-severity lessons are dropped at the cap.
+    assert "R1" not in section
+    assert "R2" not in section
+    assert "I1" not in section
+
+
+def test_planner_omits_lesson_section_when_no_engineering_lessons():
+    """Passing ``engineering_lessons=None`` leaves the prompt unchanged."""
+    llm = StubLLM('{"steps": []}')
+    Planner(llm).create_plan("Debug a thing")
+    assert "Past Engineering Lessons:" not in llm.calls[0]
+
+
+def test_planner_omits_lesson_section_when_nothing_matches():
+    """When no lesson matches the inferred category the section is silently skipped."""
+    storage = _seeded_lessons()
+    llm = StubLLM('{"steps": []}')
+    Planner(llm, engineering_lessons=storage).create_plan("Refactor the messy module")
+    # Only "Build tip" matches "build"; the request does not.
+    assert "Past Engineering Lessons:" not in llm.calls[0]

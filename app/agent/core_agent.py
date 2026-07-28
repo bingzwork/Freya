@@ -207,7 +207,7 @@ class FreyaAgent:
         self.patch_engine = PatchEngine()
         self.patch_generator = PatchGenerator(self.llm, self.patch_engine)
         self.verifier = VerificationRunner(workspace)
-        self.planner = Planner(self.llm, self.memory)
+        self.planner = Planner(self.llm, self.memory, engineering_lessons=self.engineering_lessons)
         self.conversation = ConversationState(max_history=max_conversation_history, persistence_path=conversation_persistence_path)
 
         self.project_index = ProjectIndex(workspace)
@@ -513,8 +513,14 @@ Answer the user's request using the relevant code above. Quote code only when it
         context = self.build_context(task)
 
         def propose(feedback):
+            # Priority 3 (Self-Learning): after a failed attempt, surface
+            # anti-pattern lessons that match the inferred category so the
+            # patch generator can avoid repeating them. The block is only
+            # prepended on retries (i.e. when ``feedback`` is non-empty)
+            # because RepairLoop starts with an empty feedback string.
+            augmented = self._prepend_past_failures(feedback, task) if feedback else feedback
             return self.patch_generator.propose(
-                f"{task}\n\nVerification feedback:\n{feedback}", context
+                f"{task}\n\nVerification feedback:\n{augmented}", context
             )
 
         result = RepairLoop(
@@ -562,6 +568,36 @@ Answer the user's request using the relevant code above. Quote code only when it
             # Capture is best-effort; never let logging disturb the repair outcome.
             logger.warning(f"Failed to record repair lesson: {exc}")
         return result
+
+    # ------------------------------------------------------------------
+    # Priority 3 helpers (Self-Learning read-side).
+    # ------------------------------------------------------------------
+
+    def _prepend_past_failures(self, feedback: str, task: str) -> str:
+        """Return ``feedback`` prefixed with up to two past-failure lessons.
+
+        Reuses ``EngineeringLessonStorage.get_anti_patterns``; returns the
+        original feedback unchanged when nothing matches or the storage
+        raises. Best-effort by design — never lets lesson retrieval break
+        the repair loop.
+        """
+        if self.engineering_lessons is None:
+            return feedback
+        try:
+            category = _classify_engineering_category(task)
+            lessons = self.engineering_lessons.get_anti_patterns(
+                category=category, limit=2
+            )
+        except Exception as exc:
+            logger.warning(f"Failed to read past failures: {exc}")
+            return feedback
+        if not lessons:
+            return feedback
+        lines = ["Past Similar Failures:"]
+        for lesson in lessons:
+            description = (lesson.description or "")[:200]
+            lines.append(f"- {lesson.title}: {description}")
+        return "\n".join(lines) + "\n\n" + feedback
 
     def new_conversation(self) -> None:
         """Start a new conversation, clearing previous message history."""

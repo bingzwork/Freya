@@ -4,10 +4,42 @@ import re
 from app.core.logger import logger
 
 
+# Rule-based category mapping shared with ``_classify_engineering_category``
+# in ``app/agent/core_agent.py``. Kept inline here because the planner module
+# sits below ``core_agent`` in the import graph; duplicating the tiny lookup
+# avoids introducing a new shared module (see SELF_LEARNING.md Priority 3).
+_LESSON_KEYWORDS = {
+    "test": ("test", "pytest", "spec"),
+    "build": ("build", "compile", "install", "package"),
+    "refactor": ("refactor", "rename", "restructure", "cleanup"),
+    "debug": ("debug", "fix", "bug", "error", "traceback", "failure"),
+    "understand": ("understand", "explain", "describe", "how does", "what does"),
+}
+
+
+def _classify_lesson_category(task: str) -> str:
+    """Return the first matching lesson category for a task description."""
+    if not task:
+        return "task"
+    lowered = task.lower()
+    for category in ("test", "build", "refactor", "debug", "understand"):
+        for keyword in _LESSON_KEYWORDS[category]:
+            if keyword in lowered:
+                return category
+    return "task"
+
+
 class Planner:
-    def __init__(self, llm, memory=None):
+    # Severities the planner surfaces. INFO is intentionally omitted because
+    # it adds noise without influencing planning decisions.
+    _LESSON_SEVERITY_WHITELIST = ("critical", "important", "recommended")
+    _SEVERITY_RANK = {"critical": 0, "important": 1, "recommended": 2}
+    _LESSON_SECTION_LIMIT = 3
+
+    def __init__(self, llm, memory=None, engineering_lessons=None):
         self.llm = llm
         self.memory = memory
+        self.engineering_lessons = engineering_lessons
 
     def create_plan(self, task):
         logger.info("[Planner]")
@@ -32,6 +64,14 @@ class Planner:
                 # If memory fails, just ignore
                 pass
 
+        # Priority 3 (Self-Learning): surface recent Engineering Lessons
+        # matching the inferred task category. Reuses the existing
+        # ``EngineeringLessonStorage.get_patterns()`` retrieval API; ANTI /
+        # DECISION / lower-tier severities are filtered and the result is
+        # re-sorted by severity (CRITICAL first), with recency as a stable
+        # tie-breaker since ``get_patterns`` already returns newest-first.
+        lessons_context = self._build_lessons_context(task)
+
         # Define task-specific templates and examples for ENGINEERING TASKS ONLY
         # ONLY executable engineering actions that map to TOOLS should appear here
         # REASONING steps (analyze, understand, explain, summarize, describe, identify, provide, answer) are NOT executable
@@ -52,7 +92,7 @@ determine, design, locate. Reasoning happens AFTER tools execute.
 
         prompt = f"""Plan a SHORT execution for this engineering task: {task}
 
-{task_samples}{memory_context}Rules:
+{task_samples}{memory_context}{lessons_context}Rules:
 - Every step must map to one executable tool: read_file, write_file, replace_in_file, list_files, run_terminal, create_file, delete_file, git_*, http_*, format_file.
 - Max 5 steps. Keep each step one short imperative ("Read file X", "Run pytest", "Fix the code"). Never describe reasoning.
 - If the request is not an engineering task (chat, knowledge, capability, identity, status), return an empty plan: {{"steps": []}}.
@@ -89,3 +129,42 @@ Examples:
         logger.info("[Planner]")
         logger.info("Finished")
         return plan
+
+    # ------------------------------------------------------------------
+    # Priority 3 helpers (Self-Learning read-side).
+    # ------------------------------------------------------------------
+
+    def _build_lessons_context(self, task: str) -> str:
+        """Render a ``Past Engineering Lessons`` block for the planner prompt.
+
+        Reuses ``EngineeringLessonStorage.get_patterns`` for retrieval so the
+        underlying storage layer remains unchanged. Returns an empty string
+        when no lessons match or the storage raises.
+        """
+        if self.engineering_lessons is None or not task:
+            return ""
+        try:
+            category = _classify_lesson_category(task)
+            # ``get_patterns`` already returns newest-first; we over-fetch and
+            # post-filter by severity, then stable-sort by severity rank so
+            # CRITICAL > IMPORTANT > RECOMMENDED while preserving recency
+            # within each bucket.
+            patterns = self.engineering_lessons.get_patterns(
+                category=category, limit=20
+            )
+        except Exception:
+            return ""
+        eligible = [
+            p for p in patterns if p.severity in self._LESSON_SEVERITY_WHITELIST
+        ]
+        if not eligible:
+            return ""
+        eligible.sort(key=lambda p: self._SEVERITY_RANK.get(p.severity, 99))
+        selected = eligible[: self._LESSON_SECTION_LIMIT]
+        lines = ["Past Engineering Lessons:"]
+        for lesson in selected:
+            description = (lesson.description or "")[:200]
+            lines.append(
+                f"- [{lesson.severity}] {lesson.title}: {description}"
+            )
+        return "\n".join(lines) + "\n\n"
