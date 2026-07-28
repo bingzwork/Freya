@@ -301,8 +301,15 @@ class ResponseFormatter:
     def _format_generic(self, result: CapabilityResult) -> str:
         """Generic formatter for unknown capability types.
 
-        Attempts to create a natural language response from the data.
+        Prefers the hand-written response message so internal field names don't
+        leak to the user (see NATURAL_CONVERSATION.md "User Communication
+        Principles"). Falls back to a description of the data only when no
+        message was supplied.
         """
+        # Prefer the explicitly-written user-facing message.
+        if result.message:
+            return result.message
+
         data = result.data or {}
 
         # If data is a simple value, just return it

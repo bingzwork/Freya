@@ -230,9 +230,9 @@ class FreyaAgent:
         # Mid-band confidence: ask a paraphrased clarifying question.
         if should_clarify(classification):
             clarifying_prompt = (
-                "I want to make sure I understand. Could you rephrase or add a "
-                "bit more detail about what you'd like me to do? "
-                f"(user input: {task})"
+                "I'm not quite sure what the user wants yet. "
+                "Ask a short, friendly clarifying question rather than guessing. "
+                f"The user said: {task}"
             )
             answer = self.llm.ask(clarifying_prompt)
             self.memory.record(
@@ -254,9 +254,9 @@ class FreyaAgent:
             low_confidence_block = ""
             if classification.is_low_confidence:
                 low_confidence_block = (
-                    "\n\nNote: Your previous classifier flagged this input "
-                    "as low-confidence; please ask for clarification if intent "
-                    "is unclear.\n"
+                    "\n\nNote: The user's request is a bit unclear. "
+                    "If you're not sure what they're asking for, ask a short, "
+                    "friendly clarifying question rather than guessing.\n"
                 )
             prompt = f"""{conversation_history}
 

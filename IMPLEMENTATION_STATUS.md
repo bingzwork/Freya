@@ -2,7 +2,7 @@
 
 **Version:** v0.4.x
 
-**Last Updated:** 2026-07-27 (NATURAL_CONVERSATION.md P0 items implemented in code: CONVERSATIONAL_CONTROL intent, ConversationalControlHandler, agent-level short-circuit, low-confidence/ambiguity flags; new tests added)
+**Last Updated:** 2026-07-28 (User Communication Principles implemented in the runtime: `_format_generic` now prefers the hand-written `result.message` so internal field names never surface in user replies; clarifying and low-confidence prompts in `FreyaAgent.run` no longer leak classifier or "user input" jargon. New tests in `tests/test_user_communication.py` verify the contract.)
 
 **Purpose**
 

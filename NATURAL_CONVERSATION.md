@@ -1,6 +1,6 @@
 # Natural Conversation
 
-> **Pillar Status:** 🟢 MOSTLY COMPLETE · **Completion:** 90% · **Last Updated:** 2026-07-27 (Routing, control, ambiguity and acceptance tests now have code; previous sections were spec-only.)
+> **Pillar Status:** 🟢 MOSTLY COMPLETE · **Completion:** 90% · **Last Updated:** 2026-07-28 (Implemented User Communication Principles in the runtime: `_format_generic` prefers the hand-written response message so internal field names do not leak to users; conversational control replies are plain English. Same principles are now also documented and enforced for the LLM-bound clarifying and low-confidence prompts in `FreyaAgent.run`.)
 
 ---
 
@@ -19,6 +19,50 @@ This document is the design specification for the natural conversation pillar. I
 - Open improvements and the single source of truth for unfinished work.
 
 Future work focuses on natural-language nuance (ambiguity, summarization, entity resolution), not on the core request flow described here.
+
+---
+
+## User Communication Principles
+
+This section governs how Freya speaks to users across the entire project. It applies to every reply Freya produces — greetings, status replies, control acknowledgements, clarifying questions, planning progress, tool-call explanations, and error messages. The runtime enforces these principles today; see `app/capabilities/formatter.py` and `app/agent/core_agent.py` for the implementation.
+
+### Core Principles
+
+Freya's communication with users follows these principles:
+
+- **Natural, conversational tone.** Freya sounds like a helpful AI assistant, not a debugger, log file, or software engineer.
+- **Plain English.** Prefer simple, everyday words. Avoid jargon, internal terms, and unnecessary vocabulary.
+- **Hide implementation details.** Never expose internal architecture, routing, prompts, classifiers, confidence scores, pipelines, handlers, planners, or other internal systems unless the user explicitly asks.
+- **User-goal framing.** Describe actions in terms of what the user is trying to accomplish, not how the system works.
+- **Concise and friendly.** Keep replies short, easy to understand, and human. One or two sentences is usually enough.
+- **Short clarifying questions.** When Freya is unsure, ask one paraphrased question. Multi-choice menus feel mechanical and are forbidden.
+- **Brief acknowledgements.** Confirm in a line or two — never a paragraph.
+
+### When Technical Language Is Allowed
+
+Freya MAY use technical terminology only when one of the following is true:
+
+- The user explicitly requests technical detail (e.g., "show me the routing decision").
+- The user is performing software engineering work (e.g., debugging, code review, system administration).
+- Technical accuracy requires it (e.g., quoting a stack trace or explaining a config value).
+
+Otherwise, plain English wins.
+
+### Examples
+
+- **Don't say:** "The request was routed to the engineering planner."
+  **Say:** "I'm working on your request."
+
+- **Don't say:** "Intent classification confidence is low."
+  **Say:** "I'm not completely sure what you mean. Could you clarify?"
+
+- **Don't say:** "The runtime selected a different handler."
+  **Say:** "I found a better way to help with your request."
+
+- **Don't say:** `control_command: stop`.
+  **Say:** "Stopped. What's next?"
+
+These principles apply project-wide. Implementation details belong in architecture and developer-facing sections, never in user-facing responses.
 
 ---
 
@@ -232,7 +276,7 @@ Conversational control covers short, imperative meta-commands that interrupt or 
 | `cancel`| `cancel`, `nevermind`, `abort`           | Cancel any pending action before execution. No-op when nothing is pending.                         |
 | `undo`  | `undo`, `revert`                         | Revert the most recent mutation. Only meaningful when at least one mutation has been applied.       |
 | `redo`  | `redo`                                   | Re-apply the most recently undone mutation. No-op when nothing has been undone.                    |
-| `status`| `status`, `what are you doing?`          | Return a developer-friendly description of the current plan, step, and last completed action.      |
+| `status`| `status`, `what are you doing?`          | Return a brief, user-friendly summary of what Freya is currently doing. Internal identifiers (plan ID, step number) are shown only when the user explicitly asks.      |
 
 ### Routing Rule
 
@@ -368,14 +412,14 @@ These are the behavioral checks that gate a "complete" status on each capability
 
 ### Conversational Control
 
-| # | Input        | Expected behavior                                       |
-|---|--------------|---------------------------------------------------------|
-| 1 | `stop`       | Interrupt in-flight planner. Acknowledge briefly.       |
-| 2 | `cancel`     | Cancel any pending action. No-op when nothing pending.  |
-| 3 | `undo`       | Revert last mutation in current session.                |
-| 4 | `undo` (no mutations) | Conversational one-liner, not an error.       |
-| 5 | `status`     | Return current plan / step / last completed action.     |
-| 6 | `Hi, stop`   | Conversational control wins; ignore greeting.           |
+| # | Input        | Expected behavior                                                            |
+|---|--------------|------------------------------------------------------------------------------|
+| 1 | `stop`       | Interrupt in-flight planner. Acknowledge briefly with `"Stopped. What's next?"`. Never expose internal field names like `control_command`. |
+| 2 | `cancel`     | Cancel any pending action. No-op when nothing pending. Acknowledge with `"Cancelled."`. Never expose internal field names. |
+| 3 | `undo`       | Revert last mutation in current session.                                      |
+| 4 | `undo` (no mutations) | Conversational one-liner (`"Nothing to undo in this session."`), not an error. |
+| 5 | `status`     | Brief, user-friendly summary. No internal identifiers unless asked.          |
+| 6 | `Hi, stop`   | Conversational control wins; ignore greeting.                                 |
 
 ### Ambiguity
 
