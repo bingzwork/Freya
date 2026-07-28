@@ -116,15 +116,18 @@ class TestRuntimeContext:
             # On Windows, should mention PowerShell or CMD
             assert "PowerShell" in hint or "Windows" in hint or "CMD" in hint
 
-    @pytest.mark.skipif(os.name == "nt", reason="Unix-specific test")
     def test_unix_command_hint(self):
-        """Test command hint for Unix."""
+        """Test command hint for Unix.
+
+        The Unix branch is exercised by patching ``platform.system`` to
+        ``"Linux"``, so this test is platform-agnostic and runs on every OS.
+        """
         with patch("platform.system") as mock_system:
             mock_system.return_value = "Linux"
             reset_runtime_context()
             ctx = get_runtime_context()
             hint = ctx.get_command_hint()
-            # On Unix, should mention bash commands
+            # The Unix branch should mention Unix / Linux / bash commands.
             assert "Unix" in hint or "Linux" in hint or "bash" in hint
 
     def test_repr(self):
