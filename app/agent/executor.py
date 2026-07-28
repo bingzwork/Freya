@@ -159,9 +159,15 @@ class Executor:
         "pip": "run_terminal",
         "npm": "run_terminal",
     }
-    def __init__(self, llm, tools):
+    # Severities surfaced in the LLM tool-selection prompt (Priority 4).
+    _EXEC_LESSON_SEVERITY_WHITELIST = ("critical", "important", "recommended")
+    _EXEC_SEVERITY_RANK = {"critical": 0, "important": 1, "recommended": 2}
+    _EXEC_LESSON_LIMIT = 2
+
+    def __init__(self, llm, tools, engineering_lessons=None):
         self.llm = llm
         self.tools = tools
+        self.engineering_lessons = engineering_lessons
 
     def _map_step_to_tool(self, step: str) -> dict[str, Any] | None:
         """
@@ -247,7 +253,7 @@ Preference order (least powerful first):
 
         prompt = f"""Pick the single tool that fits this step: {step}
 
-{selection_guidelines}
+{self._build_pre_execute_lessons_block(step)}{selection_guidelines}
 Available tools:
 {chr(10).join([f'- {tool}: {desc}' for tool, desc in available_tools.items()])}
 
@@ -297,6 +303,60 @@ Return ONLY this JSON, no markdown, no extra text:
         action = self._select_tool_with_llm(step)
         return action
 
+    # ------------------------------------------------------------------
+    # Priority 4 helpers (Self-Learning read-side).
+    # ------------------------------------------------------------------
+
+    def _build_pre_execute_lessons_block(self, step: str) -> str:
+        """Render up to two PATTERN lessons matching the step.
+
+        Reuses ``EngineeringLessonStorage.get_patterns`` unchanged; mirrors
+        the filtering used in ``Planner._build_lessons_context`` so the
+        Planner and Executor surface a consistent severity ranking.
+        """
+        if self.engineering_lessons is None or not step:
+            return ""
+        try:
+            patterns = self.engineering_lessons.get_patterns(limit=10)
+        except Exception:
+            return ""
+        eligible = [
+            p for p in patterns
+            if p.severity in self._EXEC_LESSON_SEVERITY_WHITELIST
+        ]
+        if not eligible:
+            return ""
+        eligible.sort(
+            key=lambda p: self._EXEC_SEVERITY_RANK.get(p.severity, 99)
+        )
+        selected = eligible[: self._EXEC_LESSON_LIMIT]
+        lines = ["Past Lessons (Engineering):"]
+        for lesson in selected:
+            description = (lesson.description or "")[:120]
+            lines.append(
+                f"- [{lesson.severity}] {lesson.title}: {description}"
+            )
+        return "\n".join(lines) + "\n\n"
+
+    def _log_anti_pattern_hints(self, step: str) -> None:
+        """Log up to two ANTI_PATTERN lessons after a tool execution failure.
+
+        Best-effort: never raises, never alters the result shape.
+        """
+        if self.engineering_lessons is None:
+            return
+        try:
+            lessons = self.engineering_lessons.get_anti_patterns(limit=2)
+        except Exception:
+            return
+        if not lessons:
+            return
+        logger.info("[Executor]")
+        logger.info("Past Anti-Patterns after failed tool step:")
+        for lesson in lessons:
+            description = (lesson.description or "")[:120]
+            logger.info(f"- {lesson.title}: {description}")
+
     def execute_step(
         self, step: str, allowed_tools: set[str] | None = None,
     ) -> dict[str, Any]:
@@ -331,6 +391,8 @@ Return ONLY this JSON, no markdown, no extra text:
             return {"action": action, "error": "Tool arguments must be a JSON object."}
 
         result = self.tools.execute(tool, **args)
+        if not result.success:
+            self._log_anti_pattern_hints(step)
         return {
             "action": action,
             "result": result.output if result.success else result.error

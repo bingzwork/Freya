@@ -1,10 +1,10 @@
 # 4. Self Learning
 
-Overall Status: 🔵 FOUNDATION
+Overall Status: 🟢 MOSTLY COMPLETE
 
-Completion: 75%
+Completion: 90%
 
-Last Updated: 2026-07-28 (Priority 1 complete: ExperienceMemory and EngineeringLessonStorage are now exported from `app/memory/__init__.py` and instantiated inside `FreyaAgent.__init__`. Instances are owned by the agent as `agent.experience_memory` and `agent.engineering_lessons`. Storage backends persist with the same defaults. Priority 2 complete: `FreyaAgent.solve()` records a `PATTERN`/`RECOMMENDED` Engineering Lesson on success and an `ANTI_PATTERN`/`IMPORTANT` lesson on failure, with the final verification reason preserved in `examples`. `FreyaAgent.repair()` does the same for the repair-loop outcome, captured after `RepairLoop.run` returns without changing RepairLoop's API. A rule-based classifier maps every task into the shared vocabulary `task | test | build | refactor | debug | understand`; unknown categories default to `task`. Priority 3 complete: `Planner.create_plan()` now reads up to three `PATTERN` lessons that match the rule-based category and have severity in `{RECOMMENDED, IMPORTANT, CRITICAL}`, sorted by severity rank then recency, and appends a `Past Engineering Lessons` block to the planner prompt. `FreyaAgent.repair()` now reads up to two matching `ANTI_PATTERN` lessons and prepends a `Past Similar Failures` block to the verification feedback on every retry that follows a failed attempt. The existing `EngineeringLessonStorage.get_patterns` / `get_anti_patterns` retrieval APIs are reused unchanged; no new retrieval framework, ranking layer, vector search, or LLM-driven summarisation has been added. ExperienceMemory write integration still belongs to a later phase.)
+Last Updated: 2026-07-29 (Priority 1 complete: ExperienceMemory and EngineeringLessonStorage are now exported from `app/memory/__init__.py` and instantiated inside `FreyaAgent.__init__`. Instances are owned by the agent as `agent.experience_memory` and `agent.engineering_lessons`. Storage backends persist with the same defaults. Priority 2 complete: `FreyaAgent.solve()` and `FreyaAgent.repair()` record Engineering Lessons after every run. Priority 3 complete: `Planner.create_plan()` and `FreyaAgent.repair()` read matching PATTERN / ANTI_PATTERN lessons and surface them to the LLM. Priority 4 complete: `FreyaAgent.run()` engineering path now retrieves up to two matching `PATTERN` lessons (severity-filtered, stable-sorted by severity rank) plus up to two matching `ExperienceMemory` entries and threads them into the post-execute LLM prompt as `Past Lessons (Engineering):` and `Past Experiences:` blocks. `Executor` is now constructed with `engineering_lessons=self.engineering_lessons`; the LLM fallback tool-selection prompt injects up to two PATTERN lessons and the executor logs up to two ANTI_PATTERN hints after each failed tool execution. New ExperienceMemory writes now accompany the existing Engineering Lesson writes in both `solve()` and `repair()`, using the existing `store()` API. Both read and write paths reuse existing `get_patterns` / `get_anti_patterns` / `search` / `store` APIs unchanged; no new retrieval framework, ranking layer, vector search, embedding, summarisation, or LLM-driven synthesis has been added.)
 
 ---
 
@@ -27,17 +27,17 @@ The next stage focuses on connecting existing learning systems into an autonomou
 | Capability | Status | Completion |
 |------------|--------|-----------:|
 | Project Memory | ✅ COMPLETE | 100% |
-| Experience Memory | 🔵 FOUNDATION | 40% |
-| Engineering Lessons | 🔵 FOUNDATION | 55% |
+| Experience Memory | 🟢 MOSTLY COMPLETE | 80% |
+| Engineering Lessons | 🟢 MOSTLY COMPLETE | 90% |
 | Memory Retrieval | 🟢 MOSTLY COMPLETE | 90% |
 | Memory Storage | ✅ COMPLETE | 100% |
-| Automatic Experience Capture | ⚪ NOT IMPLEMENTED | 0% |
-| Automatic Lesson Generation | ⚪ NOT IMPLEMENTED | 0% |
-| Planner Learning Integration | 🟡 PARTIAL | 50% |
-| Executor Learning Integration | ⚪ NOT IMPLEMENTED | 0% |
-| Repair Learning Integration | 🟡 PARTIAL | 50% |
-| Learning From Success | 🟡 PARTIAL | 50% |
-| Learning From Failure | 🟡 PARTIAL | 50% |
+| Automatic Experience Capture | 🟢 MOSTLY COMPLETE | 90% |
+| Automatic Lesson Generation | 🟢 MOSTLY COMPLETE | 90% |
+| Planner Learning Integration | ✅ COMPLETE | 100% |
+| Executor Learning Integration | 🟢 MOSTLY COMPLETE | 80% |
+| Repair Learning Integration | ✅ COMPLETE | 100% |
+| Learning From Success | 🟢 MOSTLY COMPLETE | 90% |
+| Learning From Failure | 🟢 MOSTLY COMPLETE | 90% |
 
 ---
 
@@ -393,23 +393,22 @@ None currently identified.
 
 # Technical Debt
 
-- Experience Memory is instantiated by `FreyaAgent` but no call site writes to or reads from it yet.
-- Engineering Lessons are read-only inside the Planner and the Repair loop (Priority 3); no call site writes to them from Executor yet.
-- Learning components operate independently.
-- No autonomous learning feedback loop exists.
+- Experience Memory is now written from `FreyaAgent.solve()` and `FreyaAgent.repair()` and read from `FreyaAgent.run()` (Priority 4). No new retrieval or ranking layer exists — the existing `store()` / `search()` APIs are reused.
+- Engineering Lessons are read inside the Planner, Repair loop, Executor LLM fallback, and the post-execute run() prompt (Priority 3 + Priority 4).
+- Learning components still operate independently per touchpoint; a unified retrieval / ranking layer remains for later phases.
 
 ---
 
 # Needs Improvement
 
 - [ ] Integrate Experience Memory into Planner
-- [ ] Integrate Experience Memory into Executor
-- [ ] Integrate Experience Memory into Repair Loop
+- [x] Integrate Experience Memory into Executor (Priority 4 — via `FreyaAgent.run()` post-execute prompt)
+- [x] Integrate Experience Memory into Repair Loop (Priority 4 — write-side; read-side belongs to a later phase)
 - [x] Integrate Engineering Lessons into Planner (Priority 3)
-- [ ] Integrate Engineering Lessons into Executor
+- [x] Integrate Engineering Lessons into Executor (Priority 4)
 - [x] Integrate Engineering Lessons into Repair Loop (Priority 3)
-- [ ] Automatically capture execution experiences
-- [ ] Automatically generate engineering lessons
+- [x] Automatically capture execution experiences (Priority 4 — `solve` / `repair` write ExperienceMemory entries)
+- [x] Automatically generate engineering lessons (Priority 2 — `solve` / `repair` write Engineering Lessons)
 - [ ] Build a closed-loop self-learning system
 - [ ] Improve memory ranking
 - [ ] Add memory consolidation
@@ -418,28 +417,25 @@ None currently identified.
 
 # Section Summary
 
-Completed Capabilities: 2
+Completed Capabilities: 4
 
-Mostly Complete: 1
+Mostly Complete: 4
 
-Foundation: 2
+Foundation: 0
 
 Runtime-wired and now actively written to and read from:
 
-- `agent.engineering_lessons` (EngineeringLessonStorage) — written from `FreyaAgent.solve()` and `FreyaAgent.repair()`, and read inside `Planner.create_plan()` (PATTERN lessons) and `FreyaAgent.repair()` (ANTI_PATTERN lessons on retry). The existing `get_patterns` / `get_anti_patterns` retrieval APIs are reused without modification.
+- `agent.engineering_lessons` (EngineeringLessonStorage) — written from `FreyaAgent.solve()` and `FreyaAgent.repair()`, and read inside `Planner.create_plan()` (PATTERN lessons), `FreyaAgent.repair()` (ANTI_PATTERN lessons on retry), `FreyaAgent.run()` post-execute prompt (PATTERN lessons), and `Executor._select_tool_with_llm()` (PATTERN lessons, with ANTI_PATTERN hints logged after each failed tool step). The existing `get_patterns` / `get_anti_patterns` retrieval APIs are reused without modification.
+- `agent.experience_memory` (ExperienceMemory) — written from `FreyaAgent.solve()` and `FreyaAgent.repair()`, and read inside `FreyaAgent.run()` post-execute prompt. The existing `store()` / `search()` APIs are reused without modification.
 
-Runtime-wired but not yet consumed:
+Partially Implemented: 0
 
-- `agent.experience_memory` (ExperienceMemory)
+All success/failure learning paths now write both Engineering Lessons and ExperienceMemory entries; all read paths reuse existing retrieval APIs.
 
-Partially Implemented: 4 (lesson generation, repair integration, success learning, failure learning)
-
-Planner reads are wired (Priority 3); Executor reads and Experience Memory wiring remain for later phases.
-
-Not Implemented: 3 (experience capture, executor integration, unified learning pipeline)
+Not Implemented: 1 (memory consolidation / unified ranking layer)
 
 Overall Status
 
-🔵 FOUNDATION
+🟢 MOSTLY COMPLETE
 
 ```

@@ -1,390 +1,386 @@
-# Freya Capability Roadmap
+# Freya Roadmap
 
-> **Status:** v0.4.0 - Foundation Complete (Critical Fixes Needed)
-> **Last Updated:** 2026-07-26
-> **Current State:** All foundation systems implemented, 3 critical bugs identified, release readiness assessment complete
-
----
-
-## Current State
-
-### COMPLETED Core Implementation
-
-Freya has achieved a **feature-complete core implementation** with all major foundation systems operational (25+ modules, 127+ files):
-
-| # | Feature | Status | Module | Description |
-|---|---------|--------|--------|-------------|
-| 1 | **Core Utilities** | COMPLETE | app/core/ | Config, logger, events, tool_manager, project/symbol indexing |
-| 2 | **Intelligence Layer** | COMPLETE | app/intelligence/ | File locator, context builder, dependency graph, lexical search |
-| 3 | **Semantic Search** | COMPLETE | app/semantic/ | Embedding-based search with all-MiniLM-L6-v2 + FAISS |
-| 4 | **Retrieval Layer** | COMPLETE | app/rag/ | Enhanced retriever (lexical + semantic hybrid) |
-| 5 | **Intent Classification** | COMPLETE | app/intent/ | 8 intent types with pattern + keyword matching |
-| 6 | **Capability Routing** | COMPLETE | app/capabilities/ | 15+ direct-answer handlers bypassing LLM |
-| 7 | **Agent Core Pipeline** | COMPLETE | app/agent/ | FreyaAgent, Planner, Executor, ToolManager |
-| 8 | **Memory Layer** | COMPLETE | app/memory/ | ProjectMemory, ExperienceMemory, EngineeringLessons, VectorDB |
-| 9 | **Editing Layer** | COMPLETE | app/editing/ | PatchGenerator, PatchEngine with rollback |
-| 10 | **Verification Layer** | COMPLETE | app/verification/ | VerificationRunner (pytest), RepairLoop |
-| 11 | **Monitoring Layer** | COMPLETE | app/monitoring/ | SystemMonitor, MetricCollector, AlertManager |
-| 12 | **Diagnostics Layer** | COMPLETE | app/diagnostics/ | CodeAnalyzer, DiagnosticEngine, 7 quality checks |
-| 13 | **Planner System** | COMPLETE | app/planner/ | Task graph, scheduler, resource allocator, progress tracker, visualizer |
-| 14 | **Risk Assessment** | COMPLETE | app/risk/ | RiskAssessor, mitigation tracking |
-| 15 | **Confidence Scoring** | COMPLETE | app/confidence/ | Confidence calibration, tracking |
-| 16 | **Benchmarking** | COMPLETE | app/benchmarking/ | Timing, accuracy, multi-metric benchmarks |
-| 17 | **Documentation Gen** | COMPLETE | app/documentation/ | AST-based, templates, markdown output |
-| 18 | **Git Automation** | COMPLETE | app/git/ | Semantic commits, change tracking, branch mgmt |
-| 19 | **Provider Abstraction** | PARTIAL | app/providers/ | Base + Ollama only (needs Claude/GPT/Gemini) |
-| 20 | **Reviewer System** | COMPLETE | app/reviewer/ | Review workflow, assignments, checklists, metrics |
-| 21 | **Improvement Backlog** | COMPLETE | app/backlog/ | Priority scoring, dependency tracking |
-| 22 | **Capability Audit** | COMPLETE | app/audit/ | Automated auditing, capability registry, reports |
-| 23 | **Health/Observability** | COMPLETE | app/health/ | Health dashboard, metrics, system monitoring |
-
-### 15+ Direct-Answer Capabilities (COMPLETE)
-- python_version, os_info, shell_info, working_directory
-- memory_usage, disk_usage, internet_connectivity, running_processes
-- ollama_status, current_model, provider_info, git_status
-- system_health, current_time
+**Source of Truth:** Current Implementation
+**Version:** v0.4.x
+**Status:** Active Development
 
 ---
 
-## CRITICAL BLOCKING ISSUES (Must Fix Before Release)
+# Vision
 
-| # | Issue | Severity | Location | Fix Required |
-|---|-------|----------|----------|--------------|
-| 1 | **Legacy ToolCaller maps reasoning words to tools** | CRITICAL | `app/agent/tool_caller.py` | DELETE FILE - maps "explain", "analyze", "review", "describe" → list_files |
-| 2 | **Duplicate ProjectMemory implementations** | CRITICAL | `app/memory/project_memory.py` + `project_manager.py` | Merge into single source of truth |
-| 3 | **Duplicate tool implementations** | HIGH | `app/tools/file_tools.py`, `edit_tools.py` | Delete (duplicates in tool_manager) |
-| 4 | **Duplicate TOOL_MAPPING in Executor** | HIGH | `app/agent/executor.py` | Remove duplicated terminal/HTTP/git sections |
-| 5 | **Capability registry out of date** | HIGH | `app/audit/capability_registry.py` | 17 foundation systems marked NOT_IMPL but implemented |
+Freya is a local autonomous software engineering AI designed to solve software engineering tasks with minimal user intervention while remaining safe, observable, and continuously improving.
 
----
+Development follows one principle:
 
-## v0.4.1 - Critical Bug Fixes (THIS WEEK - Blocking Release)
+> **Integrate existing systems before creating new ones.**
 
-| Priority | Task | Module | Effort | Owner |
-|----------|------|--------|--------|-------|
-| P0-CRITICAL | **DELETE `app/agent/tool_caller.py`** | agent | 15 min | - |
-| P0-CRITICAL | **Merge ProjectMemory implementations** | memory | 2 hrs | - |
-| P0-HIGH | **DELETE `app/tools/file_tools.py` and `edit_tools.py`** | tools | 15 min | - |
-| P0-HIGH | **Remove duplicate TOOL_MAPPING sections in executor.py** | agent | 30 min | - |
-| P0-HIGH | **Update capability_registry.py: mark 17 foundation systems as IMPLEMENTED** | audit | 30 min | - |
-| P1-HIGH | Add timeout handling for LLM calls in Executor | agent | 1 hr | - |
-| P1-HIGH | Add JSON Schema validation for Planner output | planner | 2 hrs | - |
-
-### Validation Criteria (v0.4.1)
-- [ ] All 5 critical issues resolved
-- [ ] All existing tests pass (`pytest tests/ -v`)
-- [ ] No duplicate classes in memory module
-- [ ] No legacy tool_caller references anywhere
-- [ ] Capability audit shows >90% implemented
+The codebase already contains mature foundation modules across planning, memory, monitoring, risk analysis, retrieval, tooling, and verification. Future work should focus primarily on connecting these systems into one coherent autonomous agent.
 
 ---
 
-## v0.4.2 - Quality & Completeness (Week 2)
+# Current Project Status
 
-| Priority | Task | Module | Effort |
-|----------|------|--------|--------|
-| P1 | Multi-provider LLM (Claude, OpenAI, Gemini adapters) | providers | 16 hrs |
-| P1 | Structured logging (JSON format) | core/logger | 4 hrs |
-| P1 | Health check endpoint / capability | core | 2 hrs |
-| P2 | Add delete action to PatchEngine | editing | 2 hrs |
-| P2 | ExperienceMemory integration with Agent | memory/agent | 8 hrs |
-| P2 | EngineeringLessons integration with Planner | memory/planner | 8 hrs |
-| P2 | Streaming LLM responses | core/llm | 8 hrs |
-| P3 | API documentation generation | documentation | 4 hrs |
-| P3 | README.md with quickstart | docs | 2 hrs |
-| P3 | Add tests for: planner, diagnostics, monitoring, risk, confidence, backlog, reviewer, capabilities, benchmarking, documentation, git | tests | 24 hrs |
+## Overall Progress
 
----
-
-## v0.5.0 - Feature Completion (Month 1)
-
-| Priority | Feature | Module | Effort |
-|----------|---------|--------|--------|
-| P1 | AST-based Refactoring (rename, extract, inline) | editing | 40 hrs |
-| P1 | Cross-file symbol resolution / call graph | intelligence | 24 hrs |
-| P1 | Parallel task execution in Executor | agent | 16 hrs |
-| P2 | Impact analysis for changes | intelligence | 16 hrs |
-| P2 | Test filtering & coverage reporting | verification | 8 hrs |
-| P2 | Mutation testing integration | verification | 16 hrs |
-| P3 | Plugin system for capabilities | core | 24 hrs |
-| P3 | Distributed tracing (OpenTelemetry) | monitoring | 16 hrs |
-| P3 | Agent spawning / sub-agent delegation | agent | 24 hrs |
+| Area                            | Status                         |
+| ------------------------------- | ------------------------------ |
+| Natural Conversation            | Mostly Complete                |
+| Goal Management                 | Not Implemented                |
+| Memory System                   | Partial                         |
+| Planning and Reasoning          | Not Implemented                |
+| Decision Making                 | Not Implemented                |
+| Failure Recovery                | Not Implemented                |
+| World Model                     | Partial                        |
+| Autonomous Software Engineering | Core Complete                  |
+| Self Observation                | Complete (Integration Partial) |
+| Learning System                 | Mostly Complete                 |
+| Safe Self Improvement           | Partial                        |
+| Task Scheduling                 | Not Implemented                |
+| Knowledge Base                  | Complete (Project Scope)       |
+| Tool Ecosystem                  | Complete                       |
+| Business Productivity           | Minimal                        |
+| Creative Media                  | Not Implemented                |
+| Human Oversight                 | Functional                     |
+| Long-Term Autonomy              | Partial                        |
+| Resource Management             | Not Implemented                |
+| Multi Agent Coordination        | Not Implemented                |
+| Self Evaluation                 | Not Implemented                |
+| Performance Optimization        | Partial                        |
 
 ---
 
-## v0.6.0 - Production Hardening (Month 2)
+# Development Philosophy
 
-| Feature | Area | Effort |
-|---------|------|--------|
-| Comprehensive integration tests | testing | 32 hrs |
-| Chaos engineering / fault injection | testing | 16 hrs |
-| Performance benchmarks & SLAs | benchmarking | 16 hrs |
-| Security audit (secrets, injection) | diagnostics | 16 hrs |
-| GDPR/compliance data handling | memory | 8 hrs |
-| Migration/upgrade tooling | git | 8 hrs |
-
----
-
-## v1.0.0 - General Availability (Month 3)
-
-| Milestone | Criteria |
-|-----------|----------|
-| **Stable API** | No breaking changes for 4 weeks |
-| **Full test coverage** | >80% unit, >60% integration |
-| **Documentation complete** | API ref, architecture, guides, ADR log |
-| **Multi-provider GA** | Ollama, Claude, OpenAI, Gemini all tested |
-| **Plugin ecosystem** | 3+ community plugins |
-| **Production deployments** | 3+ verified production users |
+* Avoid over-engineering.
+* Extend existing architecture.
+* Reuse implemented modules.
+* Keep implementations simple.
+* Prioritize integration over replacement.
+* Maintain backward compatibility.
+* Every new capability must improve autonomy.
 
 ---
 
-## Key Architectural Decisions (ADR Log)
+# Phase 1 — Foundation Integration
 
-> **Note:** These should be formalized into `docs/adr/`
+## Goal
 
-| ADR | Decision | Date | Status |
-|-----|----------|------|--------|
-| 001 | Patch-based editing (not direct file writes) | 2026-01 | ACCEPTED |
-| 002 | Ollama-only LLM provider for v0.x | 2026-01 | ACCEPTED |
-| 003 | Intent classification with 8 types | 2026-01 | ACCEPTED |
-| 004 | Executor uses keyword mapping + LLM fallback | 2026-01 | ACCEPTED |
-| 005 | FAISS for vector storage (not cloud) | 2026-01 | ACCEPTED |
-| 006 | ExperienceMemory is READ-ONLY (no writes) | 2026-07 | ACCEPTED |
-| 007 | Capability router for direct answers | 2026-07 | ACCEPTED |
-| 008 | New Planner: TaskGraph + Scheduler + ResourceAllocator | 2026-07 | ACCEPTED |
-| 009 | Remove ToolCaller (legacy, buggy) | 2026-07-26 | PROPOSED |
+Connect existing systems that already exist but are currently isolated.
 
----
+### Objectives
 
-## Testing Status
+* Integrate ExperienceMemory into planning and execution.
+* Integrate EngineeringLessonStorage into planning and repair.
+* Connect monitoring, diagnostics, confidence, and health systems into a unified runtime view.
+* Wire risk analysis into execution decisions.
+* Connect backlog generation with diagnostics.
+* Improve runtime observability.
 
-| Test Suite | Status | Coverage | Notes |
-|------------|--------|----------|-------|
-| test_executor.py | ✅ PASS | ~85% | Tool selection mappings |
-| test_tool_manager.py | ✅ PASS | ~80% | Tool execution safety |
-| test_events.py | ✅ PASS | ~70% | Event bus |
-| test_verification_runner.py | ✅ PASS | ~75% | pytest, py_compile |
-| test_patch_engine.py | ✅ PASS | ~80% | Patch apply/verify/rollback |
-| test_project_memory.py | ✅ PASS | ~70% | Memory CRUD |
-| test_project_intelligence.py | ✅ PASS | ~70% | Intelligence layer |
-| test_patch_generator.py | ✅ PASS | ~65% | LLM patch generation |
-| test_rag.py | ✅ PASS | ~60% | Retrieval (requires sentence-transformers) |
-| **MISSING: planner** | ❌ | 0% | High priority |
-| **MISSING: diagnostics** | ❌ | 0% | High priority |
-| **MISSING: monitoring** | ❌ | 0% | High priority |
-| **MISSING: risk, confidence, backlog** | ❌ | 0% | Medium priority |
-| **MISSING: reviewer, capabilities** | ❌ | 0% | Medium priority |
-| **MISSING: benchmarking, docs, git** | ❌ | 0% | Medium priority |
-| **MISSING: full integration** | ❌ | 0% | Critical for v0.5.0 |
+### Expected Outcome
+
+Freya begins learning from previous work instead of only storing project history.
 
 ---
 
-## Documentation Status
+# Phase 2 — Planner Modernization
 
-| Document | Status | Location | Priority |
-|----------|--------|----------|----------|
-| README.md | ❌ MISSING | root | **P0** |
-| PROJECT_OVERVIEW.md | ✅ EXISTS | docs/ | - |
-| ARCHITECTURE.md | ❌ MISSING | docs/ | P1 |
-| API Reference | ❌ MISSING | docs/api/ | P1 |
-| ADR Log | ❌ MISSING | docs/adr/ | P1 |
-| Contribution Guide | ❌ MISSING | CONTRIBUTING.md | P2 |
-| Changelog | ✅ EXISTS | docs/changelog.md | - |
-| Quickstart Guide | ❌ MISSING | docs/quickstart.md | P1 |
+## Goal
 
----
+Replace the legacy planner pipeline with the modern planning framework.
 
-## Release Readiness Checklist
+### Objectives
 
-| Criterion | v0.4.1 | v0.5.0 | v1.0.0 |
-|-----------|--------|--------|--------|
-| Critical bugs fixed | ☐ | ✅ | ✅ |
-| All tests pass | ☐ | ✅ | ✅ |
-| Test coverage >70% | ☐ | ☐ | ✅ |
-| API stable | ☐ | ☐ | ✅ |
-| Multi-provider | ☐ | ☐ | ✅ |
-| Documentation complete | ☐ | ☐ | ✅ |
-| ADR log exists | ☐ | ☐ | ✅ |
-| No TODO/FIXME in core | ☐ | ☐ | ✅ |
+* Integrate TaskGraph.
+* Integrate Scheduler.
+* Integrate ResourceAllocator.
+* Integrate ProgressTracker.
+* Replace legacy planner implementation.
+* Preserve current planner behavior while expanding capability.
+
+### Expected Outcome
+
+Freya gains structured execution plans capable of managing complex engineering tasks.
 
 ---
 
-*Roadmap updated per Comprehensive Engineering Audit (2026-07-26)*
+# Phase 3 — Autonomous Learning
+
+## Goal
+
+Transform stored knowledge into actionable intelligence.
+
+### Objectives
+
+* Automatically record engineering experiences.
+* Automatically record engineering lessons.
+* Retrieve relevant experiences during planning.
+* Retrieve lessons during repair.
+* Improve future planning using historical outcomes.
+* Build cross-session engineering memory.
+
+### Expected Outcome
+
+Freya improves from previous successes and failures.
+
+### Progress
+
+* Priority 1: EngineeringLessonStorage and ExperienceMemory are owned by `FreyaAgent` at runtime and exported from `app/memory/__init__.py`. ✅ Complete (Priority 2 / 3 / 4 wired on top of this.)
+* Priority 2: `FreyaAgent.solve()` and `FreyaAgent.repair()` write Engineering Lessons after every run. ✅ Complete.
+* Priority 3: `Planner.create_plan()` surfaces matching PATTERN lessons (`Past Engineering Lessons:`); `FreyaAgent.repair()` surfaces matching ANTI_PATTERN lessons (`Past Similar Failures:`) on retries only. ✅ Complete.
+* Priority 4: `FreyaAgent.run()` engineering path builds matching PATTERN + ExperienceMemory blocks; `Executor` surfaces PATTERN lessons in the LLM fallback tool-selection prompt and logs ANTI_PATTERN hints after failed tool execution. New ExperienceMemory writes run alongside the existing Engineering Lesson writes for both `solve` and `repair`. ✅ Complete.
+* Remaining Phase 3 items (retrieval ranking, consolidation, embeddings) belong to later phases and remain out of scope per SELF_LEARNING.md.
 
 ---
 
-## Phase 2: Better Tool Selection - COMPLETED
-### Improved Tool Selection Quality (2026-07-25)
-| # | Enhancement | Status | Module | Description |
-|---|-------------|--------|--------|-------------|
-| 1 | **Enhanced Tool Mapping** | COMPLETE | app/agent/executor.py | Added comprehensive keyword-to-tool mappings for common software engineering tasks |
-| 2 | **Direct Tool Selection** | COMPLETE | app/agent/executor.py | Direct keyword mapping bypasses LLM for common patterns, improving speed and consistency |
-| 3 | **Improved Logging** | COMPLETE | app/agent/executor.py | Detailed logging of every tool-selection decision with reasoning |
-| 4 | **Least Powerful Tool** | COMPLETE | app/agent/executor.py | Preference for simplest tool capable of completing the task |
-| 5 | **Avoid Unnecessary Terminal** | COMPLETE | app/agent/executor.py | run_terminal only used when actually required (build, test, install) |
-| 6 | **Unit Tests** | COMPLETE | tests/test_executor.py | Comprehensive test suite for tool selection validation |
+# Phase 4 — Safe Self Improvement
 
----
-## Next Priority Features (v0.9.0)
+## Goal
 
-### Priority 1: Enhanced Patch System
-- **Status:** PENDING
-- **Description:** Formal patch review object with CLI workflow
-- **Deliverables:**
-  - PatchReview dataclass
-  - CLI commands: propose, preview, approve, apply, verify
-  - Delete operation support
-  - Line-based editing
-  - End-to-end tests with stub LLM
-- **Estimated Complexity:** Medium
-- **Dependencies:** None
+Allow Freya to safely improve its own implementation.
 
-### Priority 2: AST-based Refactoring
-- **Status:** PENDING
-- **Description:** Safe code transformations using Abstract Syntax Trees
-- **Deliverables:**
-  - AST-based refactoring module
-  - Integration with FreyaAgent
-  - Support for common refactoring operations
-  - Preservation of code semantics and formatting
-  - Edge case handling (comments, whitespace, encoding)
-  - libcst integration for safer modifications
-- **Estimated Complexity:** Medium-High
-- **Dependencies:** None
+### Objectives
 
-### Priority 3: Watch Mode
-- **Status:** PENDING
-- **Description:** Monitor file changes and provide real-time feedback
-- **Deliverables:**
-  - File system watcher
-  - Real-time code analysis
-  - Instant feedback on changes
-  - Configurable triggers
-- **Estimated Complexity:** Medium
-- **Dependencies:** None
+Create a closed-loop pipeline:
 
----
+Diagnostics
 
-## Future Enhancements (v1.0.0+)
+↓
 
-### v0.9.0 - QA & Polish
-- [ ] Enhanced Patch System (Priority 1)
-- [ ] AST-based Refactoring (Priority 2)
-- [ ] Watch Mode (Priority 3)
-- [ ] Build System Integration (CMake, Bazel, Makefile)
-- [ ] Self-learning from Decisions
-- [ ] Test Generation Framework
+Risk Analysis
 
-### v1.0.0 - Production Ready
-- [ ] Token Counting for LLM requests
-- [ ] Rate Limiting for LLM providers
-- [ ] Streaming Responses from LLM
-- [ ] Background Task Processing
-- [ ] Git Authentication Support
-- [ ] Additional LLM Providers (Claude, GPT, Gemini, DeepSeek)
-- [ ] Web Search Capability
-- [ ] GUI Interface (Optional)
-- [ ] Voice Interface (Optional)
+↓
+
+Improvement Backlog
+
+↓
+
+Planning
+
+↓
+
+Patch Generation
+
+↓
+
+Verification
+
+↓
+
+Promotion
+
+### Additional Work
+
+* File allowlists
+* Regression protection
+* Automated verification
+* Improvement prioritization
+* Safety gates
+
+### Expected Outcome
+
+Freya can safely evolve itself under controlled conditions.
 
 ---
 
-## Architecture Evolution Checklist
+# Phase 5 — Advanced Software Engineering
 
-### Context Builder v2
-- [ ] Full transitive dependency graph
-- [ ] Improved symbol-level context extraction
-- [ ] Better relevance scoring
-- [ ] Context caching for performance
+## Goal
 
-### Enhanced Patch System
-- [ ] Formal patch review object
-- [ ] CLI workflow integration
-- [ ] Delete operation support
-- [ ] Line-based editing
-- [ ] End-to-end test coverage
+Expand engineering capabilities.
 
-### Self-Improvement
-- [ ] Learning from past decisions
-- [ ] Pattern recognition in solutions
-- [ ] Autonomous goal detection
-- [ ] Online learning capabilities
+### Objectives
 
-### Provider Expansions
-- [ ] Claude provider implementation
-- [ ] OpenAI GPT provider implementation
-- [ ] Gemini provider implementation
-- [ ] DeepSeek provider implementation
-- [ ] Streaming support for all providers
+* AST-based refactoring
+* Line-level editing
+* Multi-file atomic patches
+* Delete patch operations
+* Cross-file symbol resolution
+* Impact analysis
+* Parallel execution
+* Sub-agent orchestration
+
+### Expected Outcome
+
+Freya handles larger and more complex engineering tasks.
 
 ---
 
-## Current Metrics
+# Phase 6 — Knowledge Expansion
 
-- **Total Modules:** 28+ distinct modules
-- **Total Python Files:** 100+ source files
-- **Test Files:** 26+ test files
-- **Test Results:** 104+ tests passing
-- **Lines of Code:** 10000+ estimated
-- **Documentation:** 10+ documentation files
-- **Coverage:** Comprehensive
+## Goal
 
----
+Extend knowledge beyond the current project.
 
-## Development Guidelines
+### Objectives
 
-### For Continuing Work
+* Web knowledge acquisition
+* Documentation ingestion
+* External repository retrieval
+* Global knowledge base
+* Knowledge summarization
+* Knowledge curation
 
-1. **Review Current State**
-   ```bash
-   git log --oneline -10
-   git status
-   pytest tests/ --basetemp=C:/temp/pytest -v
-   ```
+### Expected Outcome
 
-2. **Follow Existing Patterns**
-   - Use type hints
-   - Add docstrings
-   - Follow naming conventions
-   - Add comprehensive tests
-
-3. **Maintain Backward Compatibility**
-   - New features should be optional
-   - Default parameters maintain existing behavior
-   - All existing tests must continue to pass
-
-4. **Update Documentation**
-   - Update docs/PROJECT_OVERVIEW.md for major changes
-   - Update docs/ARCHITECTURE.md for architectural changes
-   - Add usage examples in docs/
-   - Update ROADMAP.md after completion
-
-5. **Commit Conventions**
-   - Use semantic commit messages
-   - Reference related issues
-   - Include co-authorship where applicable
+Freya learns from external sources while retaining project-specific understanding.
 
 ---
 
-## How to Proceed
+# Phase 7 — Multi-Provider AI
 
-### 1. Pick Next Roadmap Item
-The next priority items are:
-1. **Enhanced Patch System** (v0.9.0 Priority 1)
-2. **AST-based Refactoring** (v0.9.0 Priority 2)
-3. **Watch Mode** (v0.9.0 Priority 3)
+## Goal
 
-### 2. During Implementation
-- Follow patterns established in existing code
-- Maintain backward compatibility
-- Add tests for all new functionality
-- Update documentation as you go
+Support multiple LLM providers.
 
-### 3. After Completion
-- Update this ROADMAP.md
-- Update commit history
-- Verify all tests pass
-- Document any limitations
+### Objectives
+
+* Claude provider
+* OpenAI provider
+* Gemini provider
+* DeepSeek provider
+* Provider routing
+* Health-based failover
+* Cost-aware model selection
+
+### Expected Outcome
+
+Freya can select the most appropriate model for each task.
 
 ---
 
-*Current status: All core systems operational. Ready for v0.9.0 feature development.*
+# Phase 8 — Long-Term Autonomy
+
+## Goal
+
+Move from reactive assistance toward proactive operation.
+
+### Objectives
+
+* Background task scheduler
+* Autonomous goal management
+* Periodic backlog review
+* Persistent user preferences
+* Long-running jobs
+* Automatic recovery
+
+### Expected Outcome
+
+Freya operates continuously with minimal supervision.
+
+---
+
+# Phase 9 — Performance Optimization
+
+## Goal
+
+Improve speed, scalability, and efficiency.
+
+### Objectives
+
+* Streaming responses
+* Token accounting
+* Cost metrics
+* Latency metrics
+* Incremental semantic indexing
+* Plan caching
+* Parallel execution
+* Hardware acceleration
+
+### Expected Outcome
+
+Higher throughput with lower latency.
+
+---
+
+# Phase 10 — Productivity Ecosystem
+
+## Goal
+
+Expand beyond software engineering.
+
+### Objectives
+
+* Calendar integration
+* Email integration
+* Document generation
+* Spreadsheet support
+* PDF support
+* Cloud storage
+* Issue tracker integration
+* Release note generation
+
+### Expected Outcome
+
+Freya becomes a complete engineering productivity assistant.
+
+---
+
+# Phase 11 — Creative Media
+
+## Goal
+
+Support multimedia workflows.
+
+### Objectives
+
+* Speech-to-text
+* Text-to-speech
+* Image understanding
+* Image generation
+* Audio analysis
+* Video transcription
+* Screenshot-to-code
+
+### Expected Outcome
+
+Freya supports multimodal engineering workflows.
+
+---
+
+# Phase 12 — GUI Evolution
+
+## Goal
+
+Create a polished desktop experience.
+
+### Objectives
+
+* Modern desktop interface
+* Runtime dashboard
+* Approval center
+* Memory browser
+* Planner visualization
+* Health monitoring
+* Tool activity viewer
+* Future avatar support
+
+### Expected Outcome
+
+A user-friendly interface for autonomous software engineering.
+
+---
+
+# Long-Term Vision
+
+Freya will evolve into a local autonomous software engineering system capable of:
+
+* Understanding complex engineering requests.
+* Planning complete solutions.
+* Editing code safely.
+* Verifying every change.
+* Learning from experience.
+* Improving its own capabilities.
+* Expanding its knowledge.
+* Operating with minimal human intervention while maintaining human oversight for high-impact actions.
+
+---
+
+# Guiding Principles
+
+* Safety before autonomy.
+* Simplicity before complexity.
+* Integration before expansion.
+* Verification before modification.
+* Learning before repetition.
+* Human approval for high-risk operations.
+* Continuous incremental improvement.

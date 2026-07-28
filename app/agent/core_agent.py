@@ -203,7 +203,7 @@ class FreyaAgent:
         self.memory = ProjectMemory(workspace)
         self.experience_memory = ExperienceMemory(workspace)
         self.engineering_lessons = EngineeringLessonStorage(workspace)
-        self.executor = Executor(self.llm, self.tools)
+        self.executor = Executor(self.llm, self.tools, engineering_lessons=self.engineering_lessons)
         self.patch_engine = PatchEngine()
         self.patch_generator = PatchGenerator(self.llm, self.patch_engine)
         self.verifier = VerificationRunner(workspace)
@@ -321,6 +321,13 @@ Answer the user's request directly."""
         context = self.build_context(task)
         memory_context = self.memory.context()
         plan = self.planner.create_plan(task)
+        # Priority 4 (Self-Learning): retrieve relevant Engineering Lessons and
+        # ExperienceMemory hits immediately before execution so the post-
+        # execute LLM prompt can use them. The retrieval uses the same APIs
+        # exposed to the Planner (Priority 3) and the existing
+        # ExperienceMemory.search() helper. Both calls are best-effort.
+        lessons_block = self._build_run_lessons_block(task)
+        experience_block = self._build_run_experience_block(task)
         allowed_tools = set(Executor.READ_ONLY_TOOLS)
         if allow_mutations:
             allowed_tools.update(Executor.MUTATING_TOOLS)
@@ -343,7 +350,7 @@ Execution plan:
 Tool results:
 {results}
 
-Answer the user's request using the relevant code above. Quote code only when it is the actual answer; otherwise summarize."""
+{lessons_block}{experience_block}Answer the user's request using the relevant code above. Quote code only when it is the actual answer; otherwise summarize."""
         answer = self.llm.ask(prompt)
         self.memory.record("task", {"request": task, "outcome": answer[:500]})
         self.conversation.add_message("user", task)
@@ -453,14 +460,26 @@ Answer the user's request using the relevant code above. Quote code only when it
                 # Priority 2: capture an Engineering Lesson pattern so future
                 # work can reuse this trajectory. See SELF_LEARNING.md.
                 summary = f"Solved in {it} iterations."
+                category = _classify_engineering_category(task)
                 self.engineering_lessons.store(
                     title=task[:60],
                     description=f"Solved in {it} iterations: {summary}",
                     lesson_type=LessonType.PATTERN,
-                    category=_classify_engineering_category(task),
+                    category=category,
                     severity=LessonSeverity.RECOMMENDED,
-                    tags=[_classify_engineering_category(task)],
+                    tags=[category],
                     rationale=f"Solved after {it} iterations; captured for future reference.",
+                )
+                # Priority 4: capture a parallel ExperienceMemory entry so the
+                # ExperienceMemory reader can surface it on the next run.
+                self.experience_memory.store(
+                    title=task[:60],
+                    description=f"Solved in {it} iterations: {summary}",
+                    category=category,
+                    tags=[category],
+                    outcome="positive",
+                    confidence=0.8,
+                    metadata={"iterations": it, "kind": "solve"},
                 )
                 return {
                     "success": True,
@@ -497,6 +516,17 @@ Answer the user's request using the relevant code above. Quote code only when it
             tags=[_classify_engineering_category(task)],
             examples=[failure_reason] if failure_reason else [],
             rationale="Exhausted repair iterations without a verified fix.",
+        )
+        # Priority 4: parallel ExperienceMemory capture (negative outcome).
+        failed_category = _classify_engineering_category(task)
+        self.experience_memory.store(
+            title=task[:60],
+            description=f"Failed to solve after {max_iterations} iterations.",
+            category=failed_category,
+            tags=[failed_category],
+            outcome="negative",
+            confidence=0.6,
+            metadata={"iterations": max_iterations, "kind": "solve"},
         )
         return {
             "success": False,
@@ -550,6 +580,16 @@ Answer the user's request using the relevant code above. Quote code only when it
                     tags=[category],
                     rationale="Repair loop converged on a verified fix.",
                 )
+                # Priority 4: parallel ExperienceMemory capture (positive).
+                self.experience_memory.store(
+                    title=task[:60],
+                    description=f"Repaired successfully after {len(attempts)} attempt(s).",
+                    category=category,
+                    tags=[category],
+                    outcome="positive",
+                    confidence=0.7,
+                    metadata={"attempts": len(attempts), "kind": "repair"},
+                )
             else:
                 self.engineering_lessons.store(
                     title=task[:60],
@@ -563,6 +603,19 @@ Answer the user's request using the relevant code above. Quote code only when it
                     tags=[category],
                     examples=[failure_reason] if failure_reason else [],
                     rationale="Repair loop exhausted without verifier approval.",
+                )
+                # Priority 4: parallel ExperienceMemory capture (negative).
+                self.experience_memory.store(
+                    title=task[:60],
+                    description=(
+                        f"Repair failed after {len(attempts)} attempt(s); "
+                        "no verified fix found."
+                    ),
+                    category=category,
+                    tags=[category],
+                    outcome="negative",
+                    confidence=0.5,
+                    metadata={"attempts": len(attempts), "kind": "repair"},
                 )
         except Exception as exc:
             # Capture is best-effort; never let logging disturb the repair outcome.
@@ -598,6 +651,76 @@ Answer the user's request using the relevant code above. Quote code only when it
             description = (lesson.description or "")[:200]
             lines.append(f"- {lesson.title}: {description}")
         return "\n".join(lines) + "\n\n" + feedback
+
+    # ------------------------------------------------------------------
+    # Priority 4 helpers (Self-Learning run() + ExperienceMemory write-side).
+    # ------------------------------------------------------------------
+
+    _RUN_LESSON_SEVERITY_WHITELIST = ("critical", "important", "recommended")
+    _RUN_SEVERITY_RANK = {"critical": 0, "important": 1, "recommended": 2}
+    _RUN_LESSON_LIMIT = 2
+    _RUN_EXPERIENCE_LIMIT = 2
+
+    def _build_run_lessons_block(self, task: str) -> str:
+        """Render a small PATTERN-only lessons block for the post-execute prompt.
+
+        Heavy lifting (filtering / sorting) mirrors the Planner helper from
+        Priority 3 but is intentionally smaller (limit 2 instead of 3) so
+        the engineering-task prompt stays compact. Reuses
+        ``EngineeringLessonStorage.get_patterns`` unchanged.
+        """
+        if self.engineering_lessons is None or not task:
+            return ""
+        try:
+            category = _classify_engineering_category(task)
+            patterns = self.engineering_lessons.get_patterns(
+                category=category, limit=10
+            )
+        except Exception:
+            return ""
+        eligible = [
+            p for p in patterns
+            if p.severity in self._RUN_LESSON_SEVERITY_WHITELIST
+        ]
+        if not eligible:
+            return ""
+        eligible.sort(
+            key=lambda p: self._RUN_SEVERITY_RANK.get(p.severity, 99)
+        )
+        selected = eligible[: self._RUN_LESSON_LIMIT]
+        lines = ["Past Lessons (Engineering):"]
+        for lesson in selected:
+            description = (lesson.description or "")[:120]
+            lines.append(
+                f"- [{lesson.severity}] {lesson.title}: {description}"
+            )
+        return "\n".join(lines) + "\n\n"
+
+    def _build_run_experience_block(self, task: str) -> str:
+        """Render a small ExperienceMemory block for the post-execute prompt.
+
+        Reuses ``ExperienceMemory.search`` entirely; no new retrieval API or
+        ranking layer has been added. Returns an empty string when the memory
+        is unavailable, raises, or has no matching entries.
+        """
+        if self.experience_memory is None or not task:
+            return ""
+        try:
+            category = _classify_engineering_category(task)
+            entries = self.experience_memory.search(
+                category=category, limit=self._RUN_EXPERIENCE_LIMIT
+            )
+        except Exception:
+            return ""
+        if not entries:
+            return ""
+        lines = ["Past Experiences:"]
+        for entry in entries:
+            description = (entry.description or "")[:120]
+            lines.append(
+                f"- {entry.title} ({entry.outcome}): {description}"
+            )
+        return "\n".join(lines) + "\n\n"
 
     def new_conversation(self) -> None:
         """Start a new conversation, clearing previous message history."""

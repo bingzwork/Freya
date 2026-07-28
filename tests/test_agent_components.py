@@ -101,6 +101,15 @@ def _make_isolated_agent() -> FreyaAgent:
     return FreyaAgent(workspace=temp.name), temp
 
 
+def _make_lessons_storage():
+    """Return an isolated EngineeringLessonStorage rooted in a tmp dir."""
+    from app.memory.engineering_lessons import EngineeringLessonStorage
+
+    tmp = tempfile.TemporaryDirectory()
+    return EngineeringLessonStorage(workspace=tmp.name)
+
+
+
 def _patch_solve_to_succeed(agent: FreyaAgent, task: str) -> None:
     """Make ``agent.solve()`` succeed on the first iteration."""
     iteration_result = {
@@ -344,3 +353,222 @@ def test_repair_omits_past_failures_when_nothing_matches() -> None:
         assert "Previous verification failed" in seen_prompts[1]
     finally:
         temp.cleanup()
+
+
+# --- Self-Learning Priority 4: ExperienceMemory writes + run()/Executor integration ---
+
+
+def test_solve_success_stores_experience_entry() -> None:
+    agent, temp = _make_isolated_agent()
+    try:
+        _patch_solve_to_succeed(agent, "Read file app/main.py")
+        before = agent.experience_memory.all()
+        result = agent.solve(
+            "Read file app/main.py", allow_mutations=True, max_iterations=1
+        )
+        after = agent.experience_memory.all()
+
+        assert result["success"] is True
+        # Exactly one new positive experience entry, classified by category.
+        assert len(after) == len(before) + 1
+        entry = after[-1]
+        assert entry.outcome == "positive"
+        assert entry.category == "task"
+        assert entry.metadata.get("kind") == "solve"
+    finally:
+        temp.cleanup()
+
+
+def test_solve_failure_stores_negative_experience_entry() -> None:
+    agent, temp = _make_isolated_agent()
+    try:
+        _patch_solve_to_fail(agent, "Debug the import error in app/x.py", attempts=2)
+        before = agent.experience_memory.all()
+        result = agent.solve(
+            "Debug the import error in app/x.py",
+            allow_mutations=True,
+            max_iterations=2,
+        )
+        after = agent.experience_memory.all()
+
+        assert result["success"] is False
+        assert len(after) == len(before) + 1
+        entry = after[-1]
+        assert entry.outcome == "negative"
+        assert entry.category == "debug"
+        assert entry.metadata.get("kind") == "solve"
+    finally:
+        temp.cleanup()
+
+
+def test_repair_outcome_stores_experience_entry() -> None:
+    agent, temp = _make_isolated_agent()
+    try:
+        def _fake_propose(*_args, **_kwargs):
+            return {"operations": []}
+
+        def _fake_apply_and_verify(_tools, _operations, _verifier):
+            return {
+                "verification": _StubVerify(success=True),
+                "rolled_back": False,
+                "changes": [],
+            }
+
+        agent.patch_generator.propose = _fake_propose
+        agent.patch_engine.apply_and_verify = _fake_apply_and_verify
+        agent.verifier.dry_run_verify = lambda: _StubVerify(success=True)
+
+        before = agent.experience_memory.all()
+        result = agent.repair(
+            "Fix the failing test", allow_mutations=True, max_attempts=2
+        )
+        after = agent.experience_memory.all()
+
+        assert result["success"] is True
+        assert len(after) == len(before) + 1
+        entry = after[-1]
+        assert entry.outcome == "positive"
+        assert entry.metadata.get("kind") == "repair"
+    finally:
+        temp.cleanup()
+
+
+def test_run_engineering_task_includes_lesson_and_experience_blocks() -> None:
+    """``run()`` engineering path must append seeded Engineering Lessons and
+    ExperienceMemory hits to the post-execute LLM prompt.
+    """
+    agent, temp = _make_isolated_agent()
+    try:
+        agent.engineering_lessons.store(
+            title="Reuse pytest fixtures",
+            description="Fixtures express shared state more clearly.",
+            lesson_type=LessonType.PATTERN,
+            category="refactor",
+            severity=LessonSeverity.CRITICAL,
+        )
+        agent.experience_memory.store(
+            title="Solved flaky test earlier",
+            description="Re-ran the suite after seeding the test fixtures.",
+            category="refactor",
+            tags=["refactor"],
+            outcome="positive",
+            confidence=0.9,
+        )
+
+        seen_prompts: list[str] = []
+
+        def _fake_ask(prompt: str) -> str:
+            seen_prompts.append(prompt)
+            return ""
+
+        agent.llm.ask = _fake_ask
+        agent.build_context = lambda _task: ""  # type: ignore[assignment]
+        agent.memory.context = lambda: ""  # type: ignore[assignment]
+        # Stub out the executor so the engineering path completes without
+        # touching real tools.
+        agent.executor.execute_plan = lambda *_a, **_kw: []  # type: ignore[assignment]
+        agent.planner.create_plan = lambda _task: {"steps": ["inspect"]}  # type: ignore[assignment]
+
+        # ``Refactor app/foo.py`` routes to CODE_TASK and clears
+        # _has_sufficient_context via has_action_with_file.
+        agent.run("Refactor app/foo.py", allow_mutations=False)
+
+        # The post-execute prompt must surface both seeded hooks.
+        assert any(
+            "Past Lessons (Engineering):" in p and "Reuse pytest fixtures" in p
+            for p in seen_prompts
+        )
+        assert any(
+            "Past Experiences:" in p and "Solved flaky test earlier" in p
+            for p in seen_prompts
+        )
+    finally:
+        temp.cleanup()
+
+
+def test_executor_renders_pre_execute_pattern_block() -> None:
+    """``Executor._build_pre_execute_lessons_block`` must surface seeded
+    PATTERN lessons and exclude ANTI_PATTERN / INFO lessons.
+    """
+    llm_seen: list[str] = []
+
+    class _CapturingLLM:
+        def ask(self, prompt: str) -> str:
+            llm_seen.append(prompt)
+            return (
+                '{"tool": "list_files", "args": {}, "reasoning": "seed prompt"}'
+            )
+
+    lessons = _make_lessons_storage()
+    lessons.store(
+        title="Read before edit",
+        description="Always read the file before suggesting changes.",
+        lesson_type=LessonType.PATTERN,
+        category="task",
+        severity=LessonSeverity.CRITICAL,
+    )
+    lessons.store(
+        title="Do not skip failing tests",
+        description="Skipping hides regressions.",
+        lesson_type=LessonType.ANTI_PATTERN,
+        category="task",
+        severity=LessonSeverity.IMPORTANT,
+    )
+    lessons.store(
+        title="Hint-only lesson",
+        description="Informational hint that must not surface.",
+        lesson_type=LessonType.PATTERN,
+        category="task",
+        severity=LessonSeverity.INFO,
+    )
+
+    executor = Executor(_CapturingLLM(), StubTools(), engineering_lessons=lessons)
+
+    block = executor._build_pre_execute_lessons_block("inspect files")
+    assert "Past Lessons (Engineering):" in block
+    assert "Read before edit" in block
+    assert "Do not skip failing tests" not in block
+    assert "Hint-only lesson" not in block
+
+    # Confirm the block is also injected into the LLM tool-selection prompt
+    # when the executor falls back to the LLM path (no direct keyword match).
+    executor.execute_step("describe some unguided step")
+    assert any(
+        "Past Lessons (Engineering):" in prompt and "Read before edit" in prompt
+        for prompt in llm_seen
+    )
+
+
+def test_executor_logs_anti_pattern_hints_on_failed_tool_step() -> None:
+    """Failed tool execution must trigger the ANTI_PATTERN hint log path
+    without altering the execute_step return shape.
+    """
+    lessons = _make_lessons_storage()
+    lessons.store(
+        title="Don't trust exit code only",
+        description="Inspect stderr when 本 command exits non-zero.",
+        lesson_type=LessonType.ANTI_PATTERN,
+        category="task",
+        severity=LessonSeverity.IMPORTANT,
+    )
+
+    llm_seen: list[str] = []
+
+    class _CapturingLLM:
+        def ask(self, prompt: str) -> str:
+            llm_seen.append(prompt)
+            return '{"tool": "list_files", "args": {}}'
+
+    class _FailingTools:
+        def execute(self, name: str, **_kwargs: object) -> StubResult:
+            return StubResult(success=False, output="", error="boom")
+
+    executor = Executor(
+        _CapturingLLM(), _FailingTools(), engineering_lessons=lessons
+    )
+    result = executor.execute_step("inspect files")
+
+    # Result shape unchanged: still returns action + error string.
+    assert result["action"]["tool"] == "list_files"
+    assert result["result"] == "boom"
+
