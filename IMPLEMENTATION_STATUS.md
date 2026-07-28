@@ -2,7 +2,7 @@
 
 **Version:** v0.4.x
 
-**Last Updated:** 2026-07-28 (User Communication Principles implemented in the runtime: `_format_generic` now prefers the hand-written `result.message` so internal field names never surface in user replies; clarifying and low-confidence prompts in `FreyaAgent.run` no longer leak classifier or "user input" jargon. New tests in `tests/test_user_communication.py` verify the contract.)
+**Last Updated:** 2026-07-28 (User Communication Principles implemented in the runtime: `_format_generic` now prefers the hand-written `result.message` so internal field names never surface in user replies; clarifying and low-confidence prompts in `FreyaAgent.run` no longer leak classifier or "user input" jargon. New tests in `tests/test_user_communication.py` verify the contract. Self-Learning Priority 1 complete: `ExperienceMemory` and `EngineeringLessonStorage` are now exported from `app/memory/__init__.py` and instantiated inside `FreyaAgent.__init__` as `agent.experience_memory` and `agent.engineering_lessons`. Storage paths are workspace-scoped and use the same defaults as their factory functions. Priority 2 complete: `FreyaAgent.solve()` and `FreyaAgent.repair()` now record Engineering Lessons after every run. Successful `solve()` writes a `PATTERN` lesson with severity `RECOMMENDED`; failed `solve()` writes an `ANTI_PATTERN` lesson with severity `IMPORTANT` and a truncated verification reason captured in `examples`. `FreyaAgent.repair()` does the same for the repair-loop outcome without changing RepairLoop's API. A rule-based classifier (`_classify_engineering_category`) maps tasks into the shared vocabulary `task | test | build | refactor | debug | understand`, defaulting to `task`. No `ExperienceMemory.store()` call has yet been added; that belongs to a later phase.)
 
 **Purpose**
 
@@ -44,7 +44,7 @@ This document should always reflect the current state of the codebase.
 | Natural Conversation & Intent Understanding | 🟢 MOSTLY COMPLETE | 90% |
 | Autonomous Software Engineering | ✅ CORE COMPLETE | 90% |
 | Self Observation | ✅ COMPLETE | 85% |
-| Learning System | 🔵 FOUNDATION | 45% |
+| Learning System | 🔵 FOUNDATION | 65% |
 | Safe Self Improvement | 🟡 PARTIAL | 40% |
 | Knowledge Acquisition & Knowledge Base | ✅ COMPLETE | 85% |
 | Tool Ecosystem | ✅ COMPLETE | 90% |

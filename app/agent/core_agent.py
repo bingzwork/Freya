@@ -22,6 +22,8 @@ from app.intent import (
     IntentType,
 )
 from app.memory.project_memory import ProjectMemory
+from app.memory.experience_memory import ExperienceMemory
+from app.memory.engineering_lessons import EngineeringLessonStorage, LessonSeverity, LessonType
 from app.verification.repair_loop import RepairLoop
 from app.verification.runner import VerificationRunner
 from app.rag import SimpleRetriever
@@ -163,12 +165,44 @@ def _get_missing_context_prompt(task: str, intent: IntentType) -> str:
     return "Could you please provide more details (code, file path, error message, etc.)?"
 
 
+# Rule-based vocabulary for grouping engineering lessons recorded after
+# solve() and repair() outcomes. See Priority 2 in SELF_LEARNING.md.
+_LESSON_CATEGORIES = ("task", "test", "build", "refactor", "debug", "understand")
+
+
+def _classify_engineering_category(task: str) -> str:
+    """Return the first matching lesson category for a task description.
+
+    The lookup is intentionally simple: a fixed set of keyword groups matched
+    in priority order. Anything that does not match falls back to ``"task"``.
+    No external calls, no LLM usage.
+    """
+    if not task:
+        return "task"
+    lowered = task.lower()
+    keyword_map = {
+        "test": ("test", "pytest", "spec"),
+        "build": ("build", "compile", "install", "package"),
+        "refactor": ("refactor", "rename", "restructure", "cleanup"),
+        "debug": ("debug", "fix", "bug", "error", "traceback", "failure"),
+        "understand": ("understand", "explain", "describe", "how does", "what does"),
+    }
+    # "task" acts as the catch-all below
+    for category in ("test", "build", "refactor", "debug", "understand"):
+        for keyword in keyword_map[category]:
+            if keyword in lowered:
+                return category
+    return "task"
+
+
 class FreyaAgent:
     def __init__(self, workspace=".", max_conversation_history=20, conversation_persistence_path: Optional[str] = None):
         self.workspace = workspace
         self.llm = LLM()
         self.tools = ToolManager(workspace)
         self.memory = ProjectMemory(workspace)
+        self.experience_memory = ExperienceMemory(workspace)
+        self.engineering_lessons = EngineeringLessonStorage(workspace)
         self.executor = Executor(self.llm, self.tools)
         self.patch_engine = PatchEngine()
         self.patch_generator = PatchGenerator(self.llm, self.patch_engine)
@@ -416,6 +450,18 @@ Answer the user's request using the relevant code above. Quote code only when it
                         "trajectory": history,
                     },
                 )
+                # Priority 2: capture an Engineering Lesson pattern so future
+                # work can reuse this trajectory. See SELF_LEARNING.md.
+                summary = f"Solved in {it} iterations."
+                self.engineering_lessons.store(
+                    title=task[:60],
+                    description=f"Solved in {it} iterations: {summary}",
+                    lesson_type=LessonType.PATTERN,
+                    category=_classify_engineering_category(task),
+                    severity=LessonSeverity.RECOMMENDED,
+                    tags=[_classify_engineering_category(task)],
+                    rationale=f"Solved after {it} iterations; captured for future reference.",
+                )
                 return {
                     "success": True,
                     "iterations": it,
@@ -430,6 +476,27 @@ Answer the user's request using the relevant code above. Quote code only when it
                 "last_attempt": history[-1] if history else None,
                 "trajectory": history,
             },
+        )
+        # Priority 2: capture an Engineering Lesson anti-pattern so future
+        # runs can avoid the same trajectory. The final verification reason
+        # (truncated) is preserved in `examples` for diagnostic reuse.
+        last_verification = history[-1].get("verification") if history else None
+        failure_reason = ""
+        if last_verification is not None:
+            failure_reason = (
+                (last_verification.stdout or "")
+                + "\n"
+                + (last_verification.stderr or "")
+            ).strip()[:500]
+        self.engineering_lessons.store(
+            title=task[:60],
+            description=f"Failed to solve after {max_iterations} iterations.",
+            lesson_type=LessonType.ANTI_PATTERN,
+            category=_classify_engineering_category(task),
+            severity=LessonSeverity.IMPORTANT,
+            tags=[_classify_engineering_category(task)],
+            examples=[failure_reason] if failure_reason else [],
+            rationale="Exhausted repair iterations without a verified fix.",
         )
         return {
             "success": False,
@@ -450,9 +517,51 @@ Answer the user's request using the relevant code above. Quote code only when it
                 f"{task}\n\nVerification feedback:\n{feedback}", context
             )
 
-        return RepairLoop(
+        result = RepairLoop(
             self.patch_engine, self.tools, self.verifier, max_attempts
         ).run(propose)
+        # Priority 2: capture the repair outcome as an Engineering Lesson.
+        # We do this here (not inside RepairLoop) to avoid changing its API.
+        try:
+            attempts = result.get("attempts") or []
+            last_attempt = attempts[-1] if attempts else {}
+            verification = last_attempt.get("verification")
+            failure_reason = ""
+            if verification is not None:
+                failure_reason = (
+                    (getattr(verification, "stdout", "") or "")
+                    + "\n"
+                    + (getattr(verification, "stderr", "") or "")
+                ).strip()[:500]
+            category = _classify_engineering_category(task)
+            if result.get("success"):
+                self.engineering_lessons.store(
+                    title=task[:60],
+                    description=f"Repaired successfully after {len(attempts)} attempt(s).",
+                    lesson_type=LessonType.PATTERN,
+                    category=category,
+                    severity=LessonSeverity.RECOMMENDED,
+                    tags=[category],
+                    rationale="Repair loop converged on a verified fix.",
+                )
+            else:
+                self.engineering_lessons.store(
+                    title=task[:60],
+                    description=(
+                        f"Repair failed after {len(attempts)} attempt(s); "
+                        "no verified fix found."
+                    ),
+                    lesson_type=LessonType.ANTI_PATTERN,
+                    category=category,
+                    severity=LessonSeverity.IMPORTANT,
+                    tags=[category],
+                    examples=[failure_reason] if failure_reason else [],
+                    rationale="Repair loop exhausted without verifier approval.",
+                )
+        except Exception as exc:
+            # Capture is best-effort; never let logging disturb the repair outcome.
+            logger.warning(f"Failed to record repair lesson: {exc}")
+        return result
 
     def new_conversation(self) -> None:
         """Start a new conversation, clearing previous message history."""
