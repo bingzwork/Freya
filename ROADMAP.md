@@ -25,7 +25,7 @@ The codebase already contains mature foundation modules across planning, memory,
 | Area                            | Status                         |
 | ------------------------------- | ------------------------------ |
 | Natural Conversation            | Mostly Complete                |
-| Goal Management                 | Foundation (Phase 1)            |
+| Goal Management                 | Foundation (Phases 1 & 2)       |
 | Memory System                   | Partial                         |
 | Planning and Reasoning          | Not Implemented                |
 | Decision Making                 | Not Implemented                |
@@ -269,7 +269,8 @@ Freya operates continuously with minimal supervision.
 
 ### Progress
 
-* Goal Management Phase 1 — Goal Data Model: ✅ Complete. `Goal` dataclass + JSON-file persistence (`GoalStorage` with `create` / `update` / `delete` / `list` / `save` / `load`) live in `app/memory/goals.py`; exported via `app/memory/__init__.py`; covered by 24 tests in `tests/test_goals.py`. Phase 2 (formalised status / priority enums, timestamps, hierarchy cascade / dangling-reference repair) and the standalone Stage 2–Stage 5 features in `GOAL_MANAGEMENT.md` remain out of scope.
+* Goal Management Phase 1 — Goal Data Model: ✅ Complete. `Goal` dataclass + JSON-file persistence (`GoalStorage` with `create` / `update` / `delete` / `list` / `save` / `load`) live in `app/memory/goals.py`; exported via `app/memory/__init__.py`; covered by 24 tests in `tests/test_goals.py`.
+* Goal Management Phase 2 — Persistent Goal Storage: ✅ Complete. Same `GoalStorage` (no new module). Goals auto-load from `data/memory/goals.json` on construction; every CRUD verb flushes through the atomic `.tmp` + `replace` write path; restart-survival and `parent_goal_id` / `child_goal_ids` round-trip verified in `tests/test_goals.py` (`test_persistence_across_instances`, `test_save_then_load_returns_same_goal`, `test_save_is_upsert`, `test_delete_is_persisted`, `test_crud_roundtrip`). Hierarchy invariant management — re-parenting wiring, delete-cascade / orphan-detach — is explicitly out of scope. Phase 3-onward features (status / priority enums, timestamps, scheduler, decomposition, review, planner integration, human oversight UI) remain unimplemented.
 
 ---
 

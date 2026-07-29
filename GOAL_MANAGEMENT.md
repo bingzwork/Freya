@@ -6,7 +6,7 @@ Status: 🔵 FOUNDATION
 
 Priority: ⭐⭐⭐⭐⭐ Critical
 
-Completion: 25%
+Completion: 50%
 
 Last Updated: 2026-07-29
 
@@ -18,14 +18,16 @@ Cross-Reference: [LONG_TERM_AUTONOMY.md § Persistent Goal Management](LONG_TERM
 
 # Current Implementation
 
-Phase 1 — Goal Data Model — is implemented. The runtime data substrate (Goal dataclass + JSON-file persistence + CRUD verbs) lives in `app/memory/goals.py` and is exported through `app/memory/__init__.py`. It is **not yet wired into FreyaAgent / Planner / the autonomous loop** — that is the work of the higher phases.
+Phases 1 (Goal Data Model) and 2 (Persistent Goal Storage) are implemented. The runtime data substrate (`Goal` dataclass + JSON-file persistence + CRUD verbs) lives in `app/memory/goals.py` and is exported through `app/memory/__init__.py`. It is **not yet wired into FreyaAgent / Planner / the autonomous loop** — that is the work of the higher phases.
 
 Concretely:
 
 - ✅ Goal data model (Goal class with id, name, description, status, priority, parent_goal_id, child_goal_ids)
 - ✅ Persistent goal storage (atomic JSON at `data/memory/goals.json`, threaded, loadable across restarts)
-- ✅ Basic CRUD: `GoalStorage.create` / `update` / `delete` / `list` / `save` / `load` / `all` / `count`
-- ❌ Goal hierarchy / tree with completion propagation (strings-only parent/child links; no cascade, propagation, or dangling-reference repair)
+- ✅ Save / load / update / delete: `GoalStorage.create` / `update` / `delete` / `list` / `save` / `load` / `all` / `count`
+- ✅ Goals survive application restarts (verified in `tests/test_goals.py`)
+- ✅ Parent / child relationships are persisted as part of each goal (`parent_goal_id` + `child_goal_ids` round-trip through `to_dict` / `from_dict`)
+- ❌ Hierarchy invariant management — re-parenting does not rewire both sides' child lists; `delete` does not detach children or cascade. Explicit later-phase work.
 - ❌ Standardised `status` / `priority` enums (string-typed today; later phases formalise the value set)
 - ❌ Goal timestamps (`created_at` / `updated_at`)
 - ❌ Goal scheduler / selection logic over multiple goals
@@ -643,7 +645,29 @@ Success Criteria
 - Goals can be deleted.
 - Goals can be loaded and saved.
 
-**Delivered.** See `app/memory/goals.py` (`Goal` dataclass + `GoalStorage` with `create` / `update` / `delete` / `list` / `save` / `load`) and `tests/test_goals.py` (24 tests). Persistence file: `data/memory/goals.json`. Phase 2 (formalised status/priority enums, timestamps, hierarchy cascade/repair) is intentionally out of scope.
+**Delivered (Phase 1 + Phase 2).** See `app/memory/goals.py` (`Goal` dataclass + `GoalStorage` with `create` / `update` / `delete` / `list` / `save` / `load`) and `tests/test_goals.py` (24 tests, including restart-survival). Persistence file: `data/memory/goals.json`. Hierarchy invariant management (auto-sync of `parent_goal_id` ↔ `child_goal_ids`, cascade / dangling-reference repair on delete) is intentionally out of scope and belongs to a later phase.
+
+---
+
+## Phase 2 — Persistent Goal Storage ⭐⭐ ✅ COMPLETE
+
+Objective
+
+Allow goals to survive application restarts.
+
+Implement
+
+- Save goals
+- Load goals
+- Update goals
+- Delete goals
+
+Success Criteria
+
+- Goals remain after restarting Freya.
+- Goal hierarchy is preserved.
+
+**Delivered.** `GoalStorage` auto-loads `data/memory/goals.json` on construction; every CRUD verb (`create` / `update` / `delete`) writes back through the same atomic `.tmp` + `replace` path. Hierarchy is preserved by serialising `parent_goal_id` and `child_goal_ids` per-goal, not by enforcing parent/child invariants — re-parenting and orphan-handling are out of scope here. Verified end-to-end in `tests/test_goals.py` (`test_persistence_across_instances`, `test_save_then_load_returns_same_goal`, `test_save_is_upsert`, `test_delete_is_persisted`, `test_crud_roundtrip`).
 
 ---
 
