@@ -691,3 +691,247 @@ class TestActiveGoalIndicator:
         assert store.active_goal().id == only.id
 
 
+# ---------------------------------------------------------------------------
+# GoalStorage — scheduler (Phase 5)
+# ---------------------------------------------------------------------------
+
+
+class TestGoalDependencies:
+    """The ``depends_on_ids`` field and its read-side helpers."""
+
+    @pytest.fixture
+    def store(self, tmp_path):
+        return GoalStorage(workspace=str(tmp_path), storage_path="memory/goals.json")
+
+    def test_create_with_depends_on_ids(self, store):
+        dep = store.create(name="dep")
+        goal = store.create(name="g", depends_on_ids=[dep.id])
+        assert goal.depends_on_ids == [dep.id]
+
+    def test_create_default_has_empty_depends_on_ids(self, store):
+        goal = store.create(name="g")
+        assert goal.depends_on_ids == []
+
+    def test_backwards_compat_load_without_depends_on_ids(self, tmp_path):
+        """A pre-Phase-5 ``goals.json`` without ``depends_on_ids`` must load."""
+        storage_dir = tmp_path / "memory"
+        storage_dir.mkdir(parents=True)
+        (storage_dir / "goals.json").write_text(
+            '{"goals": [{"id": "legacy", "name": "old"}], "metadata": {}}',
+            encoding="utf-8",
+        )
+        store = GoalStorage(workspace=str(tmp_path), storage_path="memory/goals.json")
+        legacy = store.load("legacy")
+        assert legacy is not None
+        assert legacy.depends_on_ids == []
+
+    def test_dependencies_of_returns_objects(self, store):
+        dep = store.create(name="dep")
+        g = store.create(name="g", depends_on_ids=[dep.id])
+        deps = store.dependencies_of(g.id)
+        assert [d.id for d in deps] == [dep.id]
+
+    def test_dependencies_of_skips_missing(self, store):
+        g = store.create(name="g", depends_on_ids=["ghost", "also-missing"])
+        assert store.dependencies_of(g.id) == []
+
+    def test_dependencies_of_unknown_goal_returns_empty(self, store):
+        assert store.dependencies_of("missing") == []
+
+    def test_is_blocked_by_explicit_status(self, store):
+        g = store.create(name="g", status="blocked")
+        assert store.is_blocked(g.id) is True
+
+    def test_is_blocked_by_unmet_dep(self, store):
+        dep = store.create(name="dep")
+        g = store.create(name="g", depends_on_ids=[dep.id])
+        assert is_completed_via_dep(store, g.id) is False
+        assert store.is_blocked(g.id) is True
+
+    def test_is_blocked_summary(self, store):
+        dep = store.create(name="dep")
+        dependent = store.create(name="dependent", depends_on_ids=[dep.id])
+        plain = store.create(name="plain")
+        explicit = store.create(name="explicit", status="blocked")
+        assert store.is_blocked(plain.id) is False
+        assert store.is_blocked(dependent.id) is True
+        assert store.is_blocked(explicit.id) is True
+
+    def test_is_blocked_becomes_false_when_dep_completes(self, store):
+        dep = store.create(name="dep")
+        g = store.create(name="g", depends_on_ids=[dep.id])
+        store.complete(dep.id)
+        assert store.is_blocked(g.id) is False
+
+    def test_is_blocked_for_unknown_id_returns_false(self, store):
+        assert store.is_blocked("missing") is False
+
+    def test_is_blocked_for_missing_dep_id(self, store):
+        """A dep pointing at a non-existent goal is considered unmet."""
+        g = store.create(name="g", depends_on_ids=["ghost"])
+        assert store.is_blocked(g.id) is True
+
+
+def is_completed_via_dep(store, goal_id):
+    """Tiny per-test helper used above; left at module level to keep test
+    functions small."""
+    g = store.load(goal_id)
+    return g is not None and g.status == "completed"
+
+
+class TestGoalQueue:
+    """``queue()`` ordering and eligibility rules."""
+
+    @pytest.fixture
+    def store(self, tmp_path):
+        return GoalStorage(workspace=str(tmp_path), storage_path="memory/goals.json")
+
+    def test_empty_queue_when_no_goals(self, store):
+        assert store.queue() == []
+
+    def test_fresh_goal_appears_in_queue(self, store):
+        g = store.create(name="g")
+        assert [x.id for x in store.queue()] == [g.id]
+
+    def test_priority_sort_ascending(self, store):
+        store.create(name="low", priority="low")
+        store.create(name="critical", priority="critical")
+        store.create(name="optional", priority="optional")
+        store.create(name="medium", priority="medium")
+        store.create(name="high", priority="high")
+        assert [g.name for g in store.queue()] == [
+            "critical", "high", "medium", "low", "optional",
+        ]
+
+    def test_unknown_priority_sorts_in_stable_position_after_known(self, store):
+        store.create(name="known", priority="high")
+        store.create(name="unknown", priority="???")
+        queue = store.queue()
+        assert queue[0].name == "known"
+        assert queue[1].name == "unknown"
+
+    def test_completed_excluded_from_queue(self, store):
+        g = store.create(name="g")
+        store.complete(g.id)
+        assert store.queue() == []
+
+    def test_blocked_excluded_from_queue(self, store):
+        store.create(name="g1", status="blocked")
+        good = store.create(name="g2", priority="critical")
+        names = [g.name for g in store.queue()]
+        assert names == ["g2"]
+
+    def test_dependency_unmet_excluded_from_queue(self, store):
+        dep = store.create(name="dep", priority="critical")
+        held = store.create(
+            name="held", depends_on_ids=[dep.id], priority="critical",
+        )
+        ids = {g.id for g in store.queue()}
+        assert dep.id in ids
+        assert held.id not in ids
+
+    def test_dependency_met_admits_to_queue(self, store):
+        dep = store.create(name="dep")
+        held = store.create(name="held", depends_on_ids=[dep.id])
+        store.complete(dep.id)
+        ids = {g.id for g in store.queue()}
+        assert held.id in ids
+
+    def test_active_goal_excluded_from_queue(self, store):
+        a = store.create(name="a", priority="medium")
+        b = store.create(name="b", priority="critical")
+        store.set_active(a.id)
+        ids = [g.id for g in store.queue()]
+        assert a.id not in ids
+        assert ids == [b.id]
+
+
+class TestSelectNext:
+    """``select_next()`` picks + activates the highest-priority eligible goal."""
+
+    @pytest.fixture
+    def store(self, tmp_path):
+        return GoalStorage(workspace=str(tmp_path), storage_path="memory/goals.json")
+
+    def test_returns_none_when_no_eligible(self, store):
+        store.create(name="g", status="blocked")
+        assert store.select_next() is None
+
+    def test_returns_none_when_only_completed_exist(self, store):
+        g = store.create(name="g")
+        store.complete(g.id)
+        assert store.select_next() is None
+
+    def test_picks_highest_priority(self, store):
+        store.create(name="low", priority="low")
+        store.create(name="critical", priority="critical")
+        store.create(name="medium", priority="medium")
+        chosen = store.select_next()
+        assert chosen.name == "critical"
+        assert store.active_goal().id == chosen.id
+
+    def test_skips_blocked_status(self, store):
+        store.create(name="blocked", status="blocked", priority="critical")
+        good = store.create(name="good", priority="medium")
+        chosen = store.select_next()
+        assert chosen.id == good.id
+
+    def test_skips_dependent_on_unmet_dep(self, store):
+        dep = store.create(name="dep")
+        stored = store.create(
+            name="stored", depends_on_ids=[dep.id], priority="critical",
+        )
+        free = store.create(name="free", priority="medium")
+        chosen = store.select_next()
+        # `stored` has an unmet dep and must be skipped. ``dep`` itself is
+        # eligible (it's the prereq, not blocked by it), so the pick is
+        # whichever ties win under stable sort — always either ``dep`` or
+        # ``free``, never ``stored``.
+        assert chosen.id in {dep.id, free.id}
+        assert chosen.id != stored.id
+
+    def test_after_dep_completes_picks_dependent(self, store):
+        dep = store.create(name="dep")
+        stored = store.create(
+            name="stored", depends_on_ids=[dep.id], priority="critical",
+        )
+        free = store.create(name="free", priority="medium")
+        # First pick: ``stored`` is blocked, ``dep`` is eligible (tied with
+        # ``free``).
+        first = store.select_next()
+        assert first.id in {dep.id, free.id}
+        # After completing dep, ``stored``'s dependency is satisfied and
+        # its critical priority outranks everything else still eligible.
+        store.complete(dep.id)
+        # Clear the prior active marker so ``select_next`` doesn't skip
+        # the previous choice as "already active".
+        store.clear_active()
+        next_chosen = store.select_next()
+        assert next_chosen.id == stored.id
+        assert store.active_goal().id == stored.id
+
+    def test_select_next_persists(self, tmp_path):
+        workspace = str(tmp_path)
+        first = GoalStorage(workspace=workspace, storage_path="memory/goals.json")
+        first.create(name="g", priority="critical")
+        first.select_next()
+        second = GoalStorage(workspace=workspace, storage_path="memory/goals.json")
+        active = second.active_goal()
+        assert active is not None
+        assert active.name == "g"
+
+    def test_select_next_with_only_active_returns_none(self, store):
+        g = store.create(name="g")
+        store.set_active(g.id)
+        # The only goal is the active one → nothing in the queue → None.
+        assert store.select_next() is None
+
+    def test_select_next_advances_past_current_active(self, store):
+        first = store.create(name="first", priority="medium")
+        second = store.create(name="second", priority="critical")
+        store.set_active(first.id)
+        chosen = store.select_next()
+        assert chosen.id == second.id
+
+
+

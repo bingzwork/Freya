@@ -6,7 +6,7 @@ Status: 🔵 FOUNDATION
 
 Priority: ⭐⭐⭐⭐⭐ Critical
 
-Completion: 85%
+Completion: 95%
 
 Last Updated: 2026-07-29
 
@@ -18,12 +18,12 @@ Cross-Reference: [LONG_TERM_AUTONOMY.md § Persistent Goal Management](LONG_TERM
 
 # Current Implementation
 
-Phases 1 (Goal Data Model), 2 (Persistent Goal Storage), 3 (Goal Tree), and 4 (Goal Progress Tracking) are implemented. The runtime data substrate (`Goal` dataclass + JSON-file persistence + CRUD + tree reads + completion propagation + progress metrics + active-goal indicator) lives in `app/memory/goals.py` and is exported through `app/memory/__init__.py`. It is **not yet wired into FreyaAgent / Planner / the autonomous loop** — that is the work of the higher phases.
+Phases 1 (Goal Data Model), 2 (Persistent Goal Storage), 3 (Goal Tree), 4 (Goal Progress Tracking), and 5 (Goal Scheduler) are implemented. The runtime data substrate (`Goal` dataclass + JSON-file persistence + CRUD + tree reads + completion propagation + progress metrics + active-goal indicator + scheduler) lives in `app/memory/goals.py` and is exported through `app/memory/__init__.py`. It is **not yet wired into FreyaAgent / Planner / the autonomous loop** — that is the work of the higher phases.
 
 Concretely:
 
-- ✅ Goal data model (Goal class with id, name, description, status, priority, parent_goal_id, child_goal_ids, created_at, updated_at)
-- ✅ Persistent goal storage (atomic JSON at `data/memory/goals.json`, threaded, loadable across restarts; backwards compatible — files pre-Phase 4 still load with timestamp defaults)
+- ✅ Goal data model (Goal class with id, name, description, status, priority, parent_goal_id, child_goal_ids, **depends_on_ids**, created_at, updated_at)
+- ✅ Persistent goal storage (atomic JSON at `data/memory/goals.json`, threaded, loadable across restarts; backwards compatible — files pre-Phase 4 / pre-Phase 5 still load with added-field defaults)
 - ✅ Save / load / update / delete: `GoalStorage.create` / `update` / `delete` / `list` / `save` / `load` / `all` / `count`
 - ✅ Goals survive application restarts (verified in `tests/test_goals.py`)
 - ✅ Goal timestamps: `created_at` is stamped on `create`; `updated_at` is bumped when `update` actually changes a field; both are ISO UTC strings
@@ -34,9 +34,10 @@ Concretely:
 - ✅ Progress tracking: `GoalStorage.progress(goal_id)` returns `{total_children, completed_children, percentage}` derived live from the in-memory map; updates automatically as children are added, completed, or removed (and as `complete()` propagation fires)
 - ✅ Completed-goal detection: `GoalStorage.is_completed(goal_id)` returns True iff the goal exists and is `status="completed"`
 - ✅ Active goal indicator: `GoalStorage.set_active(goal_id)` / `active_goal()` / `clear_active()` track a single persisted active id (lives in the storage `metadata` block; survives restarts)
+- ✅ Goal dependencies: `GoalStorage.dependencies_of(goal_id)` reads declared prereqs; `is_blocked(goal_id)` returns True on explicit `status="blocked"`, on any unmet dep (`!="completed"`), or on any unsatisified dep id (missing goal)
+- ✅ Goal scheduler: `GoalStorage.queue()` returns eligible goals sorted by priority rank (`critical` → `optional`; unknown priorities sort to the bottom) and stable across ties; `GoalStorage.select_next()` picks the highest-priority eligible goal, marks it active, and returns it; both skip blocked / completed / currently-active goals
 - ❌ Hierarchy invariant management — `update(parent_goal_id=...)` does not rewire the old / new parent's `child_goal_ids`; `delete` does not detach children or cascade. Explicit later-phase work.
 - ❌ Standardised `status` / `priority` enums (string-typed today; later phases formalise the value set)
-- ❌ Goal scheduler / selection logic over multiple goals
 - ❌ Automatic goal decomposition into subtasks
 - ❌ Autonomous goal review, stall detection, or reprioritization
 - ❌ Planner integration driven by active goals

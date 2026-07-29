@@ -27,6 +27,8 @@ class Goal:
             in a later phase).
         parent_goal_id: ID of this goal's parent, or None for top-level.
         child_goal_ids: IDs of this goal's children.
+        depends_on_ids: IDs of goals that must ``status == "completed"``
+            before this one becomes eligible for selection.
         created_at: ISO timestamp captured on creation (UTC).
         updated_at: ISO timestamp of the most recent write (UTC).
     """
@@ -38,6 +40,7 @@ class Goal:
     priority: str = "medium"
     parent_goal_id: Optional[str] = None
     child_goal_ids: List[str] = field(default_factory=list)
+    depends_on_ids: List[str] = field(default_factory=list)
     created_at: str = ""
     updated_at: str = ""
 
@@ -154,6 +157,7 @@ class GoalStorage:
         priority: str = "medium",
         parent_goal_id: Optional[str] = None,
         child_goal_ids: Optional[List[str]] = None,
+        depends_on_ids: Optional[List[str]] = None,
     ) -> Goal:
         """Create a new goal with a generated id and persist it.
 
@@ -174,6 +178,7 @@ class GoalStorage:
                 priority=priority,
                 parent_goal_id=parent_goal_id,
                 child_goal_ids=list(child_goal_ids) if child_goal_ids else [],
+                depends_on_ids=list(depends_on_ids) if depends_on_ids else [],
                 created_at=now,
                 updated_at=now,
             )
@@ -190,14 +195,16 @@ class GoalStorage:
         priority: Optional[str] = None,
         parent_goal_id: Optional[str] = None,
         child_goal_ids: Optional[List[str]] = None,
+        depends_on_ids: Optional[List[str]] = None,
     ) -> Optional[Goal]:
         """Patch mutable fields on an existing goal and persist it.
 
         Only the fields explicitly passed (i.e. not ``None``) are written;
-        passing ``child_goal_ids=[]`` explicitly clears the list. Returns
-        the updated ``Goal`` or ``None`` if ``goal_id`` does not exist.
-        When at least one field actually changes, ``updated_at`` is bumped
-        to the current UTC ISO timestamp; ``created_at`` is preserved.
+        passing ``child_goal_ids=[]`` or ``depends_on_ids=[]`` explicitly
+        clears the respective list. Returns the updated ``Goal`` or
+        ``None`` if ``goal_id`` does not exist. When at least one field
+        actually changes, ``updated_at`` is bumped to the current UTC ISO
+        timestamp; ``created_at`` is preserved.
         """
         with self._lock:
             goal = self._goals.get(goal_id)
@@ -216,6 +223,8 @@ class GoalStorage:
                 goal.parent_goal_id = parent_goal_id; changed = True
             if child_goal_ids is not None and goal.child_goal_ids != list(child_goal_ids):
                 goal.child_goal_ids = list(child_goal_ids); changed = True
+            if depends_on_ids is not None and goal.depends_on_ids != list(depends_on_ids):
+                goal.depends_on_ids = list(depends_on_ids); changed = True
             if changed:
                 goal.updated_at = self._now()
             self._save_file()
@@ -402,4 +411,111 @@ class GoalStorage:
                 return
             self._active_goal_id = None
             self._save_file()
+
+    # --- scheduler (Phase 5) ---------------------------------------------
+
+    # Priority ranking used by ``queue`` / ``select_next``. Lower rank sorts
+    # first (i.e. runs sooner). Unknown priorities sort to the bottom on
+    # purpose: an unrecognised value is treated as "least important" so it
+    # never preempts a goal that was named explicitly.
+    _PRIORITY_RANK: Dict[str, int] = {
+        "critical": 0,
+        "high": 1,
+        "medium": 2,
+        "low": 3,
+        "optional": 4,
+    }
+    _DEFAULT_PRIORITY_RANK = 99
+
+    def _priority_rank(self, priority: str) -> int:
+        return self._PRIORITY_RANK.get(priority, self._DEFAULT_PRIORITY_RANK)
+
+    def dependencies_of(self, goal_id: str) -> List[Goal]:
+        """Return the goals this one depends on, in stored order.
+
+        Missing dependency ids (pointers to goals that no longer exist) are
+        silently skipped, mirroring the "dangling id" handling elsewhere
+        in the storage layer.
+        """
+        with self._lock:
+            goal = self._goals.get(goal_id)
+            if goal is None:
+                return []
+            return [
+                self._goals[did]
+                for did in goal.depends_on_ids
+                if did in self._goals
+            ]
+
+    def is_blocked(self, goal_id: str) -> bool:
+        """Return True iff the goal exists and is currently blocked.
+
+        A goal is considered blocked when **any** of the following hold:
+
+        * its explicit ``status == "blocked"``;
+        * at least one of its declared ``depends_on_ids`` refers to a goal
+          that does not exist (``"Completed"`` is the only way to satisfy a
+          dependency — a missing dep is therefore unsatisfied); or
+        * at least one of its declared ``depends_on_ids`` refers to a goal
+          whose ``status != "completed"``.
+
+        Unknown ``goal_id`` resolves to ``False`` rather than raising — that
+        way callers like ``queue`` can coalesce the "missing" and
+        "excluded" cases without an extra branch.
+        """
+        with self._lock:
+            goal = self._goals.get(goal_id)
+            if goal is None:
+                return False
+            if goal.status == "blocked":
+                return True
+            for did in goal.depends_on_ids:
+                dep = self._goals.get(did)
+                if dep is None:
+                    return True
+                if dep.status != "completed":
+                    return True
+            return False
+
+    def _is_eligible(self, goal: Goal) -> bool:
+        """Internal: a goal is eligible for the queue when it has not been
+        completed, is not blocked, and is not the currently-active goal.
+        """
+        if goal.status == "completed":
+            return False
+        if self.is_blocked(goal.id):
+            return False
+        if goal.id == self._active_goal_id:
+            return False
+        return True
+
+    def queue(self) -> List[Goal]:
+        """Return the upcoming queue: eligible goals sorted by priority.
+
+        Ordering is by ``_priority_rank`` ascending (lower rank = higher
+        priority); ties preserve insertion order because Python's ``sort``
+        is stable. The currently-active goal is excluded so the queue is
+        always "what's next", not "the in-flight one too".
+        """
+        with self._lock:
+            eligible = [g for g in self._goals.values() if self._is_eligible(g)]
+            eligible.sort(key=lambda g: self._priority_rank(g.priority))
+            return eligible
+
+    def select_next(self) -> Optional[Goal]:
+        """Pick the next eligible goal by priority and mark it active.
+
+        Returns the chosen ``Goal`` and persists the active marker; returns
+        ``None`` when no goal is eligible (everything is completed,
+        blocked, or the active goal is the only one left).
+        """
+        with self._lock:
+            eligible = [g for g in self._goals.values() if self._is_eligible(g)]
+            if not eligible:
+                return None
+            eligible.sort(key=lambda g: self._priority_rank(g.priority))
+            chosen = eligible[0]
+            self._active_goal_id = chosen.id
+            self._save_file()
+            return chosen
 
