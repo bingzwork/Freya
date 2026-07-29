@@ -25,7 +25,7 @@ The codebase already contains mature foundation modules across planning, memory,
 | Area                            | Status                         |
 | ------------------------------- | ------------------------------ |
 | Natural Conversation            | Mostly Complete                |
-| Goal Management                 | Foundation (Phases 1 & 2)       |
+| Goal Management                 | Foundation (Phases 1, 2 & 3)    |
 | Memory System                   | Partial                         |
 | Planning and Reasoning          | Not Implemented                |
 | Decision Making                 | Not Implemented                |
@@ -270,7 +270,8 @@ Freya operates continuously with minimal supervision.
 ### Progress
 
 * Goal Management Phase 1 — Goal Data Model: ✅ Complete. `Goal` dataclass + JSON-file persistence (`GoalStorage` with `create` / `update` / `delete` / `list` / `save` / `load`) live in `app/memory/goals.py`; exported via `app/memory/__init__.py`; covered by 24 tests in `tests/test_goals.py`.
-* Goal Management Phase 2 — Persistent Goal Storage: ✅ Complete. Same `GoalStorage` (no new module). Goals auto-load from `data/memory/goals.json` on construction; every CRUD verb flushes through the atomic `.tmp` + `replace` write path; restart-survival and `parent_goal_id` / `child_goal_ids` round-trip verified in `tests/test_goals.py` (`test_persistence_across_instances`, `test_save_then_load_returns_same_goal`, `test_save_is_upsert`, `test_delete_is_persisted`, `test_crud_roundtrip`). Hierarchy invariant management — re-parenting wiring, delete-cascade / orphan-detach — is explicitly out of scope. Phase 3-onward features (status / priority enums, timestamps, scheduler, decomposition, review, planner integration, human oversight UI) remain unimplemented.
+* Goal Management Phase 2 — Persistent Goal Storage: ✅ Complete. Same `GoalStorage` (no new module). Goals auto-load from `data/memory/goals.json` on construction; every CRUD verb flushes through the atomic `.tmp` + `replace` write path; restart-survival and `parent_goal_id` / `child_goal_ids` round-trip verified in `tests/test_goals.py` (`test_persistence_across_instances`, `test_save_then_load_returns_same_goal`, `test_save_is_upsert`, `test_delete_is_persisted`, `test_crud_roundtrip`). Hierarchy invariant management — re-parenting wiring, delete-cascade / orphan-detach — is explicitly out of scope.
+* Goal Management Phase 3 — Goal Tree: ✅ Complete. Added `parent_of` / `children_of` / `descendants_of` / `complete(goal_id)` to `GoalStorage`. Children are derived by scanning for `parent_goal_id == X` (no auto-wiring required on `create` / `update`); `complete()` recursively promotes any ancestor whose observed children are all `status="completed"`, stopping at the first ancestor that still has a non-completed child; propagation persists through the same atomic write path; restart-survival of propagated state verified in `tests/test_goals.py` (`test_complete_propagation_persists_to_disk`, `test_complete_propagates_through_nested_chain`, plus 13 other Phase 3 tests). Test suite is now 42 / 42 green. Phase 4-onward features (status / priority enums, timestamps, progress tracking, scheduler, decomposition, review, planner integration, human oversight UI) remain unimplemented.
 
 ---
 

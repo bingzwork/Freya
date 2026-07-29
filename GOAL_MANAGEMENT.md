@@ -6,7 +6,7 @@ Status: 🔵 FOUNDATION
 
 Priority: ⭐⭐⭐⭐⭐ Critical
 
-Completion: 50%
+Completion: 70%
 
 Last Updated: 2026-07-29
 
@@ -18,7 +18,7 @@ Cross-Reference: [LONG_TERM_AUTONOMY.md § Persistent Goal Management](LONG_TERM
 
 # Current Implementation
 
-Phases 1 (Goal Data Model) and 2 (Persistent Goal Storage) are implemented. The runtime data substrate (`Goal` dataclass + JSON-file persistence + CRUD verbs) lives in `app/memory/goals.py` and is exported through `app/memory/__init__.py`. It is **not yet wired into FreyaAgent / Planner / the autonomous loop** — that is the work of the higher phases.
+Phases 1 (Goal Data Model), 2 (Persistent Goal Storage), and 3 (Goal Tree) are implemented. The runtime data substrate (`Goal` dataclass + JSON-file persistence + CRUD + tree reads + completion propagation) lives in `app/memory/goals.py` and is exported through `app/memory/__init__.py`. It is **not yet wired into FreyaAgent / Planner / the autonomous loop** — that is the work of the higher phases.
 
 Concretely:
 
@@ -27,11 +27,14 @@ Concretely:
 - ✅ Save / load / update / delete: `GoalStorage.create` / `update` / `delete` / `list` / `save` / `load` / `all` / `count`
 - ✅ Goals survive application restarts (verified in `tests/test_goals.py`)
 - ✅ Parent / child relationships are persisted as part of each goal (`parent_goal_id` + `child_goal_ids` round-trip through `to_dict` / `from_dict`)
-- ❌ Hierarchy invariant management — re-parenting does not rewire both sides' child lists; `delete` does not detach children or cascade. Explicit later-phase work.
+- ✅ Goal tree reads: `GoalStorage.parent_of` / `children_of` / `descendants_of` (children are derived by scanning for `parent_goal_id == X` — no extra wiring required)
+- ✅ Automatic completion propagation: `GoalStorage.complete(goal_id)` marks a goal `status="completed"` and recursively promotes any ancestor whose observed children are all completed; propagation stops at the first ancestor that still has a non-completed child
+- ✅ Nested goals work correctly: depth is unbounded; propagation walks the full `parent_goal_id` chain
+- ❌ Hierarchy invariant management — `update(parent_goal_id=...)` does not rewire the old / new parent's `child_goal_ids`; `delete` does not detach children or cascade. Explicit later-phase work.
 - ❌ Standardised `status` / `priority` enums (string-typed today; later phases formalise the value set)
 - ❌ Goal timestamps (`created_at` / `updated_at`)
-- ❌ Goal scheduler / selection logic over multiple goals
 - ❌ Progress tracking (% complete, subtask counts)
+- ❌ Goal scheduler / selection logic over multiple goals
 - ❌ Automatic goal decomposition into subtasks
 - ❌ Autonomous goal review, stall detection, or reprioritization
 - ❌ Planner integration driven by active goals
@@ -671,25 +674,6 @@ Success Criteria
 
 ---
 
-## Phase 2 — Persistent Goal Storage ⭐⭐
-
-Objective
-
-Allow goals to survive application restarts.
-
-Implement
-
-- Save goals
-- Load goals
-- Update goals
-- Delete goals
-
-Success Criteria
-
-- Goals remain after restarting Freya.
-- Goal hierarchy is preserved.
-
----
 
 ## Phase 3 — Goal Tree ⭐⭐⭐
 

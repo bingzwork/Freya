@@ -217,3 +217,107 @@ class GoalStorage:
         """Return a snapshot of all goals (insertion order)."""
         return self.all()
 
+    # --- hierarchy / tree (Phase 3) --------------------------------------
+
+    def parent_of(self, goal_id: str) -> Optional[Goal]:
+        """Return the parent goal of ``goal_id``, or ``None`` if root / unknown."""
+        with self._lock:
+            child = self._goals.get(goal_id)
+            if child is None or child.parent_goal_id is None:
+                return None
+            return self._goals.get(child.parent_goal_id)
+
+    def _children_ids_of(self, goal_id: str) -> List[str]:
+        """Return ids of goals whose ``parent_goal_id == goal_id``.
+
+        The scan is the source of truth for "children of X" — independent of
+        each parent's self-reported ``child_goal_ids``. This avoids
+        hierarchy-invariant management on ``create`` / ``update``: setting
+        ``parent_goal_id`` on a child is sufficient for the tree to be
+        navigable.
+        """
+        return [
+            g.id for g in self._goals.values()
+            if g.parent_goal_id == goal_id
+        ]
+
+    def children_of(self, goal_id: str) -> List[Goal]:
+        """Return the direct children of ``goal_id`` in insertion order."""
+        with self._lock:
+            if goal_id not in self._goals:
+                return []
+            return [
+                self._goals[cid] for cid in self._children_ids_of(goal_id)
+            ]
+
+    def descendants_of(self, goal_id: str) -> List[Goal]:
+        """Return every descendant of ``goal_id`` (BFS, parents before children)."""
+        with self._lock:
+            visited: List[Goal] = []
+            seen: set = set()
+            frontier: List[str] = self._children_ids_of(goal_id) if goal_id in self._goals else []
+            while frontier:
+                cid = frontier.pop(0)
+                if cid in seen:
+                    continue
+                seen.add(cid)
+                child = self._goals.get(cid)
+                if child is None:
+                    continue
+                visited.append(child)
+                frontier.extend(self._children_ids_of(cid))
+            return visited
+
+    def complete(self, goal_id: str) -> Optional[Goal]:
+        """Mark ``goal_id`` ``status="completed"`` and propagate upward.
+
+        Propagation rule: a parent is auto-completed **iff** it currently
+        has at least one child and every observed child has
+        ``status == "completed"``. Propagation is recursive up the parent
+        chain; it stops at the first ancestor that still has a
+        non-completed child.
+
+        Children are discovered by scanning for ``parent_goal_id`` (see
+        ``_children_ids_of``); the parent's self-reported ``child_goal_ids``
+        list is not consulted for propagation, so ``create(parent_goal_id=...)``
+        is sufficient to wire a child into the tree.
+
+        Returns the originally-completed goal, or ``None`` if the id is
+        unknown. Idempotent: re-completing an already-completed leaf is a
+        no-op aside from the disk flush.
+        """
+        with self._lock:
+            goal = self._goals.get(goal_id)
+            if goal is None:
+                return None
+
+            goal.status = "completed"
+            self._save_file()
+
+            current = goal
+            while current.parent_goal_id:
+                parent = self._goals.get(current.parent_goal_id)
+                if parent is None:
+                    break
+                if parent.status == "completed":
+                    current = parent
+                    continue
+                child_ids = self._children_ids_of(parent.id)
+                if not child_ids:
+                    # Parent has no observed children — do not auto-promote.
+                    break
+                if all(
+                    self._goals.get(cid) is not None
+                    and self._goals[cid].status == "completed"
+                    for cid in child_ids
+                ):
+                    parent.status = "completed"
+                    self._save_file()
+                    current = parent
+                else:
+                    break
+
+            return goal
+
+
+
