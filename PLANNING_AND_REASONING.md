@@ -2,7 +2,7 @@
 
 # Planning & Reasoning
 
-- Status: 🟢 MOSTLY COMPLETE — 60% (Phase 1 complete: PlanManager integrated into FreyaAgent; Planner creates Plan objects; Executor consumes Plan objects. Phase 2 complete: TaskGraph wired into runtime. Phase 3 complete: Scheduler and ResourceAllocator wired into execution pipeline. Phase 4 complete: ProgressTracker integrated. Phase 5 complete: Adaptive replanning implemented.)
+- Status: 🟢 MOSTLY COMPLETE — 70% (Phase 1 complete: PlanManager integrated into FreyaAgent; Planner creates Plan objects; Executor consumes Plan objects. Phase 2 complete: TaskGraph wired into runtime. Phase 3 complete: Scheduler and ResourceAllocator wired into execution pipeline. Phase 4 complete: ProgressTracker integrated. Phase 5 complete: Adaptive replanning implemented.)
 - Priority: ⭐⭐⭐⭐⭐ Critical
 - Source of truth: codebase; legacy planner is foundation-only and `app/planner/` modules now wired into the runtime (ROADMAP Phase 2 — Planner Modernization).
 
@@ -212,6 +212,19 @@ A practical build order that matches `ROADMAP.md` Phase 2 ("Planner Modernizatio
 **Dependencies.** Priorities 1–4.
 
 **Expected outcome.** Failures invalidate only the affected subgraph; completed `Task`s remain `COMPLETED`; the agent surfaces replan events through `ProgressTracker`.
+
+**Implementation completed (2026-07-30):**
+- `TaskGraph.get_affected_subgraph(failed_task_id)` identifies failed task plus all transitive dependents via BFS
+- `TaskGraph.invalidate_subgraph(task_ids)` marks affected tasks `FAILED` and clears their execution state
+- `TaskGraph.add_tasks_with_dependencies(tasks, parent_task_ids)` adds replacement tasks with proper dependency edges
+- `Plan.get_completed_task_ids()` preserves COMPLETED tasks across replans
+- `Plan.invalidate_from_failure(failed_task_id)` wraps TaskGraph invalidation and marks failed task
+- `Plan.add_replacement_tasks(new_tasks, parent_task_ids)` adds replacement tasks to plan and graph
+- `Plan.replan_after_failure(failed_task_id, context)` orchestrates full adaptive replan cycle
+- `Executor.execute_plan_partial(plan, ..., incomplete_only=True)` runs only non-COMPLETED tasks
+- `FreyaAgent._replan_after_failure()` generates replacement tasks via LLM, preserves COMPLETED, emits `ProgressTracker` replanning events with `replanning=True` flag
+- `FreyaAgent.solve()` and `run_active_goal()` rewritten with adaptive replanning loop (incremental, not restart-from-scratch)
+- All 208 tests pass
 
 ---
 
