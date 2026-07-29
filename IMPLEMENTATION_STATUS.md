@@ -2,7 +2,7 @@
 
 **Version:** v0.4.x
 
-**Last Updated:** 2026-07-30 (Goal Management Phase 7 complete: Autonomous Goal Review — stall detection + pause/resume + cancellation + priority recommendations implemented in `app/memory/goals.py`. Goal Management Phases 1–7 complete: foundation `Goal` dataclass (with `created_at` / `updated_at` ISO UTC timestamps, `depends_on_ids: List[str]`, and new Phase 7 `metadata: Dict[str, Any]` for lifecycle bookkeeping: `previous_status`, `pause_reason`, `stall_reason`, `recommend_reason`, `abandon_reason`; backwards-compatible — pre-Phase-7 files load with `{}` default) + JSON-file persistence (`GoalStorage`, `app/memory/goals.py`) plus the full Phase 1–7 surface — `create`/`update`/`delete`/`list`/`save`/`load`, tree reads (`parent_of`/`children_of`/`descendants_of`), upward `complete()` propagation, live `progress()`/`is_completed()`, single-tenant `set_active`/`active_goal`/`clear_active`, Phase 5 scheduler `dependencies_of`/`is_blocked`/`queue`/`select_next` (priority rank `critical`→`optional`; unknown priorities sort last; blocked/completed/active skipped; **`select_next` auto-resumes a paused goal when it would otherwise be chosen**), Phase 6 decomposition `decompose_goal`/`apply_decomposition` (read-only template + manual-approval `PlanManager` hook; pre-Phase-6/7 `goals.json` files still load with timestamp/dependency/metadata defaults), Phase 7 autonomous review surface — `list_stalled` (read, stalled goals > threshold, excludes paused), `block_reasons` (read, human-readable block reasons), `pause_goal`/`pause_inactive`/`resume_goal`/`is_paused` (write/read pause surface with `metadata` bookkeeping, terminal goals never paused, idempotent re-pause), `recommend_cancellation` (read, two-threshold gate: stall + pause), `recommend_priorities` (read, signal-count heuristic bumps priority down, active goal preserved, manual priorities preserved unless clear signal), `is_paused` (read). Test suite 119/119 green. Pre-Phase-4/5/7 `goals.json` files load cleanly. Hierarchy invariant management (re-parent wiring, delete-cascade/orphan-detach), formalised status/priority enums, planner integration driven by active goals (Phase 8 — running the agent *from* goals), autonomous-loop wiring, human-oversight UI remain unimplemented and not yet wired into `FreyaAgent`/autonomous loop.) Self-Learning Priority 1–4 complete: ExperienceMemory integrated into runtime, EngineeringLessonStorage integrated into planning/repair/runtime/Executor, `FreyaAgent.run()` retrieves up to two PATTERN lessons + two ExperienceMemory entries pre-execute, Executor LLM fallback injects up to two PATTERN lessons, `_log_anti_pattern_hints` emits up to two ANTI_PATTERN lessons post-failure, ExperienceMemory writes accompany Lesson writes for `solve()`/`repair()` via existing `store()` API.)
+**Last Updated:** 2026-07-30 (Goal Management Phase 8 complete: Planner Integration — `FreyaAgent.goal_storage` wires GoalStorage into the agent; `run_active_goal(goal_id, allow_mutations, max_iterations)` selects/activates a goal, plans from its description, executes via Executor, records to memory, and completes the goal when all children are done (Phase 3 propagation); `run_goal_loop(max_goals, max_iterations_per_goal)` runs the continuous autonomous loop: select_next → run_active_goal → repeat. Goal Management Phases 1–8 complete. Test suite 119/119 green. Pre-Phase-4/5/7/8 `goals.json` files load cleanly. Hierarchy invariant management (re-parent wiring, delete-cascade/orphan-detach), formalised status/priority enums, human-oversight UI remain unimplemented.))
 
 **Purpose**
 
@@ -42,7 +42,7 @@ This document should always reflect the current state of the codebase.
 | Pillar | Status | Completion |
 |---------|--------|------------|
 | Natural Conversation & Intent Understanding | 🟢 MOSTLY COMPLETE | 90% |
-| Goal Management | 🔵 FOUNDATION | 100% |
+| Goal Management | ✅ COMPLETE | 100% |
 | Planning and Reasoning | ⚪ NOT IMPLEMENTED | 0% |
 | Memory System | 🟡 PARTIAL | 30% |
 | Decision Making | ⚪ NOT IMPLEMENTED | 0% |
@@ -58,7 +58,7 @@ This document should always reflect the current state of the codebase.
 | Business & Productivity | 🟡 MINIMAL | 20% |
 | Creative Capabilities | ⚪ NOT IMPLEMENTED | 0% |
 | Human Oversight & Approval | 🟢 FUNCTIONAL | 85% |
-| Long-Term Autonomy | 🟡 PARTIAL | 50% |
+| Long-Term Autonomy | 🟡 PARTIAL | 55% |
 | Resource Management | ⚪ NOT IMPLEMENTED | 0% |
 | Multi Agent Coordination | ⚪ NOT IMPLEMENTED | 0% |
 | Self Evaluation | ⚪ NOT IMPLEMENTED | 0% |
@@ -70,13 +70,13 @@ This document should always reflect the current state of the codebase.
 
 Overall Completion
 
-~82%
+~83%
 
 Current Capability Summary
 
 | Status | Count |
 |--------|------:|
-| ✅ Complete | 41 |
+| ✅ Complete | 42 |
 | 🟢 Mostly Complete | 2 |
 | 🟡 Partial | 8 |
 | 🔵 Foundation | Multiple unwired subsystems |

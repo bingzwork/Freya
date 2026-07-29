@@ -31,6 +31,11 @@ class Goal:
             before this one becomes eligible for selection.
         created_at: ISO timestamp captured on creation (UTC).
         updated_at: ISO timestamp of the most recent write (UTC).
+        metadata: Free-form dictionary for lifecycle side-channel data
+            owned by the storage layer (Phase 7: ``previous_status`` /
+            ``pause_reason`` / ``stall_reason`` / ``recommend_reason``).
+            Backwards compatible — pre-Phase-7 ``goals.json`` files
+            load with an empty ``{}`` default.
     """
 
     id: str
@@ -43,6 +48,7 @@ class Goal:
     depends_on_ids: List[str] = field(default_factory=list)
     created_at: str = ""
     updated_at: str = ""
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert goal to dictionary for serialization."""
@@ -508,6 +514,12 @@ class GoalStorage:
         Returns the chosen ``Goal`` and persists the active marker; returns
         ``None`` when no goal is eligible (everything is completed,
         blocked, or the active goal is the only one left).
+
+        Phase 7 (autonomous goal review) integration: when a paused
+        goal is the highest-priority eligible candidate, it is
+        implicitly ``resume_goal``-ed before being marked active.
+        Callers therefore don't need to call ``resume_goal`` by hand
+        before ``select_next`` — the loop just works.
         """
         with self._lock:
             eligible = [g for g in self._goals.values() if self._is_eligible(g)]
@@ -515,6 +527,17 @@ class GoalStorage:
                 return None
             eligible.sort(key=lambda g: self._priority_rank(g.priority))
             chosen = eligible[0]
+            # Phase 7: auto-resume. Done inline (rather than via the
+            # public ``resume_goal``) so we don't take the storage lock
+            # twice. Mirrors ``resume_goal``'s precedence: ``paused``
+            # → ``metadata["previous_status"]``; fallback ``"pending"``.
+            if chosen.status == self._PAUSED_STATUS:
+                chosen.status = chosen.metadata.get(
+                    self._META_PREVIOUS_STATUS, "pending"
+                )
+                chosen.metadata.pop(self._META_PREVIOUS_STATUS, None)
+                chosen.metadata.pop(self._META_PAUSE_REASON, None)
+                chosen.updated_at = self._now()
             self._active_goal_id = chosen.id
             self._save_file()
             return chosen
@@ -648,6 +671,399 @@ class GoalStorage:
                 )
 
         return created
+
+    # --- autonomous review (Phase 7) --------------------------------------
+
+    # Statuses that are *terminal* from a review perspective — Phase 7
+    # never transitions out of these and never flags them as stalled.
+    _TERMINAL_STATUSES = ("completed", "cancelled")
+
+    # Status values Phase 7 introduces / treats distinctly. ``paused``
+    # means "the user (or the bulk-pauser) voluntarily stepped this one
+    # aside"; a paused goal is otherwise treated like a normal goal for
+    # scheduling — i.e. resumption restores whatever status lived in
+    # ``metadata["previous_status"]``.
+    _PAUSED_STATUS = "paused"
+
+    # Reason text stored under ``metadata["stall_reason"]`` /
+    # ``metadata["recommend_reason"]`` etc. — keys used by Phase 7
+    # review bookkeeping. Kept here so tests and callers can refer to
+    # them by name.
+    _META_PREVIOUS_STATUS = "previous_status"
+    _META_PAUSE_REASON = "pause_reason"
+    _META_STALL_REASON = "stall_reason"
+    _META_RECOMMEND_REASON = "recommend_reason"
+    _META_ABANDON_REASON = "abandon_reason"
+
+    def _parse_iso(self, value: str) -> Optional[datetime]:
+        """Parse an ISO UTC timestamp string into a tz-aware datetime.
+
+        Returns ``None`` for empty / malformed strings so callers can
+        treat "no timestamp" uniformly. Naive datetimes are tagged
+        UTC — they always were produced in UTC by the Phase 4 + 5 +
+        6 surface, but older test fixtures occasionally strip tzinfo.
+        """
+        if not value:
+            return None
+        try:
+            parsed = datetime.fromisoformat(value)
+        except (TypeError, ValueError):
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
+
+    def _age_seconds(
+        self,
+        goal: Goal,
+        now: Optional[datetime] = None,
+    ) -> Optional[float]:
+        """Seconds elapsed since ``goal`` was last updated.
+
+        Returns ``None`` when ``updated_at`` is empty / unparseable —
+        Phase 7 cannot age a goal whose clock is unknown, and treats
+        "unknown age" the same way it treats terminal goals: not stalled.
+        """
+        ts = self._parse_iso(goal.updated_at)
+        if ts is None:
+            return None
+        base = now or datetime.now(timezone.utc)
+        return max(0.0, (base - ts).total_seconds())
+
+    def list_stalled(
+        self,
+        stall_threshold_seconds: float = 7 * 24 * 3600,
+        include_paused: bool = False,
+        now: Optional[datetime] = None,
+    ) -> List[Goal]:
+        """Return goals that haven't been updated within the threshold.
+
+        ``stall_threshold_seconds`` defaults to one week. A goal qualifies
+        when its ``updated_at`` is older than the threshold AND its
+        status is not terminal (``completed`` / ``cancelled``) AND it
+        has a parseable timestamp. Paused goals are excluded by default
+        — Phase 7 deliberately treats intentional dormancy as different
+        from organic staleness; pass ``include_paused=True`` to audit
+        paused goals too.
+
+        Phase 7 never mutates goals here — a goal being on this list is
+        a *recommendation*, not a state change. Apply a pause via
+        ``pause_inactive`` if you want the storage layer to act on it.
+        """
+        if stall_threshold_seconds <= 0:
+            return []
+        with self._lock:
+            snapshot = list(self._goals.values())
+        stalled: List[Goal] = []
+        for goal in snapshot:
+            if goal.status in self._TERMINAL_STATUSES:
+                continue
+            if not include_paused and goal.status == self._PAUSED_STATUS:
+                continue
+            age = self._age_seconds(goal, now=now)
+            if age is None:
+                continue
+            if age >= stall_threshold_seconds:
+                stalled.append(goal)
+        return stalled
+
+    def block_reasons(self, goal_id: str) -> List[str]:
+        """Return human-readable reasons why ``goal_id`` is blocked.
+
+        Builds on the Phase 5 ``is_blocked`` gate without modifying it
+        — Phase 7 only *describes* the block.
+
+        Order is:
+            1. explicit ``status == "blocked"``
+            2. incomplete dependencies (each unmet prereq is named)
+            3. missing dependency ids (any declared prereq whose id
+               no longer points at a known goal)
+
+        Returns ``[]`` when the goal is unknown or not blocked.
+        """
+        with self._lock:
+            goal = self._goals.get(goal_id)
+            if goal is None:
+                return []
+            reasons: List[str] = []
+            if goal.status == "blocked":
+                reasons.append("status is explicitly 'blocked'")
+            for dep_id in goal.depends_on_ids:
+                dep = self._goals.get(dep_id)
+                if dep is None:
+                    reasons.append(f"dependency '{dep_id}' is missing")
+                elif dep.status != "completed":
+                    reasons.append(
+                        f"dependency '{dep_id}' (name={dep.name!r}) "
+                        f"is not completed (status={dep.status!r})"
+                    )
+            return reasons
+
+    def pause_goal(
+        self,
+        goal_id: str,
+        reason: str = "",
+    ) -> Optional[Goal]:
+        """Mark ``goal_id`` ``status='paused'`` and remember the prior status.
+
+        ``reason``, when supplied, is stored under
+        ``metadata["pause_reason"]`` so reviewers can surface *why* the
+        pause was triggered without touching the goal's description.
+
+        Never pauses completed or cancelled goals — Phase 7 treats
+        terminal states as immutable for review purposes. Returns
+        ``None`` for unknown ids. Idempotent: a goal that is already
+        ``'paused'`` is returned untouched (the existing reason /
+        previous status remain canonical).
+        """
+        with self._lock:
+            goal = self._goals.get(goal_id)
+            if goal is None:
+                return None
+            if goal.status in self._TERMINAL_STATUSES:
+                return goal
+            if goal.status == self._PAUSED_STATUS:
+                return goal
+            goal.metadata[self._META_PREVIOUS_STATUS] = goal.status
+            if reason:
+                goal.metadata[self._META_PAUSE_REASON] = reason
+            goal.status = self._PAUSED_STATUS
+            goal.updated_at = self._now()
+            self._save_file()
+            return goal
+
+    def pause_inactive(
+        self,
+        stall_threshold_seconds: float,
+        reason: str = "",
+        include_paused: bool = False,
+    ) -> List[Goal]:
+        """Bulk-pause goals that exceeded ``stall_threshold_seconds``.
+
+        Wraps ``list_stalled`` and ``pause_goal``. The returned list is
+        the goals whose status *changed* to ``'paused'`` during this
+        call — goals already paused, terminally completed, or unknown
+        are not in the returned list (consistent with ``pause_goal``
+        semantics).
+        """
+        stalled = self.list_stalled(
+            stall_threshold_seconds=stall_threshold_seconds,
+            include_paused=include_paused,
+        )
+        paused: List[Goal] = []
+        for goal in stalled:
+            result = self.pause_goal(goal.id, reason=reason)
+            if result is not None and result.status == self._PAUSED_STATUS:
+                # ``pause_goal`` re-reads; treat the result as the
+                # post-transition object. The result is in our map iff
+                # the pause actually flipped the status.
+                paused.append(result)
+        return paused
+
+    def resume_goal(self, goal_id: str) -> Optional[Goal]:
+        """Restore a paused goal to the status it had before pausing.
+
+        The restored status is read from ``metadata["previous_status"]``.
+        When that key is missing (e.g. a goal paused manually outside
+        of Phase 7's surface), the goal falls back to ``"pending"`` —
+        the canonical "no work has started yet" state.
+
+        No-op on a goal that is not currently paused — the goal is
+        returned untouched, with its current status preserved. Returns
+        ``None`` for unknown ids.
+        """
+        with self._lock:
+            goal = self._goals.get(goal_id)
+            if goal is None:
+                return None
+            if goal.status != self._PAUSED_STATUS:
+                return goal
+            previous = goal.metadata.get(
+                self._META_PREVIOUS_STATUS, "pending"
+            )
+            # Clean up the bookkeeping so a second pause-then-resume
+            # cycle yields the original status, not a stale one.
+            goal.metadata.pop(self._META_PREVIOUS_STATUS, None)
+            goal.metadata.pop(self._META_PAUSE_REASON, None)
+            goal.status = previous
+            goal.updated_at = self._now()
+            self._save_file()
+            return goal
+
+    def is_paused(self, goal_id: str) -> bool:
+        """Return ``True`` iff the goal exists and is currently paused."""
+        with self._lock:
+            goal = self._goals.get(goal_id)
+            return goal is not None and goal.status == self._PAUSED_STATUS
+
+    def recommend_cancellation(
+        self,
+        stall_threshold_seconds: float,
+        pause_threshold_seconds: float = 0.0,
+        now: Optional[datetime] = None,
+    ) -> List[Dict[str, Any]]:
+        """Return candidate goals for cancellation without acting on them.
+
+        The bar is intentionally high: a goal only surfaces here when
+        both ``pause_threshold_seconds`` (time spent paused) AND
+        ``stall_threshold_seconds`` (time since last update) are
+        exceeded. Single-condition flags belong to ``list_stalled``
+        and ``is_blocked``; cancellation is a higher-stakes
+        recommendation, so it requires two independent signals.
+
+        Each record is shaped::
+
+            {
+                "goal_id": str,
+                "name": str,
+                "reason": str,
+                "status": str,
+                "paused_seconds": float | None,
+                "stall_seconds": float | None,
+            }
+
+        ``now`` lets tests inject a deterministic clock; default is
+        ``datetime.now(timezone.utc)``.
+        """
+        if stall_threshold_seconds <= 0 and pause_threshold_seconds <= 0:
+            return []
+        base = now or datetime.now(timezone.utc)
+        with self._lock:
+            snapshot = list(self._goals.values())
+        recommendations: List[Dict[str, Any]] = []
+        for goal in snapshot:
+            if goal.status in self._TERMINAL_STATUSES:
+                continue
+            stall_age = self._age_seconds(goal, now=base)
+            paused_for: Optional[float] = None
+            if goal.status == self._PAUSED_STATUS:
+                # Pause duration is measured from the last update,
+                # which is when the pause transition happened (the
+                # pause bump above).
+                paused_for = stall_age
+            stalled_signal = (
+                stall_age is not None
+                and stall_threshold_seconds > 0
+                and stall_age >= stall_threshold_seconds
+            )
+            paused_signal = (
+                paused_for is not None
+                and pause_threshold_seconds > 0
+                and paused_for >= pause_threshold_seconds
+            )
+            # Need both — see docstring.
+            if not (stalled_signal and paused_signal):
+                continue
+            recommendations.append({
+                "goal_id": goal.id,
+                "name": goal.name,
+                "status": goal.status,
+                "reason": (
+                    "stalled for "
+                    f"{int(stall_age or 0)}s and paused for "
+                    f"{int(paused_for or 0)}s — both above threshold; "
+                    "appears abandoned"
+                ),
+                "stall_seconds": stall_age,
+                "paused_seconds": paused_for,
+            })
+        return recommendations
+
+    def recommend_priorities(
+        self,
+        now: Optional[datetime] = None,
+    ) -> List[Dict[str, Any]]:
+        """Return deterministic priority recommendations without applying.
+
+        Each record is shaped::
+
+            {
+                "goal_id": str,
+                "name": str,
+                "current": str,
+                "recommended": str,
+                "reason": str,
+            }
+
+        Goals whose heuristic recommendation equals the current priority
+        are NOT included — manual priorities are preserved unless there
+        is a clear reason to flag a change (Phase 7 spec: "preserve
+        manual priorities unless there is a clear reason to recommend a
+        change"). The algorithm is intentionally simple and
+        deterministic: bumps are stacked, then mapped to the priority
+        rank.
+
+        Heuristic rules (each adds ``+1`` to the bump count for non-
+        -active goals; the active goal is left at its current priority
+        so Phase 5's selection loop is not disturbed):
+
+            * blocked (Phase 5 ``is_blocked`` returns True)
+            * stalled (``_age_seconds`` exceeds the default threshold)
+            * paused (this Phase's ``_PAUSED_STATUS``)
+        """
+        base = now or datetime.now(timezone.utc)
+        default_stall = 7 * 24 * 3600  # one week
+        # Rank-ordered priority buckets. Lower numeric = higher
+        # priority. The +5 ceiling maps any deeply-buried goal to the
+        # ``"optional"`` bucket rather than to a synthetic "unknown"
+        # tier that the Phase 5 scheduler places at the bottom.
+        rank_to_priority = (
+            "critical",
+            "high",
+            "medium",
+            "low",
+            "optional",
+        )
+        with self._lock:
+            snapshot = list(self._goals.values())
+        recs: List[Dict[str, Any]] = []
+        for goal in snapshot:
+            if goal.status in self._TERMINAL_STATUSES:
+                continue
+            # Phase 5 active marker takes priority — do not recommend
+            # bumping an active goal away from where Freya is currently
+            # spending cycles.
+            if goal.id == self._active_goal_id:
+                continue
+            bump = 0
+            signals: List[str] = []
+            if self.is_blocked(goal.id):
+                bump += 1
+                signals.append("blocked")
+            age = self._age_seconds(goal, now=base)
+            if age is not None and age >= default_stall:
+                bump += 1
+                signals.append("stalled")
+            if goal.status == self._PAUSED_STATUS:
+                bump += 1
+                signals.append("paused")
+            if bump == 0:
+                continue
+            current_idx = min(
+                self._priority_rank(goal.priority),
+                len(rank_to_priority) - 1,
+            )
+            recommended_idx = min(
+                current_idx + bump,
+                len(rank_to_priority) - 1,
+            )
+            current_priority = rank_to_priority[current_idx]
+            recommended_priority = rank_to_priority[recommended_idx]
+            if current_priority == recommended_priority:
+                # Heuristic agrees with the manual priority — do not
+                # emit a recommendation (Phase 7 spec).
+                continue
+            recs.append({
+                "goal_id": goal.id,
+                "name": goal.name,
+                "current": current_priority,
+                "recommended": recommended_priority,
+                "reason": (
+                    f"signals=[{', '.join(signals)}] → "
+                    f"deprioritize by {bump} step(s)"
+                ),
+            })
+        return recs
 
 
 @dataclass

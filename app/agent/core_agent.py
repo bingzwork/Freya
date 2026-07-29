@@ -2,7 +2,7 @@ from app.agent.executor import Executor
 from app.agent.planner import Planner
 from app.brain.state import ConversationState
 from app.core.llm import LLM
-from typing import Optional
+from typing import Optional, Dict, List, Any
 from app.core.logger import logger
 from app.core.project_index import ProjectIndex
 from app.core.symbol_index import SymbolIndex
@@ -24,6 +24,8 @@ from app.intent import (
 from app.memory.project_memory import ProjectMemory
 from app.memory.experience_memory import ExperienceMemory
 from app.memory.engineering_lessons import EngineeringLessonStorage, LessonSeverity, LessonType
+from app.memory.goals import GoalStorage
+from app.memory.goals import GoalStorage
 from app.verification.repair_loop import RepairLoop
 from app.verification.runner import VerificationRunner
 from app.rag import SimpleRetriever
@@ -203,6 +205,7 @@ class FreyaAgent:
         self.memory = ProjectMemory(workspace)
         self.experience_memory = ExperienceMemory(workspace)
         self.engineering_lessons = EngineeringLessonStorage(workspace)
+        self.goal_storage = GoalStorage(workspace)
         self.executor = Executor(self.llm, self.tools, engineering_lessons=self.engineering_lessons)
         self.patch_engine = PatchEngine()
         self.patch_generator = PatchGenerator(self.llm, self.patch_engine)
@@ -621,6 +624,229 @@ Tool results:
             # Capture is best-effort; never let logging disturb the repair outcome.
             logger.warning(f"Failed to record repair lesson: {exc}")
         return result
+
+    # ------------------------------------------------------------------
+    # Phase 8 — Goal-driven execution (Planner Integration).
+    # ------------------------------------------------------------------
+
+    def run_active_goal(
+        self,
+        goal_id: Optional[str] = None,
+        allow_mutations: bool = True,
+        max_iterations: int = 3,
+    ) -> Dict[str, Any]:
+        """Execute the active goal (or a specific goal) through the planning pipeline.
+
+        Workflow:
+            Active Goal → Planner → Task Plan → Tool Selection → Execution
+            → Memory Update → Goal Update → Repeat (if goal not complete)
+
+        Args:
+            goal_id: Optional specific goal ID to run. If None, uses the
+                currently active goal, or selects the next eligible goal via
+                ``GoalStorage.select_next()``.
+            allow_mutations: Whether mutating tools (write, run_terminal, etc.)
+                are permitted. Defaults to True.
+            max_iterations: Maximum planning/execution iterations per goal
+                before yielding control. Defaults to 3.
+
+        Returns:
+            Dict with keys:
+                - "goal_id": The goal that was executed
+                - "goal_name": Name of the goal
+                - "completed": Whether the goal reached "completed" status
+                - "iterations": Number of plan/execute iterations performed
+                - "history": List of iteration records with plans and results
+                - "progress": Goal progress metrics after execution
+        """
+        from app.core.logger import logger
+
+        # Resolve the goal to execute
+        if goal_id is not None:
+            goal = self.goal_storage.load(goal_id)
+            if goal is None:
+                return {"error": f"Goal '{goal_id}' not found", "completed": False}
+            # Set as active
+            self.goal_storage.set_active(goal_id)
+        else:
+            active = self.goal_storage.active_goal()
+            if active is None:
+                # No active goal — try to select the next eligible one
+                next_goal = self.goal_storage.select_next()
+                if next_goal is None:
+                    return {"error": "No eligible goals to execute", "completed": False}
+                goal = next_goal
+            else:
+                goal = active
+
+        logger.info(f"[Goal Execution] Starting: {goal.name} ({goal.id})")
+        logger.info(f"[Goal Execution] Description: {goal.description}")
+
+        # Track iterations for this goal execution
+        history = []
+        iterations = 0
+
+        for iteration in range(1, max_iterations + 1):
+            iterations = iteration
+
+            # Build task description from goal
+            task_description = goal.description or goal.name
+
+            # 1. Plan
+            logger.info(f"[Goal Execution] Iteration {iteration}: Planning...")
+            context = self.build_context(task_description)
+            memory_context = self.memory.context()
+
+            plan = self.planner.create_plan(task_description)
+
+            # If plan is empty (non-engineering task), stop
+            if not plan.get("steps"):
+                logger.info("[Goal Execution] Empty plan — task may be non-engineering")
+                break
+
+            # 2. Execute
+            logger.info(f"[Goal Execution] Iteration {iteration}: Executing plan with {len(plan['steps'])} steps")
+            allowed_tools = set(Executor.READ_ONLY_TOOLS)
+            if allow_mutations:
+                allowed_tools.update(Executor.MUTATING_TOOLS)
+
+            execution_results = self.executor.execute_plan(plan, allowed_tools)
+
+            # 3. Record iteration
+            iter_record = {
+                "iteration": iteration,
+                "goal_id": goal.id,
+                "goal_name": goal.name,
+                "plan": plan,
+                "execution_results": execution_results,
+            }
+            history.append(iter_record)
+
+            # 4. Update goal status based on progress
+            # Check if all child goals are completed (progress = 100%)
+            progress = self.goal_storage.progress(goal.id)
+            logger.info(f"[Goal Execution] Iteration {iteration}: Progress {progress['percentage']:.1f}% "
+                        f"({progress['completed_children']}/{progress['total_children']})")
+
+            # 5. Memory update - record the execution
+            outcome_summary = self._summarize_execution_results(execution_results)
+            self.memory.record(
+                "goal_execution",
+                {
+                    "goal_id": goal.id,
+                    "goal_name": goal.name,
+                    "iteration": iteration,
+                    "plan_steps": plan.get("steps", []),
+                    "outcome": outcome_summary,
+                },
+            )
+
+            # 6. Check if goal should be marked complete
+            # A goal is complete when: it has children and all are completed,
+            # OR it's a leaf with status set to completed explicitly
+            if progress["total_children"] > 0 and progress["percentage"] >= 100.0:
+                # All children done — propagate completion upward
+                self.goal_storage.complete(goal.id)
+                logger.info(f"[Goal Execution] Goal '{goal.name}' completed via child propagation")
+                break
+
+            # For leaf goals (no children), check if the execution achieved the goal
+            # This is heuristic: if we've run max iterations or the plan had no actionable steps
+            if progress["total_children"] == 0 and iteration >= max_iterations:
+                # Leaf goal reached max iterations — mark as completed
+                self.goal_storage.update(goal.id, status="completed")
+                logger.info(f"[Goal Execution] Leaf goal '{goal.name}' marked completed after {iteration} iterations")
+                break
+
+        # Final progress after execution
+        final_progress = self.goal_storage.progress(goal.id)
+        is_completed = self.goal_storage.is_completed(goal.id)
+
+        result = {
+            "goal_id": goal.id,
+            "goal_name": goal.name,
+            "completed": is_completed,
+            "iterations": iterations,
+            "history": history,
+            "progress": final_progress,
+        }
+
+        logger.info(f"[Goal Execution] Finished: {goal.name} — completed={is_completed}, "
+                    f"progress={final_progress['percentage']:.1f}%")
+        return result
+
+    def _summarize_execution_results(self, results: List[Dict[str, Any]]) -> str:
+        """Create a brief summary of execution results for memory recording."""
+        if not results:
+            return "No steps executed"
+
+        successful = sum(1 for r in results if r.get("result", {}).get("error") is None)
+        failed = len(results) - successful
+        return f"Executed {len(results)} steps: {successful} successful, {failed} failed"
+
+    def run_goal_loop(
+        self,
+        allow_mutations: bool = True,
+        max_goals: int = 10,
+        max_iterations_per_goal: int = 3,
+    ) -> Dict[str, Any]:
+        """Run continuous goal-driven execution loop.
+
+        Repeatedly selects the next eligible goal, executes it via
+        ``run_active_goal``, and continues until no eligible goals remain
+        or ``max_goals`` is reached.
+
+        Args:
+            allow_mutations: Whether mutating tools are permitted.
+            max_goals: Maximum number of goals to execute in this loop.
+            max_iterations_per_goal: Max iterations per individual goal.
+
+        Returns:
+            Dict with keys:
+                - "goals_executed": List of goal execution results
+                - "goals_completed": Number of goals that reached completed status
+                - "goals_remaining": Number of eligible goals left in queue
+        """
+        from app.core.logger import logger
+
+        executed = []
+        completed_count = 0
+
+        for i in range(max_goals):
+            # Select next goal
+            next_goal = self.goal_storage.select_next()
+            if next_goal is None:
+                logger.info("[Goal Loop] No eligible goals remaining")
+                break
+
+            logger.info(f"[Goal Loop] Executing goal {i+1}/{max_goals}: {next_goal.name}")
+
+            # Execute the goal
+            result = self.run_active_goal(
+                goal_id=next_goal.id,
+                allow_mutations=allow_mutations,
+                max_iterations=max_iterations_per_goal,
+            )
+
+            executed.append(result)
+            if result.get("completed"):
+                completed_count += 1
+
+            # If goal was not completed but we should continue, check queue
+            # The loop will naturally select the next goal via select_next()
+
+        # Check remaining queue
+        remaining_queue = len(self.goal_storage.queue())
+
+        summary = {
+            "goals_executed": executed,
+            "goals_completed": completed_count,
+            "goals_remaining": remaining_queue,
+        }
+
+        logger.info(f"[Goal Loop] Finished: {completed_count}/{len(executed)} goals completed, "
+                    f"{remaining_queue} remaining in queue")
+        return summary
 
     # ------------------------------------------------------------------
     # Priority 3 helpers (Self-Learning read-side).
