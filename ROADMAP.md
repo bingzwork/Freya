@@ -25,7 +25,7 @@ The codebase already contains mature foundation modules across planning, memory,
 | Area                            | Status                         |
 | ------------------------------- | ------------------------------ |
 | Natural Conversation            | Mostly Complete                |
-| Goal Management                 | Not Implemented                |
+| Goal Management                 | Foundation (Phase 1)            |
 | Memory System                   | Partial                         |
 | Planning and Reasoning          | Not Implemented                |
 | Decision Making                 | Not Implemented                |
@@ -266,6 +266,10 @@ Move from reactive assistance toward proactive operation.
 ### Expected Outcome
 
 Freya operates continuously with minimal supervision.
+
+### Progress
+
+* Goal Management Phase 1 — Goal Data Model: ✅ Complete. `Goal` dataclass + JSON-file persistence (`GoalStorage` with `create` / `update` / `delete` / `list` / `save` / `load`) live in `app/memory/goals.py`; exported via `app/memory/__init__.py`; covered by 24 tests in `tests/test_goals.py`. Phase 2 (formalised status / priority enums, timestamps, hierarchy cascade / dangling-reference repair) and the standalone Stage 2–Stage 5 features in `GOAL_MANAGEMENT.md` remain out of scope.
 
 ---
 
