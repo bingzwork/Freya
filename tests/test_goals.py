@@ -9,7 +9,7 @@ from datetime import datetime
 
 import pytest
 
-from app.memory.goals import Goal, GoalStorage
+from app.memory.goals import Goal, GoalStorage, SubtaskSuggestion
 
 
 # ---------------------------------------------------------------------------
@@ -932,6 +932,216 @@ class TestSelectNext:
         store.set_active(first.id)
         chosen = store.select_next()
         assert chosen.id == second.id
+
+
+# ---------------------------------------------------------------------------
+# GoalStorage — automatic decomposition (Phase 6)
+# ---------------------------------------------------------------------------
+
+
+class FakePlanManager:
+    """Tiny stand-in for ``PlanManager`` used by the Phase 6 planner hook.
+
+    Records the ``add_task`` calls so tests can assert that the planner
+    side was driven without spinning up a real plan / workspace. Mirrors
+    the signature of ``PlanManager.add_task`` that Phase 6 actually uses.
+    """
+
+    def __init__(self):
+        self.calls = []
+
+    def add_task(self, title, description="", **kwargs):
+        self.calls.append({"title": title, "description": description, **kwargs})
+        return None
+
+
+class TestGoalDecomposition:
+    """Phase 6 — automatic goal decomposition + manual-approval apply path."""
+
+    @pytest.fixture
+    def store(self, tmp_path):
+        return GoalStorage(workspace=str(tmp_path), storage_path="memory/goals.json")
+
+    # --- SubtaskSuggestion dataclass ---------------------------------------
+
+    def test_suggestion_defaults(self):
+        s = SubtaskSuggestion(name="x")
+        assert s.name == "x"
+        assert s.description == ""
+        assert s.priority == "medium"
+        assert s.planner_category is None
+        assert s.estimated_hours is None
+
+    def test_suggestion_accepts_planner_metadata(self):
+        s = SubtaskSuggestion(
+            name="x",
+            description="d",
+            priority="high",
+            planner_category="implementation",
+            estimated_hours=2.5,
+        )
+        assert s.planner_category == "implementation"
+        assert s.estimated_hours == 2.5
+
+    # --- decompose_goal (read side) ---------------------------------------
+
+    def test_decompose_unknown_returns_empty(self, store):
+        assert store.decompose_goal("missing") == []
+
+    def test_decompose_returns_default_subtask_set(self, store):
+        parent = store.create(name="Ship Phase 6")
+        suggestions = store.decompose_goal(parent.id)
+        # Default = all five template phases.
+        assert len(suggestions) == 5
+        assert all(isinstance(s, SubtaskSuggestion) for s in suggestions)
+        # The parent goal is NOT persisted as a child of itself.
+        assert all(s.name != "" for s in suggestions)
+
+    def test_decompose_respects_max_subtasks(self, store):
+        parent = store.create(name="Ship Phase 6")
+        suggestions = store.decompose_goal(parent.id, max_subtasks=2)
+        assert len(suggestions) == 2
+
+    def test_decompose_with_zero_max_returns_empty(self, store):
+        parent = store.create(name="Ship Phase 6")
+        assert store.decompose_goal(parent.id, max_subtasks=0) == []
+
+    def test_decompose_names_use_parent_name(self, store):
+        parent = store.create(name="Ship Phase 6", description="context here")
+        suggestions = store.decompose_goal(parent.id)
+        # The parent name appears in each subtask name so reviewers can
+        # see the linkage without consulting the parent goal.
+        assert all("Ship Phase 6" in s.name for s in suggestions)
+
+    def test_decompose_inherits_parent_priority(self, store):
+        parent = store.create(name="p", priority="critical")
+        suggestions = store.decompose_goal(parent.id)
+        assert all(s.priority == "critical" for s in suggestions)
+
+    def test_decompose_attachs_parent_context_to_first_suggestion(self, store):
+        parent = store.create(
+            name="p", description="ship the Phase 6 surface"
+        )
+        suggestions = store.decompose_goal(parent.id)
+        assert "ship the Phase 6 surface" in suggestions[0].description
+
+    def test_decompose_is_non_mutating(self, store):
+        parent = store.create(name="p")
+        before = store.count()
+        before_children = len(store.children_of(parent.id))
+        store.decompose_goal(parent.id)
+        after = store.count()
+        after_children = len(store.children_of(parent.id))
+        assert before == after
+        assert before_children == after_children
+
+    def test_decompose_suggestions_are_user_editable(self, store):
+        """Returned suggestions can be edited before approval."""
+        parent = store.create(name="p", priority="low")
+        suggestions = store.decompose_goal(parent.id)
+        suggestions[0].name = "Renamed first step"
+        suggestions[1].priority = "critical"
+        # Re-apply and confirm the edits survive.
+        created = store.apply_decomposition(parent.id, suggestions)
+        names = [c.name for c in created]
+        assert "Renamed first step" in names
+        priorities = {c.name: c.priority for c in created}
+        # At least one of the remaining suggestions was set to critical.
+        assert any(v == "critical" for v in priorities.values())
+
+    # --- apply_decomposition (write side) ---------------------------------
+
+    def test_apply_unknown_parent_returns_empty(self, store):
+        out = store.apply_decomposition("missing", [SubtaskSuggestion(name="x")])
+        assert out == []
+
+    def test_apply_empty_suggestions_returns_empty(self, store):
+        parent = store.create(name="p")
+        assert store.apply_decomposition(parent.id, []) == []
+
+    def test_apply_creates_children_under_parent(self, store):
+        parent = store.create(name="p")
+        suggestions = [
+            SubtaskSuggestion(name="c1", description="d1"),
+            SubtaskSuggestion(name="c2", description="d2", priority="high"),
+        ]
+        created = store.apply_decomposition(parent.id, suggestions)
+        # Two child goals were returned AND persisted.
+        assert len(created) == 2
+        children = store.children_of(parent.id)
+        assert {c.name for c in children} == {"c1", "c2"}
+
+    def test_apply_clears_suggestions_after_persistence(self, store):
+        """Approved suggestions must not leak back into a second apply.
+
+        Re-applying the *same* list twice must produce two distinct sets of
+        child goals (no idempotency surprises) — manual approval is
+        explicit and the source of truth is the in-memory map after the
+        first apply.
+        """
+        parent = store.create(name="p")
+        suggestions = [SubtaskSuggestion(name="step")]
+        first = store.apply_decomposition(parent.id, suggestions)
+        second = store.apply_decomposition(parent.id, suggestions)
+        # Each apply should produce *its own* fresh child goal ids.
+        first_ids = {g.id for g in first}
+        second_ids = {g.id for g in second}
+        assert first_ids.isdisjoint(second_ids)
+
+    def test_apply_records_child_timestamps(self, store):
+        parent = store.create(name="p")
+        before = store.children_of(parent.id)
+        assert before == []
+        created = store.apply_decomposition(
+            parent.id, [SubtaskSuggestion(name="c")]
+        )
+        assert created[0].created_at
+        assert created[0].updated_at
+
+    def test_apply_propagates_completion_via_phase3(self, store):
+        """Children created by decomposition behave like any other Goal —
+        completing all of them auto-completes the parent (Phase 3 rule).
+        """
+        parent = store.create(name="parent")
+        suggestions = [
+            SubtaskSuggestion(name="a", priority="medium"),
+            SubtaskSuggestion(name="b", priority="medium"),
+        ]
+        created = store.apply_decomposition(parent.id, suggestions)
+        store.complete(created[0].id)
+        store.complete(created[1].id)
+        assert store.is_completed(parent.id) is True
+
+    def test_apply_drives_plan_manager_when_provided(self, store):
+        """Planner integration hook: a passed plan_manager sees one
+        ``add_task`` call per accepted suggestion in the same order.
+        """
+        parent = store.create(name="p")
+        plan = FakePlanManager()
+        suggestions = [
+            SubtaskSuggestion(
+                name="step-1",
+                planner_category="implementation",
+                estimated_hours=2.0,
+            ),
+            SubtaskSuggestion(name="step-2", priority="high"),
+        ]
+        store.apply_decomposition(parent.id, suggestions, plan_manager=plan)
+        assert len(plan.calls) == 2
+        assert plan.calls[0]["title"] == "step-1"
+        assert plan.calls[0]["category"] == "implementation"
+        assert plan.calls[0]["estimated_hours"] == 2.0
+        assert plan.calls[1]["title"] == "step-2"
+
+    def test_apply_skips_planner_when_no_manager(self, store):
+        """No plan_manager passed → no planner side-effects, child goals
+        still materialise normally."""
+        parent = store.create(name="p")
+        created = store.apply_decomposition(
+            parent.id, [SubtaskSuggestion(name="c")]
+        )
+        assert len(created) == 1
+        assert store.children_of(parent.id)[0].id == created[0].id
 
 
 

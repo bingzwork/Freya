@@ -519,3 +519,166 @@ class GoalStorage:
             self._save_file()
             return chosen
 
+    # --- decomposition (Phase 6) -----------------------------------------
+
+    # Deterministic, template-based expansion used by ``GoalDecomposer``.
+    # Phase 6 ships a non-LLM expander so the surface is testable without
+    # a provider; the order is the priority order — earliest-first wins
+    # under ``max_subtasks`` truncation.
+    _DECOMPOSE_PHASES = (
+        ("Plan", "Plan and break down the work for the parent goal."),
+        ("Implement", "Implement the core functionality of the parent goal."),
+        ("Test", "Verify behaviour end-to-end against the parent goal."),
+        ("Document", "Document the changes delivered for the parent goal."),
+        ("Review", "Review and finalize the work for the parent goal."),
+    )
+
+    def decompose_goal(
+        self,
+        goal_id: str,
+        max_subtasks: int = 5,
+    ) -> List["SubtaskSuggestion"]:
+        """Return suggested child-goal drafts for ``goal_id``.
+
+        This is the **non-mutating** read-side of Phase 6: callers receive
+        a list of ``SubtaskSuggestion`` objects representing candidate
+        child goals but **nothing is written to disk**. Use
+        ``apply_decomposition`` to materialise approved suggestions.
+
+        Returns an empty list when ``goal_id`` does not exist. The number
+        of returned suggestions is ``min(max_subtasks, len(_DECOMPOSE_PHASES))``
+        and is capped at ``0`` when ``max_subtasks`` is non-positive.
+        Subtask priorities default to the parent goal's priority so the
+        scheduler (Phase 5) treats them as a coherent group until the user
+        edits them.
+        """
+        with self._lock:
+            parent = self._goals.get(goal_id)
+            if parent is None:
+                return []
+            inherited_priority = parent.priority
+            parent_name = parent.name
+            parent_description = parent.description
+
+        if max_subtasks <= 0:
+            return []
+        phase_count = min(max_subtasks, len(self._DECOMPOSE_PHASES))
+        suggestions: List["SubtaskSuggestion"] = []
+        for index in range(phase_count):
+            phase_name, phase_desc = self._DECOMPOSE_PHASES[index]
+            suggestions.append(
+                SubtaskSuggestion(
+                    name=f"{phase_name}: {parent_name}",
+                    description=phase_desc,
+                    priority=inherited_priority,
+                )
+            )
+        # Attach parent context to the first suggestion so reviewers can
+        # surface the linkage without re-resolving the parent goal.
+        if suggestions and parent_description:
+            suggestions[0].description = (
+                f"{suggestions[0].description}\n\n"
+                f"Parent goal context: {parent_description}"
+            )
+        return suggestions
+
+    def apply_decomposition(
+        self,
+        goal_id: str,
+        suggestions: List["SubtaskSuggestion"],
+        plan_manager: Optional[Any] = None,
+    ) -> List[Goal]:
+        """Persist ``suggestions`` as child goals of ``goal_id``.
+
+        This is the **mutating** write-side of Phase 6 — the explicit
+        manual-approval step. Each suggestion produces a child ``Goal``
+        via the existing ``create(..., parent_goal_id=...)`` path, so the
+        standard hierarchy invariants (Phase 3) apply automatically.
+
+        When ``plan_manager`` is supplied, each accepted suggestion is
+        also mirrored as a ``Task`` in the manager's active plan via the
+        existing ``PlanManager.add_task(...)`` surface (no new planner
+        surface is added in Phase 6 — the goal side is the source of
+        truth and the planner side is a parallel projection). This is
+        the **Planner integration** hook for Phase 6.
+
+        ``suggestions`` referencing unknown parent id (``None`` /
+        invalid / empty list) are ignored — the call returns ``[]`` rather
+        than raising. Suggestions are applied in order, so callers that
+        want ``depends_on_ids`` between siblings can post-edit the created
+        goals via the Phase 1 ``update()`` verb after approval.
+        """
+        if not suggestions:
+            return []
+        with self._lock:
+            if goal_id not in self._goals:
+                return []
+            created: List[Goal] = []
+            for suggestion in suggestions:
+                child = self.create(
+                    name=suggestion.name,
+                    description=suggestion.description,
+                    priority=suggestion.priority,
+                    parent_goal_id=goal_id,
+                )
+                created.append(child)
+
+        # Planner integration happens after the goal-side persistence so
+        # a planner failure can't roll back the goal tree. Errors are
+        # swallowed (logged via the standard logger) — the goal side
+        # remains the source of truth and surviving child count is
+        # returned either way.
+        if plan_manager is not None:
+            try:
+                for suggestion in suggestions:
+                    kwargs = {}
+                    if suggestion.planner_category is not None:
+                        kwargs["category"] = suggestion.planner_category
+                    if suggestion.estimated_hours is not None:
+                        kwargs["estimated_hours"] = suggestion.estimated_hours
+                    plan_manager.add_task(
+                        title=suggestion.name,
+                        description=suggestion.description,
+                        **kwargs,
+                    )
+            except Exception as exc:  # noqa: BLE001
+                from app.core.logger import logger
+                logger.warning(
+                    "[goals] planner side of decomposition failed: %s", exc
+                )
+
+        return created
+
+
+@dataclass
+class SubtaskSuggestion:
+    """A draft child-goal proposal produced by ``GoalStorage.decompose_goal``.
+
+    Suggestions are deliberately inert: they are returned to the caller by
+    ``decompose_goal`` and only materialise as real ``Goal`` records when
+    passed to ``apply_decomposition``. This is the manual-approval gate
+    for Phase 6 — users can review, edit, or drop suggestions before they
+    become persistent child goals.
+
+    Attributes:
+        name: Human-readable name for the proposed child goal.
+        description: Longer description of the proposed child goal
+            (default mirrors the decompose-template description, with the
+            parent context appended on the first suggestion).
+        priority: Inherited from the parent goal by default; callers may
+            override per-suggestion before calling
+            ``apply_decomposition``.
+        planner_category: Optional planner ``TaskCategory`` (or any value
+            accepted by ``PlanManager.add_task``) — when set and a
+            ``plan_manager`` is supplied to ``apply_decomposition``, the
+            parallel planner ``Task`` is created with this category.
+        estimated_hours: Optional forwarded estimate for the parallel
+            planner ``Task``; defaults to ``None`` (planner uses its own
+            default).
+    """
+
+    name: str
+    description: str = ""
+    priority: str = "medium"
+    planner_category: Optional[Any] = None
+    estimated_hours: Optional[float] = None

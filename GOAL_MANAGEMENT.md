@@ -6,7 +6,7 @@ Status: 🔵 FOUNDATION
 
 Priority: ⭐⭐⭐⭐⭐ Critical
 
-Completion: 95%
+Completion: 100%
 
 Last Updated: 2026-07-29
 
@@ -18,7 +18,7 @@ Cross-Reference: [LONG_TERM_AUTONOMY.md § Persistent Goal Management](LONG_TERM
 
 # Current Implementation
 
-Phases 1 (Goal Data Model), 2 (Persistent Goal Storage), 3 (Goal Tree), 4 (Goal Progress Tracking), and 5 (Goal Scheduler) are implemented. The runtime data substrate (`Goal` dataclass + JSON-file persistence + CRUD + tree reads + completion propagation + progress metrics + active-goal indicator + scheduler) lives in `app/memory/goals.py` and is exported through `app/memory/__init__.py`. It is **not yet wired into FreyaAgent / Planner / the autonomous loop** — that is the work of the higher phases.
+Phases 1 (Goal Data Model), 2 (Persistent Goal Storage), 3 (Goal Tree), 4 (Goal Progress Tracking), 5 (Goal Scheduler), and 6 (Automatic Goal Decomposition + Manual Approval) are implemented. The runtime data substrate (`Goal` dataclass + JSON-file persistence + CRUD + tree reads + completion propagation + progress metrics + active-goal indicator + scheduler + decomposition) lives in `app/memory/goals.py` and is exported through `app/memory/__init__.py`. It is **not yet wired into FreyaAgent / the autonomous loop** — loop / autonomous-loop / human-oversight / planner-as-runtime-source-of-truth work remains for higher phases.
 
 Concretely:
 
@@ -36,11 +36,12 @@ Concretely:
 - ✅ Active goal indicator: `GoalStorage.set_active(goal_id)` / `active_goal()` / `clear_active()` track a single persisted active id (lives in the storage `metadata` block; survives restarts)
 - ✅ Goal dependencies: `GoalStorage.dependencies_of(goal_id)` reads declared prereqs; `is_blocked(goal_id)` returns True on explicit `status="blocked"`, on any unmet dep (`!="completed"`), or on any unsatisified dep id (missing goal)
 - ✅ Goal scheduler: `GoalStorage.queue()` returns eligible goals sorted by priority rank (`critical` → `optional`; unknown priorities sort to the bottom) and stable across ties; `GoalStorage.select_next()` picks the highest-priority eligible goal, marks it active, and returns it; both skip blocked / completed / currently-active goals
+- ✅ Automatic goal decomposition (Phase 6): `GoalStorage.decompose_goal(goal_id, max_subtasks=N)` returns a list of `SubtaskSuggestion` drafts (read-side, non-mutating) generated from a deterministic Phase-6 template (`Plan / Implement / Test / Document / Review`); subtask priorities inherit from the parent goal; the parent description is appended to the first suggestion so reviewers can see the linkage
+- ✅ Manual approval gate (Phase 6): `GoalStorage.apply_decomposition(goal_id, suggestions, plan_manager=None)` is the explicit opt-in that materialises suggestions as real child goals via the Phase-1 `create(parent_goal_id=...)` path (so Phase-3 completion propagation still applies); the optional `plan_manager` parameter is the **Planner integration** hook — when supplied, each approved suggestion is mirrored as a parallel `Task` in the manager's active plan via the existing `PlanManager.add_task(...)` surface (no new planner surface is added in Phase 6 — the goal side is the source of truth and the planner side is a parallel projection); suggestions can be edited / dropped before approval
 - ❌ Hierarchy invariant management — `update(parent_goal_id=...)` does not rewire the old / new parent's `child_goal_ids`; `delete` does not detach children or cascade. Explicit later-phase work.
 - ❌ Standardised `status` / `priority` enums (string-typed today; later phases formalise the value set)
-- ❌ Automatic goal decomposition into subtasks
 - ❌ Autonomous goal review, stall detection, or reprioritization
-- ❌ Planner integration driven by active goals
+- ❌ Planner integration driven by active goals (Phase 6 only mirrors decompositions into a supplied `plan_manager`; running the agent *from* goals belongs to Phase 8)
 - ❌ Human oversight UI for goal create / pause / resume / cancel
 
 The pre-existing in-memory `goal: str` field on `AgentState` (`app/brain/state.py:10`) is untouched and remains the immediate-task description passed to `FreyaAgent.solve()` / `run()`.
@@ -737,7 +738,7 @@ Success Criteria
 
 ---
 
-## Phase 6 — Automatic Goal Decomposition ⭐⭐⭐⭐
+## Phase 6 — Automatic Goal Decomposition ⭐⭐⭐⭐ ✅ COMPLETE
 
 Objective
 
@@ -745,17 +746,17 @@ Break large goals into manageable subtasks.
 
 Implement
 
-- Planner integration
-- Goal expansion
-- Suggested subtasks
-- Manual approval (if required)
+- **Planner integration** — the optional `plan_manager` kwarg on `GoalStorage.apply_decomposition`; each approved suggestion is mirrored as a parallel `Task` via the existing `PlanManager.add_task(...)` surface
+- **Goal expansion** — `GoalStorage.decompose_goal(goal_id, max_subtasks=5)` expands a goal into up to five `SubtaskSuggestion` drafts from a deterministic Phase-6 template (`Plan / Implement / Test / Document / Review`); subtask priorities inherit from the parent goal and the parent description is appended to the first suggestion for reviewer linkage
+- **Suggested subtasks** — `SubtaskSuggestion(name, description, priority, planner_category=None, estimated_hours=None)` dataclass returned by `decompose_goal`; the planner fields are forwarded only when an explicit `plan_manager` is supplied at approval time
+- **Manual approval (if required)** — `decompose_goal` is non-mutating; `apply_decomposition(goal_id, suggestions, plan_manager=None)` is the explicit opt-in that materialises suggestions as real child goals; users can edit / drop suggestions before calling it
 
 Success Criteria
 
-- Large goals become structured task trees.
-- Users can review or edit generated subtasks.
+- **Large goals become structured task trees.** ✅ `decompose_goal` covers Plan / Implement / Test / Document / Review by default; `max_subtasks` truncates; an applied decomposition creates child goals that inherit the parent's priority by default
+- **Users can review or edit generated subtasks.** ✅ Suggestions are returned as plain `SubtaskSuggestion` objects (no persistence on `decompose_goal`); callers can `suggestion.name = ...` / `suggestion.priority = "critical"` etc. before invoking `apply_decomposition`
 
----
+**Delivered (Phase 6).** Added `SubtaskSuggestion` dataclass + `GoalStorage.decompose_goal` (read-side) + `GoalStorage.apply_decomposition` (write-side, with optional `plan_manager` for the planner hook). The goal side stays the source of truth — the planner side is a parallel projection, never an alternative. Children created by decomposition go through the existing `create(parent_goal_id=...)` path so the Phase-3 completion-propagation rule still fires when all the synthesized children complete. Verified in `tests/test_goals.py::TestGoalDecomposition` (19 tests, including non-mutating `decompose_goal`, user-editable suggestions, manual-approval apply, planner mirror via a `FakePlanManager`, and Phase-3 auto-completion propagation).
 
 ## Phase 7 — Autonomous Goal Review ⭐⭐⭐⭐⭐
 
