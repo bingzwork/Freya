@@ -2,6 +2,7 @@ from app.agent.executor import Executor
 from app.agent.planner import Planner
 from app.brain.state import ConversationState
 from app.core.llm import LLM
+from app.planner.plan_manager import PlanManager
 from typing import Optional, Dict, List, Any
 from app.core.logger import logger
 from app.core.project_index import ProjectIndex
@@ -24,7 +25,6 @@ from app.intent import (
 from app.memory.project_memory import ProjectMemory
 from app.memory.experience_memory import ExperienceMemory
 from app.memory.engineering_lessons import EngineeringLessonStorage, LessonSeverity, LessonType
-from app.memory.goals import GoalStorage
 from app.memory.goals import GoalStorage
 from app.verification.repair_loop import RepairLoop
 from app.verification.runner import VerificationRunner
@@ -206,6 +206,7 @@ class FreyaAgent:
         self.experience_memory = ExperienceMemory(workspace)
         self.engineering_lessons = EngineeringLessonStorage(workspace)
         self.goal_storage = GoalStorage(workspace)
+        self.plan_manager = PlanManager(workspace)
         self.executor = Executor(self.llm, self.tools, engineering_lessons=self.engineering_lessons)
         self.patch_engine = PatchEngine()
         self.patch_generator = PatchGenerator(self.llm, self.patch_engine)
@@ -334,7 +335,10 @@ Answer the user's request directly."""
         allowed_tools = set(Executor.READ_ONLY_TOOLS)
         if allow_mutations:
             allowed_tools.update(Executor.MUTATING_TOOLS)
+        # Execute using the Plan object (Executor now accepts Plan or dict)
         results = self.executor.execute_plan(plan, allowed_tools)
+        # For the LLM prompt, use the plan's steps
+        plan_steps = plan.tasks if hasattr(plan, 'tasks') else plan.get("steps", [])
         conversation_history = self.conversation.get_history_text()
         prompt = f"""{conversation_history}
 
@@ -348,7 +352,7 @@ Recent project memory:
 {memory_context}
 
 Execution plan:
-{plan}
+{plan_steps}
 
 Tool results:
 {results}
@@ -418,7 +422,7 @@ Tool results:
             # 1. Plan
             plan = self.planner.create_plan(task)
             # 2. Propose patch based on plan (we treat the plan steps as the sub-task)
-            plan_steps = plan.get("steps", [])
+            plan_steps = plan.tasks if hasattr(plan, 'tasks') else plan.get("steps", [])
             sub_task = "\n".join(plan_steps) if plan_steps else task
             try:
                 proposal = self.patch_generator.propose(sub_task, context)
@@ -700,12 +704,13 @@ Tool results:
             plan = self.planner.create_plan(task_description)
 
             # If plan is empty (non-engineering task), stop
-            if not plan.get("steps"):
+            plan_steps = plan.tasks if hasattr(plan, 'tasks') else plan.get("steps", [])
+            if not plan_steps:
                 logger.info("[Goal Execution] Empty plan — task may be non-engineering")
                 break
 
             # 2. Execute
-            logger.info(f"[Goal Execution] Iteration {iteration}: Executing plan with {len(plan['steps'])} steps")
+            logger.info(f"[Goal Execution] Iteration {iteration}: Executing plan with {len(plan_steps)} steps")
             allowed_tools = set(Executor.READ_ONLY_TOOLS)
             if allow_mutations:
                 allowed_tools.update(Executor.MUTATING_TOOLS)

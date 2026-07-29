@@ -8,6 +8,7 @@ from app.agent.planner import Planner
 from app.agent.executor import Executor
 from app.agent.core_agent import FreyaAgent, _classify_engineering_category
 from app.memory.engineering_lessons import LessonSeverity, LessonType
+from app.planner.plan_manager import Plan
 
 
 class StubLLM:
@@ -33,7 +34,9 @@ class StubTools:
 def test_planner_parses_json_plan() -> None:
     plan = Planner(StubLLM('{"steps": ["inspect files"]}')).create_plan("inspect")
 
-    assert plan == {"steps": ["inspect files"]}
+    assert isinstance(plan, Plan)
+    steps = [t.title for t in plan.tasks]
+    assert steps == ["inspect files"]
 
 
 def test_executor_selects_and_executes_action() -> None:

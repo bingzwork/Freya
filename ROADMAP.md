@@ -27,7 +27,7 @@ The codebase already contains mature foundation modules across planning, memory,
 | Natural Conversation            | Mostly Complete                |
 | Goal Management                 | Functional (Phases 1–8)         |
 | Memory System                   | Partial                         |
-| Planning and Reasoning          | Not Implemented                |
+| Planning and Reasoning          | Phase 1 Complete (PlanManager wired) |
 | Decision Making                 | Not Implemented                |
 | Failure Recovery                | Not Implemented                |
 | World Model                     | Partial                        |
@@ -90,6 +90,7 @@ Replace the legacy planner pipeline with the modern planning framework.
 
 ### Objectives
 
+* Integrate PlanManager as the single source of truth for plans. ✅ **COMPLETE (Phase 1)**
 * Integrate TaskGraph.
 * Integrate Scheduler.
 * Integrate ResourceAllocator.
@@ -100,6 +101,10 @@ Replace the legacy planner pipeline with the modern planning framework.
 ### Expected Outcome
 
 Freya gains structured execution plans capable of managing complex engineering tasks.
+
+### Progress
+
+* Objective 1: `PlanManager` integrated into `FreyaAgent` as the single source of truth; `Planner.create_plan()` creates and populates `Plan` objects; `Executor.execute_plan()` consumes `Plan` objects; backward compatibility with dict plans maintained. ✅ **Complete (2026-07-30)**
 
 ---
 

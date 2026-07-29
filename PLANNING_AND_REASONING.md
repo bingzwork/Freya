@@ -2,9 +2,11 @@
 
 # Planning & Reasoning
 
-- Status: ⚪ NOT IMPLEMENTED — 0% (per `IMPLEMENTATION_STATUS.md` / `ROADMAP.md`)
+- Status: 🔵 FOUNDATION — 25% (Phase 1 complete: PlanManager integrated into FreyaAgent; Planner creates Plan objects; Executor consumes Plan objects)
 - Priority: ⭐⭐⭐⭐⭐ Critical
 - Source of truth: codebase; legacy planner is foundation-only and `app/planner/` modules are not yet wired into the runtime (ROADMAP Phase 2 — Planner Modernization).
+
+---
 
 ---
 
@@ -61,12 +63,13 @@ Status symbols: ✅ Implemented · 🟡 Partial / Foundation · ❌ Not Implemen
 | Experience Memory in run() prompt     | ✅      | `FreyaAgent.run()` reads matching `ExperienceMemory` entries into `Past Experiences:` for the post-execute LLM prompt. |
 | Iterative solve loop                  | ✅      | `FreyaAgent.solve()` repeatedly calls `planner.create_plan()` + `apply_and_verify()` until success or `max_iterations`. |
 | Repair with ANTI_PATTERN lessons      | ✅      | `FreyaAgent.repair()` surfaces matching ANTI_PATTERN lessons on retries. |
+| PlanManager integration (Phase 1)     | ✅      | `PlanManager` is the single source of truth for plans; `Planner.create_plan()` populates a `Plan` object with tasks; `Executor.execute_plan()` consumes the `Plan` object. Backward compatibility with dict plans maintained. |
 | Task decomposition (parent/child)     | ❌      | Plans are flat step lists; no automatic subtasks, no parent/child task relationships. |
 | Task graph (`TaskGraph`)              | 🟡     | Module exists in `app/planner/task_graph.py` with unit tests, but is **not wired into the runtime**. |
 | Scheduler                             | 🟡     | `app/planner/scheduler.py` (ASAP, Priority, Longest-Duration, Deadline, Resource-Optimized) exists and is unit-tested; not imported by `app/agent/`. |
 | Resource Allocator                    | 🟡     | `app/planner/resource_allocator.py` exists with `ResourceType` + capacity tracking; not in runtime. |
 | Progress Tracker                      | 🟡     | `app/planner/progress_tracker.py` + `ProgressSnapshot` exist; not producing runtime progress data. |
-| Plan Manager                          | 🟡     | `app/planner/plan_manager.py` exposes `Plan` / `PlanConfig` / `PlanManager`; not used by `FreyaAgent`. |
+| Plan Manager                          | ✅     | `app/planner/plan_manager.py` exposes `Plan` / `PlanConfig` / `PlanManager`; now used by `FreyaAgent`. |
 | Plan Visualizer                       | 🟡     | `app/planner/plan_visualizer.py` present; not exposed in the runtime. |
 | Multiple solution evaluation          | ❌      | Single LLM-generated plan; alternatives are not generated or compared. |
 | Difficulty / Risk scoring             | ❌      | No explicit difficulty, risk, or confidence scoring for plans; `app/risk/`, `app/confidence/` operate elsewhere in the pipeline, not on the plan itself. |
@@ -76,7 +79,7 @@ Status symbols: ✅ Implemented · 🟡 Partial / Foundation · ❌ Not Implemen
 | Human plan review / modify / reject   | ❌      | The user can approve/deny individual tool calls (`permission_prompt` in `Executor`), but cannot review, modify, reorder, or reject the plan itself. |
 | Planning horizon classification       | ❌      | All tasks use the same 5-step cap; no short/medium/long-horizon policy. |
 
-Foundation modules in `app/planner/` (`task.py`, `task_graph.py`, `scheduler.py`, `resource_allocator.py`, `progress_tracker.py`, `plan_visualizer.py`, `plan_manager.py`) are covered by `tests/test_planner.py` and `tests/test_planner_agent.py`. The runtime path is `FreyaAgent.run() → Planner.create_plan() → Executor.execute_plan() → tool.run()` — none of the modern planner classes participate yet.
+Foundation modules in `app/planner/` (`task.py`, `task_graph.py`, `scheduler.py`, `resource_allocator.py`, `progress_tracker.py`, `plan_visualizer.py`, `plan_manager.py`) are covered by `tests/test_planner.py` and `tests/test_planner_agent.py`. The runtime path is now `FreyaAgent.run() → Planner.create_plan() → PlanManager → Plan → Executor.execute_plan() → tool.run()` — `PlanManager` is the single source of truth for plans.
 
 ---
 
@@ -127,7 +130,7 @@ Only "Create Execution Plan → Execute → Observe Results" are wired today; ev
 
 A practical build order that matches `ROADMAP.md` Phase 2 ("Planner Modernization") and unblocks the higher-order phases. Each row must be promoted from ✗ to ✓ before dependent work can start.
 
-## 1. Critical — Wire `PlanManager` into `FreyaAgent` ⭐⭐⭐⭐⭐
+## 1. Critical — Wire `PlanManager` into `FreyaAgent` ⭐⭐⭐⭐⭐ **✅ COMPLETE**
 
 **Description.** Replace the ad-hoc `Planner.create_plan()` JSON dict with `app.planner.plan_manager.PlanManager` as the source of truth for plans. `Planner.create_plan()` becomes the LLM call that populates a `Plan`, and `Executor.execute_plan()` consumes it.
 

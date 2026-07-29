@@ -9,6 +9,7 @@ import tempfile
 import pytest
 
 from app.agent.planner import Planner
+from app.planner.plan_manager import Plan
 from app.memory.engineering_lessons import (
     EngineeringLessonStorage,
     LessonSeverity,
@@ -46,40 +47,47 @@ class StubMemory:
 
 def test_planner_parses_clean_json_plan():
     plan = Planner(StubLLM('{"steps": ["Read main.py", "Run pytest"]}')).create_plan("build")
-    assert plan == {"steps": ["Read main.py", "Run pytest"]}
+    assert isinstance(plan, Plan)
+    steps = [t.title for t in plan.tasks]
+    assert steps == ["Read main.py", "Run pytest"]
 
 
 def test_planner_strips_markdown_fences():
     plan = Planner(StubLLM('```json\n{"steps": ["Run pytest"]}\n```')).create_plan("test")
-    assert plan == {"steps": ["Run pytest"]}
+    assert isinstance(plan, Plan)
+    steps = [t.title for t in plan.tasks]
+    assert steps == ["Run pytest"]
 
 
 def test_planner_returns_empty_steps_for_non_engineering_task():
     plan = Planner(StubLLM('{"steps": []}')).create_plan("What is Python?")
-    assert plan == {"steps": []}
+    assert isinstance(plan, Plan)
+    assert plan.tasks == []
 
 
 def test_planner_caps_steps_at_five():
     raw = json.dumps({"steps": [f"step {i}" for i in range(10)]})
     plan = Planner(StubLLM(raw)).create_plan("build a lot")
-    assert len(plan["steps"]) == 5
-    assert plan["steps"][0] == "step 0"
+    assert isinstance(plan, Plan)
+    assert len(plan.tasks) == 5
+    assert plan.tasks[0].title == "step 0"
 
 
 def test_planner_wraps_garbage_response_in_fallback_step():
     plan = Planner(StubLLM("not json at all")).create_plan("do thing")
     # Garbage is wrapped into a single string step rather than blowing up.
-    assert "steps" in plan
-    assert len(plan["steps"]) == 1
-    assert isinstance(plan["steps"][0], str)
-    assert plan["steps"][0] == "not json at all"
+    assert isinstance(plan, Plan)
+    assert len(plan.tasks) == 1
+    assert isinstance(plan.tasks[0].title, str)
+    assert plan.tasks[0].title == "not json at all"
 
 
 def test_planner_handles_dict_response_without_steps_key():
     plan = Planner(StubLLM('{"foo": "bar"}')).create_plan("weird output")
     # Falls back to wrapping the whole decoded object as a string step.
-    assert len(plan["steps"]) == 1
-    assert "foo" in plan["steps"][0]
+    assert isinstance(plan, Plan)
+    assert len(plan.tasks) == 1
+    assert "foo" in plan.tasks[0].title
 
 
 # ---------- Prompt construction ----------

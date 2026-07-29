@@ -1,8 +1,10 @@
 import json
 import re
-from typing import Any
+from typing import Any, Union
+
 from app.core.logger import logger
 from app.ui.permission_menu import permission_prompt
+from app.planner.plan_manager import Plan
 
 
 # File extensions recognized when extracting a path from a planning step.
@@ -399,13 +401,18 @@ Return ONLY this JSON, no markdown, no extra text:
         }
 
     def execute_plan(
-        self, plan: dict[str, Any], allowed_tools: set[str] | None = None,
+        self, plan: Union[Plan, dict[str, Any]], allowed_tools: set[str] | None = None,
     ) -> list[dict[str, Any]]:
         logger.info("[Executor]")
         logger.info("Started")
 
+        # Extract steps from Plan object or dict (backward compatibility)
+        if isinstance(plan, Plan):
+            steps = [task.title for task in plan.tasks[:8]]
+        else:
+            steps = plan.get("steps", [])[:8]
+
         results = []
-        steps = plan.get("steps", [])[:8]
         if not steps:
             logger.info("[Executor]")
             logger.info("Finished")

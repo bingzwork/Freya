@@ -1,7 +1,9 @@
 import json
 import re
+from typing import Union
 
 from app.core.logger import logger
+from app.planner.plan_manager import Plan, PlanConfig, PlanManager, Task, TaskPriority, TaskCategory
 
 
 # Rule-based category mapping shared with ``_classify_engineering_category``
@@ -36,12 +38,13 @@ class Planner:
     _SEVERITY_RANK = {"critical": 0, "important": 1, "recommended": 2}
     _LESSON_SECTION_LIMIT = 3
 
-    def __init__(self, llm, memory=None, engineering_lessons=None):
+    def __init__(self, llm, memory=None, engineering_lessons=None, plan_manager: PlanManager = None):
         self.llm = llm
         self.memory = memory
         self.engineering_lessons = engineering_lessons
+        self.plan_manager = plan_manager or PlanManager()
 
-    def create_plan(self, task):
+    def create_plan(self, task: str, name: str = "Generated Plan") -> Plan:
         logger.info("[Planner]")
         logger.info("Started")
 
@@ -114,20 +117,36 @@ Examples:
             r"```json|```", "", answer
         ).strip()
         try:
-            plan = json.loads(answer)
+            plan_dict = json.loads(answer)
         except Exception:
-            plan = { "steps": [ answer ] }
+            plan_dict = {"steps": [answer]}
         # Ensure we have a list of steps
-        if isinstance(plan, dict) and isinstance(plan.get("steps"), list):
+        if isinstance(plan_dict, dict) and isinstance(plan_dict.get("steps"), list):
             # Limit to at most 5 steps to keep the plan concise
-            if len(plan["steps"]) > 5:
-                plan["steps"] = plan["steps"][:5]
+            if len(plan_dict["steps"]) > 5:
+                plan_dict["steps"] = plan_dict["steps"][:5]
         else:
             # Fallback: wrap the whole response as a single step
-            plan = {"steps": [str(plan)]}
+            plan_dict = {"steps": [str(plan_dict)]}
 
         logger.info("[Planner]")
         logger.info("Finished")
+
+        # Create a Plan object using PlanManager
+        config = PlanConfig(name=name, description=task)
+        plan = self.plan_manager.create_plan(config.name, config.description)
+
+        # Add tasks from the LLM-generated steps
+        for i, step in enumerate(plan_dict.get("steps", [])):
+            if step.strip():
+                self.plan_manager.add_task(
+                    title=step,
+                    description="",
+                    priority=config.default_priority,
+                    category=config.default_category,
+                    estimated_hours=config.default_estimated_hours,
+                )
+
         return plan
 
     # ------------------------------------------------------------------
