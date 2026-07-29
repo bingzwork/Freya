@@ -1,6 +1,7 @@
 import io
 import sys
 import tempfile
+import uuid
 from pathlib import Path
 from unittest.mock import patch
 
@@ -9,6 +10,9 @@ from app.agent.executor import Executor
 from app.agent.core_agent import FreyaAgent, _classify_engineering_category
 from app.memory.engineering_lessons import LessonSeverity, LessonType
 from app.planner.plan_manager import Plan
+from app.planner.task import Task, TaskCategory, TaskStatus
+from app.planner.task import Task, TaskStatus, TaskCategory
+import uuid
 
 
 class StubLLM:
@@ -127,7 +131,11 @@ def _patch_solve_to_succeed(agent: FreyaAgent, task: str) -> None:
     def _fake_apply_and_verify(_tools, _operations, _verifier):
         return iteration_result
 
-    agent.planner.create_plan = lambda _task: {"steps": [task]}
+    def _make_plan(_task: str) -> Plan:
+        t = Task(id=f"task_{uuid.uuid4().hex[:8]}", title=task, category=TaskCategory.IMPLEMENTATION)
+        return Plan(tasks=[t])
+
+    agent.planner.create_plan = _make_plan
     agent.patch_generator.propose = _fake_propose
     agent.patch_engine.apply_and_verify = _fake_apply_and_verify
 
@@ -150,10 +158,13 @@ def _patch_solve_to_fail(agent: FreyaAgent, task: str, attempts: int = 2) -> Non
     def _fake_apply_and_verify(_tools, _operations, _verifier):
         return iteration_result
 
-    agent.planner.create_plan = lambda _task: {"steps": [task]}
+    def _make_plan(_task: str) -> Plan:
+        t = Task(id=f"task_{uuid.uuid4().hex[:8]}", title=task, category=TaskCategory.IMPLEMENTATION)
+        return Plan(tasks=[t])
+
+    agent.planner.create_plan = _make_plan
     agent.patch_generator.propose = _fake_propose
     agent.patch_engine.apply_and_verify = _fake_apply_and_verify
-    agent.solve.__globals__["_task_iterations"] = attempts  # no-op, kept for clarity
 
 
 def test_solve_success_stores_pattern_lesson() -> None:

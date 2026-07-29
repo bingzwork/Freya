@@ -465,3 +465,72 @@ class TaskGraph:
                 lines.append("")
 
         return "\n".join(lines)
+
+    # Phase 5: Adaptive Replanning methods
+
+    def get_affected_subgraph(self, failed_task_id: str) -> Set[str]:
+        """Get all tasks that are affected by a task failure (the failed task and all its transitive dependents).
+
+        Args:
+            failed_task_id: The ID of the task that failed
+
+        Returns:
+            Set of task IDs that need to be replanned (including the failed task)
+        """
+        affected = {failed_task_id}
+        # Add all transitive dependents (tasks that depend on the failed task, directly or indirectly)
+        affected.update(self.get_all_dependents(failed_task_id))
+        return affected
+
+    def invalidate_subgraph(self, failed_task_id: str) -> List[str]:
+        """Mark a failed task and all its dependents as PENDING for replanning.
+
+        Preserves COMPLETED tasks that are NOT in the dependent chain.
+
+        Args:
+            failed_task_id: The ID of the task that failed
+
+        Returns:
+            List of task IDs that were invalidated (marked as PENDING)
+        """
+        affected = self.get_affected_subgraph(failed_task_id)
+        invalidated = []
+
+        for task_id in affected:
+            task = self.get_task(task_id)
+            if task:
+                # Only invalidate if not already COMPLETED (preserve completed work)
+                if task.status != TaskStatus.COMPLETED:
+                    task.status = TaskStatus.PENDING
+                    task.progress_percent = 0.0
+                    task.start_time = None
+                    task.end_time = None
+                    task.actual_duration = None
+                    invalidated.append(task_id)
+
+        return invalidated
+
+    def add_tasks_with_dependencies(self, new_tasks: List[Task], anchor_task_id: Optional[str] = None) -> List[str]:
+        """Add new tasks to the graph, optionally linking them after an anchor task.
+
+        Args:
+            new_tasks: List of new Task objects to add
+            anchor_task_id: Optional task ID that the new tasks should depend on (or depend on this)
+
+        Returns:
+            List of new task IDs added
+        """
+        added_ids = []
+        for i, task in enumerate(new_tasks):
+            self.add_task(task)
+            added_ids.append(task.id)
+
+            # Add sequential dependencies between new tasks
+            if i > 0:
+                self.add_dependency(added_ids[i - 1], task.id)
+
+        # Link to anchor if provided (new tasks depend on anchor)
+        if anchor_task_id and anchor_task_id in self._nodes and added_ids:
+            self.add_dependency(anchor_task_id, added_ids[0])
+
+        return added_ids

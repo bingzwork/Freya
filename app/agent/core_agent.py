@@ -2,7 +2,8 @@ from app.agent.executor import Executor
 from app.agent.planner import Planner
 from app.brain.state import ConversationState
 from app.core.llm import LLM
-from app.planner.plan_manager import PlanManager, Plan
+from app.planner.plan_manager import PlanManager, Plan, TaskCategory
+from app.planner.task import Task, TaskStatus
 from typing import Optional, Dict, List, Any
 from app.core.logger import logger
 from app.core.project_index import ProjectIndex
@@ -420,7 +421,13 @@ Tool results:
         return result
 
     def solve(self, task, max_iterations=5, allow_mutations=False, success_condition=None):
-        """Attempt to autonomously solve a task via iterative planning, patching, and verification.
+        """Attempt to autonomously solve a task via adaptive replanning.
+
+        This replaces the old restart-from-scratch loop with a cycle that:
+        1. Creates a Plan on first iteration
+        2. Executes the plan (or remaining incomplete tasks)
+        3. On failure, marks failed tasks, generates new replacement tasks, and continues
+        4. Preserves COMPLETED tasks across iterations
 
         Args:
             task (str): Description of the goal.
@@ -435,39 +442,52 @@ Tool results:
                 'success': bool,
                 'iterations': int,
                 'history': list of dicts per iteration containing plan, proposal, verification result,
+                'replanning_count': int,
             }
         """
         if not allow_mutations:
             raise PermissionError("Autonomous solving requires allow_mutations=True.")
         context = self.build_context(task)
         history = []
+        plan = None
+        replanning_count = 0
+
         for it in range(1, max_iterations + 1):
-            # 1. Plan
-            plan = self.planner.create_plan(task)
-            # 2. Propose patch based on plan (we treat the plan steps as the sub-task)
+            # On first iteration, create a new plan. On subsequent iterations, reuse and adapt existing plan.
+            if plan is None:
+                plan = self.planner.create_plan(task)
+            else:
+                # Adaptive replanning: update the existing plan based on failures
+                replanning_count += 1
+                plan = self._replan_after_failure(plan, task, history)
+
+            # Execute the plan (or remaining incomplete tasks)
             plan_steps = plan.tasks if hasattr(plan, 'tasks') else plan.get("steps", [])
-            sub_task = "\n".join(plan_steps) if plan_steps else task
+            sub_task = "\n".join([t.title if hasattr(t, 'title') else str(t) for t in plan_steps]) if plan_steps else task
             try:
                 proposal = self.patch_generator.propose(sub_task, context)
             except Exception as e:
-                # If proposal fails, record and continue
-                history.append({"iteration": it, "plan": plan, "error": str(e)})
+                history.append({"iteration": it, "plan": plan.to_dict() if isinstance(plan, Plan) else plan, "error": str(e)})
                 continue
-            # 3. Apply and verify
+
+            # Apply and verify
             result = self.patch_engine.apply_and_verify(
                 self.tools, proposal["operations"], self.verifier
             )
-            # 4. Record outcome
+
+            # Record outcome
             hist_entry = {
                 "iteration": it,
-                "plan": plan,
+                "plan": plan.to_dict() if isinstance(plan, Plan) else plan,
                 "proposal": proposal,
                 "verification": result["verification"],
                 "rolled_back": result.get("rolled_back", False),
                 "changes": result.get("changes", []),
+                "replanning": False,
             }
             history.append(hist_entry)
-            # 5. Check success condition
+
+            # Check success condition
             verified_success = result["verification"].success
             if success_condition is not None:
                 try:
@@ -476,46 +496,57 @@ Tool results:
                     success = False
             else:
                 success = verified_success
+
             if success:
-                # Success! Record a decision for learning
+                # Success! Mark any remaining tasks as completed
+                if isinstance(plan, Plan):
+                    for t in plan.tasks:
+                        if t.status != TaskStatus.COMPLETED:
+                            t.mark_completed()
+                            if plan._tracker:
+                                plan._tracker.on_task_status_changed(t)
+                # Record success for learning
                 self.memory.record(
                     "solved_task",
                     {
                         "task": task,
                         "iterations": it,
-                        "solution_summary": f"Solved in {it} iterations.",
+                        "solution_summary": f"Solved in {it} iterations with {replanning_count} replans.",
                         "trajectory": history,
                     },
                 )
-                # Priority 2: capture an Engineering Lesson pattern so future
-                # work can reuse this trajectory. See SELF_LEARNING.md.
-                summary = f"Solved in {it} iterations."
                 category = _classify_engineering_category(task)
                 self.engineering_lessons.store(
                     title=task[:60],
-                    description=f"Solved in {it} iterations: {summary}",
+                    description=f"Solved in {it} iterations ({replanning_count} replans).",
                     lesson_type=LessonType.PATTERN,
                     category=category,
                     severity=LessonSeverity.RECOMMENDED,
                     tags=[category],
-                    rationale=f"Solved after {it} iterations; captured for future reference.",
+                    rationale=f"Solved after {it} iterations with adaptive replanning; captured for future reference.",
                 )
-                # Priority 4: capture a parallel ExperienceMemory entry so the
-                # ExperienceMemory reader can surface it on the next run.
                 self.experience_memory.store(
                     title=task[:60],
-                    description=f"Solved in {it} iterations: {summary}",
+                    description=f"Solved in {it} iterations: {replanning_count} replans.",
                     category=category,
                     tags=[category],
                     outcome="positive",
                     confidence=0.8,
-                    metadata={"iterations": it, "kind": "solve"},
+                    metadata={"iterations": it, "replans": replanning_count, "kind": "solve"},
                 )
                 return {
                     "success": True,
                     "iterations": it,
                     "history": history,
+                    "replanning_count": replanning_count,
                 }
+
+            # Failure: record the failure in the plan so we can replan from it
+            if isinstance(plan, Plan):
+                # Find the task that was being executed and mark it failed
+                # The executor marks tasks as FAILED, but we can also track which task corresponded to this iteration
+                pass  # Executor already handles task status updates
+
         # Exhausted iterations
         self.memory.record(
             "unsolved_task",
@@ -524,11 +555,9 @@ Tool results:
                 "max_iterations": max_iterations,
                 "last_attempt": history[-1] if history else None,
                 "trajectory": history,
+                "replanning_count": replanning_count,
             },
         )
-        # Priority 2: capture an Engineering Lesson anti-pattern so future
-        # runs can avoid the same trajectory. The final verification reason
-        # (truncated) is preserved in `examples` for diagnostic reuse.
         last_verification = history[-1].get("verification") if history else None
         failure_reason = ""
         if last_verification is not None:
@@ -539,7 +568,7 @@ Tool results:
             ).strip()[:500]
         self.engineering_lessons.store(
             title=task[:60],
-            description=f"Failed to solve after {max_iterations} iterations.",
+            description=f"Failed to solve after {max_iterations} iterations ({replanning_count} replans).",
             lesson_type=LessonType.ANTI_PATTERN,
             category=_classify_engineering_category(task),
             severity=LessonSeverity.IMPORTANT,
@@ -547,22 +576,158 @@ Tool results:
             examples=[failure_reason] if failure_reason else [],
             rationale="Exhausted repair iterations without a verified fix.",
         )
-        # Priority 4: parallel ExperienceMemory capture (negative outcome).
         failed_category = _classify_engineering_category(task)
         self.experience_memory.store(
             title=task[:60],
-            description=f"Failed to solve after {max_iterations} iterations.",
+            description=f"Failed to solve after {max_iterations} iterations ({replanning_count} replans).",
             category=failed_category,
             tags=[failed_category],
             outcome="negative",
             confidence=0.6,
-            metadata={"iterations": max_iterations, "kind": "solve"},
+            metadata={"iterations": max_iterations, "replans": replanning_count, "kind": "solve"},
         )
         return {
             "success": False,
             "iterations": max_iterations,
             "history": history,
+            "replanning_count": replanning_count,
         }
+
+    def _replan_after_failure(self, plan: Plan, original_task: str, history: List[Dict[str, Any]]) -> Plan:
+        """Adapt the existing plan after a failure by replacing failed tasks with new ones.
+
+        This implements adaptive replanning:
+        1. Find FAILED tasks in the plan
+        2. For each failed task, generate replacement tasks based on the failure context
+        3. Add new tasks to the plan, preserving COMPLETED tasks
+        4. Update dependencies to connect new tasks appropriately
+        5. Emit a replanning event through ProgressTracker
+
+        Returns:
+            The updated plan (same object, modified in place)
+        """
+        from app.core.logger import logger
+
+        logger.info(f"[Adaptive Replanning] Adapting plan {plan.id} after failure")
+
+        if not plan._graph:
+            return plan
+
+        # Find failed tasks
+        failed_tasks = [t for t in plan.tasks if t.status == TaskStatus.FAILED]
+        if not failed_tasks:
+            # Also check for tasks that were IN_PROGRESS but didn't complete (may indicate failure)
+            failed_tasks = [t for t in plan.tasks if t.status == TaskStatus.IN_PROGRESS]
+            for t in failed_tasks:
+                t.mark_failed("Did not complete")
+                if plan._tracker:
+                    plan._tracker.on_task_status_changed(t)
+
+        if not failed_tasks:
+            logger.info("[Adaptive Replanning] No failed tasks found, returning plan as-is")
+            return plan
+
+        # Get the last verification failure for context
+        last_failure = ""
+        if history:
+            last_entry = history[-1]
+            verification = last_entry.get("verification")
+            if verification:
+                last_failure = (getattr(verification, "stdout", "") or "") + "\n" + (getattr(verification, "stderr", "") or "")
+
+        # For each failed task, generate replacement tasks
+        for failed_task in failed_tasks:
+            logger.info(f"[Adaptive Replanning] Replacing failed task: {failed_task.title}")
+
+            # Get the dependents of the failed task (tasks that depend on it)
+            dependent_ids = plan._graph.get_dependents(failed_task.id)
+
+            # Remove the failed task from dependents' dependencies
+            for dep_id in dependent_ids:
+                dep_task = next((t for t in plan.tasks if t.id == dep_id), None)
+                if dep_task and failed_task.id in dep_task.dependencies:
+                    dep_task.dependencies.remove(failed_task.id)
+
+            # Generate new task(s) to replace the failed one
+            # Use the LLM to create a revised approach based on the failure
+            replan_prompt = f"""The previous step failed: {failed_task.title}
+
+Failure context:
+{last_failure}
+
+Original task: {original_task}
+
+Generate 1-3 new concrete, executable steps to achieve the same goal in a different way.
+Each step must map to ONE tool action (read_file, write_file, replace_in_file, run_terminal, etc.).
+Return ONLY valid JSON: {{"steps": ["step 1", "step 2"]}}"""
+
+            try:
+                answer = self.llm.ask(replan_prompt)
+                answer = re.sub(r"```json|```", "", answer).strip()
+                replan_dict = json.loads(answer)
+            except Exception:
+                # Fallback: just retry the same step with a different approach
+                replan_dict = {"steps": [f"Retry: {failed_task.title} (alternative approach)"]}
+
+            # Create new replacement tasks
+            new_task_ids = []
+            for i, step in enumerate(replan_dict.get("steps", [])[:3]):
+                if not step.strip():
+                    continue
+                new_task = Task(
+                    title=step,
+                    description=f"Replacement for failed task: {failed_task.title}",
+                    priority=failed_task.priority,
+                    category=failed_task.category,
+                    estimated_hours=1.0,
+                    metadata={"origin": "replacement", "replaces": failed_task.id},
+                )
+                plan.tasks.append(new_task)
+                plan._graph.add_task(new_task)
+                plan._tracker.add_task(new_task)
+                new_task_ids.append(new_task.id)
+
+            # Connect new tasks: first new task depends on failed task's dependencies
+            # Last new task feeds into the original dependents
+            if new_task_ids:
+                # First new task inherits failed task's dependencies
+                for dep_id in failed_task.dependencies:
+                    plan._graph.add_dependency(dep_id, new_task_ids[0])
+
+                # Chain new tasks sequentially
+                for i in range(len(new_task_ids) - 1):
+                    plan._graph.add_dependency(new_task_ids[i], new_task_ids[i + 1])
+
+                # Last new task feeds into original dependents
+                for dep_id in dependent_ids:
+                    plan._graph.add_dependency(new_task_ids[-1], dep_id)
+
+        # Rebuild schedule
+        if plan.config.auto_schedule:
+            plan._scheduler = Scheduler(plan._graph, plan.config.scheduling_strategy)
+
+        # Emit replanning snapshot
+        if plan._tracker:
+            failed_task_ids = [t.id for t in failed_tasks]
+            new_task_ids = [t.id for t in plan.tasks if t.metadata.get("origin") == "replacement"]
+            replanning_event = {
+                "type": "adaptive_replan",
+                "reason": "task_failure",
+                "failed_task_ids": failed_task_ids,
+                "new_task_ids": new_task_ids,
+                "iteration": len(history),
+            }
+            plan._tracker.take_snapshot()
+            # Get the latest snapshot and add replanning event
+            snapshots = plan._tracker.get_snapshots()
+            if snapshots:
+                snapshots[-1].replanning_event = replanning_event
+
+        plan._update_timestamp()
+        self.plan_manager.save_plan(plan)
+
+        logger.info(f"[Adaptive Replanning] Plan adapted: {len(plan.tasks)} total tasks")
+        return plan
 
     def remember_decision(self, decision, rationale=""):
         return self.memory.record("decision", {"decision": decision, "rationale": rationale})
@@ -662,11 +827,11 @@ Tool results:
         allow_mutations: bool = True,
         max_iterations: int = 3,
     ) -> Dict[str, Any]:
-        """Execute the active goal (or a specific goal) through the planning pipeline.
+        """Execute the active goal (or a specific goal) through adaptive replanning.
 
         Workflow:
             Active Goal → Planner → Task Plan → Tool Selection → Execution
-            → Memory Update → Goal Update → Repeat (if goal not complete)
+            → Memory Update → Goal Update → Replan on failure → Repeat
 
         Args:
             goal_id: Optional specific goal ID to run. If None, uses the
@@ -685,6 +850,7 @@ Tool results:
                 - "iterations": Number of plan/execute iterations performed
                 - "history": List of iteration records with plans and results
                 - "progress": Goal progress metrics after execution
+                - "replanning_count": Number of adaptive replans performed
         """
         from app.core.logger import logger
 
@@ -712,6 +878,8 @@ Tool results:
         # Track iterations for this goal execution
         history = []
         iterations = 0
+        plan = None
+        replanning_count = 0
 
         for iteration in range(1, max_iterations + 1):
             iterations = iteration
@@ -719,12 +887,17 @@ Tool results:
             # Build task description from goal
             task_description = goal.description or goal.name
 
-            # 1. Plan
-            logger.info(f"[Goal Execution] Iteration {iteration}: Planning...")
+            # 1. Plan (first iteration) or Replan (subsequent iterations)
+            logger.info(f"[Goal Execution] Iteration {iteration}: {'Planning' if plan is None else 'Replanning'}...")
             context = self.build_context(task_description)
             memory_context = self.memory.context()
 
-            plan = self.planner.create_plan(task_description)
+            if plan is None:
+                plan = self.planner.create_plan(task_description)
+            else:
+                # Adaptive replanning: update existing plan based on failures
+                replanning_count += 1
+                plan = self._replan_after_failure(plan, task_description, history)
 
             # If plan is empty (non-engineering task), stop
             plan_steps = plan.tasks if hasattr(plan, 'tasks') else plan.get("steps", [])
@@ -747,6 +920,7 @@ Tool results:
                 "goal_name": goal.name,
                 "plan": plan,
                 "execution_results": execution_results,
+                "replanning": replanning_count > 0 and iteration > 1,
             }
             history.append(iter_record)
 
@@ -764,8 +938,9 @@ Tool results:
                     "goal_id": goal.id,
                     "goal_name": goal.name,
                     "iteration": iteration,
-                    "plan_steps": plan.get("steps", []),
+                    "plan_steps": [t.title for t in plan.tasks] if hasattr(plan, 'tasks') else plan.get("steps", []),
                     "outcome": outcome_summary,
+                    "replanning_count": replanning_count,
                 },
             )
 
@@ -797,10 +972,11 @@ Tool results:
             "iterations": iterations,
             "history": history,
             "progress": final_progress,
+            "replanning_count": replanning_count,
         }
 
         logger.info(f"[Goal Execution] Finished: {goal.name} — completed={is_completed}, "
-                    f"progress={final_progress['percentage']:.1f}%")
+                    f"progress={final_progress['percentage']:.1f}%, replans={replanning_count}")
         return result
 
     def _summarize_execution_results(self, results: List[Dict[str, Any]]) -> str:

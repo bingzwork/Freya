@@ -135,6 +135,190 @@ class Plan:
         """Get the task graph for this plan."""
         return self._graph
 
+    # Phase 5: Adaptive Replanning methods
+
+    def get_completed_task_ids(self) -> List[str]:
+        """Get IDs of all completed tasks (to preserve during replanning)."""
+        return [task.id for task in self.tasks if task.status == TaskStatus.COMPLETED]
+
+    def get_pending_or_failed_task_ids(self) -> List[str]:
+        """Get IDs of tasks that are not completed (pending, in_progress, failed, blocked)."""
+        return [task.id for task in self.tasks if task.status != TaskStatus.COMPLETED]
+
+    def invalidate_from_failure(self, failed_task_id: str) -> List[str]:
+        """Invalidate a failed task and its dependents for replanning.
+
+        Marks the failed task and all downstream dependents as PENDING,
+        while preserving COMPLETED tasks outside the affected subgraph.
+
+        Args:
+            failed_task_id: ID of the task that failed
+
+        Returns:
+            List of task IDs that were invalidated (marked PENDING)
+        """
+        if not self._graph:
+            return []
+
+        invalidated = self._graph.invalidate_subgraph(failed_task_id)
+
+        # Sync the plan's task list with the graph
+        for task_id in invalidated:
+            for task in self.tasks:
+                if task.id == task_id:
+                    task.status = TaskStatus.PENDING
+                    task.progress_percent = 0.0
+                    task.start_time = None
+                    task.end_time = None
+                    task.actual_duration = None
+                    break
+
+        # Update tracker
+        if self._tracker:
+            for task_id in invalidated:
+                task = self._graph.get_task(task_id)
+                if task:
+                    self._tracker.update_task(task)
+
+        self._update_timestamp()
+        return invalidated
+
+    def add_replacement_tasks(self, new_task_titles: List[str], anchor_task_id: Optional[str] = None,
+                              priority: Optional[TaskPriority] = None,
+                              category: Optional[TaskCategory] = None,
+                              estimated_hours: Optional[float] = None) -> List[str]:
+        """Add new tasks to replace an invalidated subgraph.
+
+        Args:
+            new_task_titles: List of titles for new tasks
+            anchor_task_id: Optional task ID that new tasks should depend on (the task before the invalidated section)
+            priority: Task priority (uses plan default if not specified)
+            category: Task category (uses plan default if not specified)
+            estimated_hours: Estimated hours (uses plan default if not specified)
+
+        Returns:
+            List of new task IDs added
+        """
+        if not self._graph:
+            return []
+
+        config = self.config
+        priority = priority or config.default_priority
+        category = category or config.default_category
+        estimated_hours = estimated_hours or config.default_estimated_hours
+
+        # Create new Task objects
+        new_tasks = []
+        for title in new_task_titles:
+            task = Task(
+                title=title,
+                description="",
+                priority=priority,
+                category=category,
+                estimated_hours=estimated_hours,
+            )
+            new_tasks.append(task)
+            self.tasks.append(task)
+
+        # Add to graph with dependencies
+        added_ids = self._graph.add_tasks_with_dependencies(new_tasks, anchor_task_id)
+
+        # Add to tracker
+        if self._tracker:
+            for task in new_tasks:
+                self._tracker.add_task(task)
+
+        # Rebuild schedule if auto_schedule is enabled
+        if self.config.auto_schedule:
+            self._rebuild_schedule()
+
+        self._update_timestamp()
+        return added_ids
+
+    def replan_after_failure(self, failed_task_id: str, new_steps: List[str],
+                             anchor_task_id: Optional[str] = None) -> Dict[str, Any]:
+        """Perform adaptive replanning after a task failure.
+
+        This is the main entry point for adaptive replanning:
+        1. Invalidate the failed task and its dependents
+        2. Add new replacement tasks
+        3. Emit a replanning progress snapshot
+
+        Args:
+            failed_task_id: ID of the task that failed
+            new_steps: List of new step descriptions to replace the failed portion
+            anchor_task_id: Optional task ID to anchor new tasks after (defaults to task before failed task)
+
+        Returns:
+            Dictionary with replanning results
+        """
+        # 1. Invalidate the affected subgraph
+        invalidated = self.invalidate_from_failure(failed_task_id)
+
+        # 2. Determine anchor task (the last completed task before the failed one)
+        if anchor_task_id is None:
+            # Find the task that the failed task depended on (if any)
+            failed_task = self._graph.get_task(failed_task_id)
+            if failed_task and failed_task.dependencies:
+                # Use the first dependency as anchor
+                anchor_task_id = failed_task.dependencies[0]
+
+        # 3. Add replacement tasks
+        added_ids = self.add_replacement_tasks(new_steps, anchor_task_id)
+
+        # 4. Emit replanning progress snapshot
+        replanning_event = {
+            "type": "replanning",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "failed_task_id": failed_task_id,
+            "invalidated_task_ids": invalidated,
+            "added_task_ids": added_ids,
+            "anchor_task_id": anchor_task_id,
+            "new_steps": new_steps,
+        }
+
+        if self._tracker:
+            snapshot = ProgressSnapshot.create_replanning_snapshot(
+                list(self._graph.get_all_tasks()),
+                replanning_event
+            )
+            self._tracker._snapshots.append(snapshot)
+            self._tracker._notify_callbacks(snapshot)
+
+        self._update_timestamp()
+        return {
+            "invalidated": invalidated,
+            "added": added_ids,
+            "replanning_event": replanning_event,
+        }
+
+    def _rebuild_schedule(self) -> Optional[Schedule]:
+        """Rebuild the schedule for the active plan."""
+        if not self._graph:
+            return None
+
+        # Rebuild the graph from tasks
+        self._graph = TaskGraph()
+        for task in self.tasks:
+            self._graph.add_task(task)
+
+        # Re-add dependencies from task.dependencies field
+        for task in self.tasks:
+            for dep_id in task.dependencies:
+                try:
+                    self._graph.add_dependency(dep_id, task.id)
+                except CycleDetectedError:
+                    # Log warning but continue - graph should already be validated
+                    pass
+
+        # Rebuild the scheduler
+        self._scheduler = Scheduler(
+            self._graph,
+            self.config.scheduling_strategy
+        )
+
+        return self._scheduler.schedule()
+
 
 class PlanManager:
     """Manages project plans.

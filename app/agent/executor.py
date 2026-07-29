@@ -2,11 +2,11 @@ import json
 import re
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Union
+from typing import Any, Union, Optional, List
 
 from app.core.logger import logger
 from app.ui.permission_menu import permission_prompt
-from app.planner.plan_manager import Plan, PlanConfig, Task, TaskPriority, TaskCategory
+from app.planner.plan_manager import Plan, PlanConfig, Task, TaskPriority, TaskCategory, TaskStatus
 from app.planner.task_graph import CycleDetectedError
 from app.planner.scheduler import Scheduler, SchedulingStrategy
 from app.planner.resource_allocator import ResourceAllocator, Resource, ResourceType
@@ -516,6 +516,175 @@ Return ONLY this JSON, no markdown, no extra text:
         for schedule_item in schedule.items:
             task = graph.get_task(schedule_item.task_id)
             if not task:
+                continue
+
+            # Check if resources are available
+            if not self._check_resources_for_task(task):
+                logger.warning(f"[Executor] Resources not available for task {task.id}, skipping")
+                results.append({
+                    "step": task.title,
+                    "result": {"action": {}, "error": "Insufficient resources"}
+                })
+                continue
+
+            # Allocate resources
+            self._allocate_for_task(task)
+
+            # Mark task as READY (dependencies satisfied, ready to start)
+            if isinstance(plan, Plan) and hasattr(plan, '_tracker') and plan._tracker:
+                task.mark_ready()
+                plan._tracker.on_task_status_changed(task, transition="PENDING → READY")
+
+            # Mark task as IN_PROGRESS
+            if isinstance(plan, Plan) and hasattr(plan, '_tracker') and plan._tracker:
+                task.mark_in_progress()
+                plan._tracker.on_task_status_changed(task, transition="READY → IN_PROGRESS")
+
+            # Execute the task step
+            try:
+                result = self.execute_step(task.title, allowed_tools)
+                results.append({
+                    "step": task.title,
+                    "result": result,
+                    "task_id": task.id,
+                    "scheduled_start": schedule_item.start_time,
+                    "scheduled_end": schedule_item.end_time,
+                })
+
+                # Mark task as COMPLETED on success
+                if isinstance(plan, Plan) and hasattr(plan, '_tracker') and plan._tracker:
+                    task.mark_completed()
+                    plan._tracker.on_task_status_changed(task, transition="IN_PROGRESS → COMPLETED")
+
+                # Release resources after execution
+                self._release_for_task(task)
+            except Exception as e:
+                logger.error(f"[Executor] Error executing task {task.id}: {e}")
+                results.append({
+                    "step": task.title,
+                    "result": {"action": {}, "error": str(e)},
+                    "task_id": task.id,
+                })
+
+                # Mark task as FAILED on exception
+                if isinstance(plan, Plan) and hasattr(plan, '_tracker') and plan._tracker:
+                    task.mark_failed(str(e))
+                    plan._tracker.on_task_status_changed(task, transition="IN_PROGRESS → FAILED")
+
+                self._release_for_task(task)
+
+        logger.info("[Executor]")
+        logger.info("Finished")
+        return results
+
+    def execute_plan_partial(
+        self, plan: Union[Plan, dict[str, Any]], allowed_tools: set[str] | None = None,
+        start_from_task_id: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
+        """Execute only the incomplete tasks from a plan (for adaptive replanning).
+
+        Args:
+            plan: The Plan object or dict to execute
+            allowed_tools: Set of allowed tool names
+            start_from_task_id: If provided, only execute tasks from this task_id onwards
+                               (including its dependents). Tasks before this remain as-is.
+
+        Returns:
+            List of execution results for the executed tasks
+        """
+        logger.info("[Executor]")
+        logger.info("Started (partial execution)")
+
+        # Extract tasks from Plan object or dict (backward compatibility)
+        if isinstance(plan, Plan):
+            # Build and validate TaskGraph before execution
+            if plan._graph is not None:
+                try:
+                    # Get topological order from graph (respects dependencies)
+                    topo_order = plan._graph.topological_sort()
+                    all_tasks = [plan._graph.get_task(tid) for tid in topo_order if plan._graph.get_task(tid)]
+                except CycleDetectedError as e:
+                    logger.error(f"[Executor] Cycle detected in plan: {e}")
+                    raise ValueError(f"Plan contains cyclic dependencies: {e}") from e
+            else:
+                # Fallback: use plan tasks in order
+                all_tasks = plan.tasks[:8]
+        else:
+            # Backward compatibility: convert dict steps to simple tasks
+            all_tasks = []
+            for i, step in enumerate(plan.get("steps", [])[:8]):
+                task = Task(
+                    id=f"task_{uuid.uuid4().hex[:8]}",
+                    title=step,
+                    priority=TaskPriority.MEDIUM,
+                    category=TaskCategory.IMPLEMENTATION,
+                    estimated_hours=1.0,
+                )
+                all_tasks.append(task)
+
+        if not all_tasks:
+            logger.info("[Executor]")
+            logger.info("Finished")
+            return []
+
+        # Filter to only execute incomplete tasks
+        if start_from_task_id:
+            # Find the start task and all its transitive dependents
+            if isinstance(plan, Plan) and plan._graph:
+                graph = plan._graph
+                # Get all dependents of the start task
+                dependent_ids = graph.get_all_dependents(start_from_task_id)
+                # Include the start task itself
+                task_ids_to_run = {start_from_task_id} | dependent_ids
+                # Also include any tasks that are not completed and not blocked by completed tasks
+                tasks = [t for t in all_tasks if t.id in task_ids_to_run and t.status != TaskStatus.COMPLETED]
+            else:
+                # Fallback: run all incomplete tasks
+                tasks = [t for t in all_tasks if t.status != TaskStatus.COMPLETED]
+        else:
+            # Default: run all incomplete tasks
+            tasks = [t for t in all_tasks if t.status != TaskStatus.COMPLETED]
+
+        if not tasks:
+            logger.info("[Executor] No incomplete tasks to execute")
+            logger.info("[Executor]")
+            logger.info("Finished")
+            return []
+
+        # Initialize scheduler with the task graph and plan's scheduling strategy
+        if isinstance(plan, Plan) and plan._graph is not None:
+            graph = plan._graph
+            strategy = plan.config.scheduling_strategy if plan.config else SchedulingStrategy.ASAP
+        else:
+            # Create a temporary graph for dict-based plans
+            graph = plan._graph if isinstance(plan, Plan) else None
+            if graph is None:
+                from app.planner.task_graph import TaskGraph
+                graph = TaskGraph()
+                for i, task in enumerate(tasks):
+                    graph.add_task(task)
+                    if i > 0:
+                        # Add sequential dependency for backward compatibility
+                        graph.add_dependency(tasks[i-1].id, task.id)
+            strategy = plan.config.scheduling_strategy if isinstance(plan, Plan) and plan.config else SchedulingStrategy.ASAP
+
+        self._scheduler = Scheduler(graph, strategy)
+
+        # Allocate resources for each task
+        self._allocate_resources_for_tasks(tasks)
+
+        # Generate schedule
+        schedule = self._scheduler.schedule()
+
+        # Execute tasks in scheduled order
+        results = []
+        for schedule_item in schedule.items:
+            task = graph.get_task(schedule_item.task_id)
+            if not task:
+                continue
+
+            # Skip completed tasks
+            if task.status == TaskStatus.COMPLETED:
                 continue
 
             # Check if resources are available

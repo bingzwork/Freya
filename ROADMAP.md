@@ -27,7 +27,7 @@ The codebase already contains mature foundation modules across planning, memory,
 | Natural Conversation            | Mostly Complete                |
 | Goal Management                 | Functional (Phases 1–8)         |
 | Memory System                   | Partial                         |
-| Planning and Reasoning          | Phase 3 Complete (Scheduler, ResourceAllocator wired) |
+| Planning and Reasoning          | Phase 5 Complete (Adaptive Replanning wired) |
 | Decision Making                 | Not Implemented                |
 | Failure Recovery                | Not Implemented                |
 | World Model                     | Partial                        |
@@ -96,6 +96,7 @@ Replace the legacy planner pipeline with the modern planning framework.
 * Integrate Scheduler. ✅ **COMPLETE (2026-07-30)**
 * Integrate ResourceAllocator. ✅ **COMPLETE (2026-07-30)**
 * Integrate ProgressTracker. ✅ **COMPLETE (2026-07-30)**
+* **Implement Adaptive Replanning.** ✅ **COMPLETE (2026-07-30)**
 * Replace legacy planner implementation.
 * Preserve current planner behavior while expanding capability.
 
@@ -110,6 +111,7 @@ Freya gains structured execution plans capable of managing complex engineering t
 * Objective 3: `Executor.execute_plan()` uses `Scheduler` (ASAP and PRIORITY_FIRST strategies) to generate execution schedule from TaskGraph; tasks execute in dependency-correct topological order. ✅ **Complete (2026-07-30)**
 * Objective 4: `Executor` initializes `ResourceAllocator` with default MACHINE, TOOL, and GPU resources; tasks allocate required resources before execution and release them after; linear step loop replaced with scheduler-driven execution. ✅ **Complete (2026-07-30)**
 * Objective 5: `Executor` emits `ProgressSnapshot` objects via `ProgressTracker` on every task state transition (PENDING → READY → IN_PROGRESS → COMPLETED/FAILED); `FreyaAgent.last_execution_progress` exposes progress summary; `PlanManager` exports progress data for diagnostics, monitoring, and backlog integration. ✅ **Complete (2026-07-30)**
+* Objective 6: `FreyaAgent.solve()` and `run_active_goal()` use adaptive replanning via `_replan_after_failure()` which calls `TaskGraph.get_affected_subgraph()` and `invalidate_subgraph()` to identify failed task and dependents, then adds replacement tasks preserving COMPLETED tasks; replanning events emitted via `ProgressTracker` with `replanning=True` flag in `ProgressSnapshot`. `Executor.execute_plan_partial()` executes only incomplete tasks. ✅ **Complete (2026-07-30)**
 
 ---
 

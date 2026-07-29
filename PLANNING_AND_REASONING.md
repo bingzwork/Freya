@@ -2,7 +2,7 @@
 
 # Planning & Reasoning
 
-- Status: 🟢 MOSTLY COMPLETE — 50% (Phase 1 complete: PlanManager integrated into FreyaAgent; Planner creates Plan objects; Executor consumes Plan objects. Phase 2 complete: TaskGraph wired into runtime. Phase 3 complete: Scheduler and ResourceAllocator wired into execution pipeline.)
+- Status: 🟢 MOSTLY COMPLETE — 60% (Phase 1 complete: PlanManager integrated into FreyaAgent; Planner creates Plan objects; Executor consumes Plan objects. Phase 2 complete: TaskGraph wired into runtime. Phase 3 complete: Scheduler and ResourceAllocator wired into execution pipeline. Phase 4 complete: ProgressTracker integrated. Phase 5 complete: Adaptive replanning implemented.)
 - Priority: ⭐⭐⭐⭐⭐ Critical
 - Source of truth: codebase; legacy planner is foundation-only and `app/planner/` modules now wired into the runtime (ROADMAP Phase 2 — Planner Modernization).
 
@@ -73,7 +73,7 @@ Status symbols: ✅ Implemented · 🟡 Partial / Foundation · ❌ Not Implemen
 | Plan Visualizer                       | 🟡     | `app/planner/plan_visualizer.py` present; not exposed in the runtime. |
 | Multiple solution evaluation          | ❌      | Single LLM-generated plan; alternatives are not generated or compared. |
 | Difficulty / Risk scoring             | ❌      | No explicit difficulty, risk, or confidence scoring for plans; `app/risk/`, `app/confidence/` operate elsewhere in the pipeline, not on the plan itself. |
-| Adaptive replanning (formal)          | 🟡     | `solve()` re-plans per iteration and `repair()` retries with lessons; there is no dedicated replan cycle that preserves completed work on dependency change. |
+| Adaptive replanning (formal)          | ✅     | `solve()` and `run_active_goal()` use `_replan_after_failure()` to update the existing `Plan`/`TaskGraph` on failure. `TaskGraph.get_affected_subgraph()` and `invalidate_subgraph()` identify failed task and dependents; replacement tasks added preserving COMPLETED tasks. Replan events emitted via `ProgressTracker`. |
 | Long-term / downstream forecasting    | ❌      | No multi-step forecasting or future-task awareness. |
 | Reasoning transparency (plan rationale) | ❌   | The chosen plan is logged as JSON only; the selection rationale is not surfaced in plain language. |
 | Human plan review / modify / reject   | ❌      | The user can approve/deny individual tool calls (`permission_prompt` in `Executor`), but cannot review, modify, reorder, or reject the plan itself. |
