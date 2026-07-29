@@ -1,10 +1,15 @@
 import json
 import re
+import uuid
+from datetime import datetime, timezone
 from typing import Any, Union
 
 from app.core.logger import logger
 from app.ui.permission_menu import permission_prompt
-from app.planner.plan_manager import Plan
+from app.planner.plan_manager import Plan, PlanConfig, Task, TaskPriority, TaskCategory
+from app.planner.task_graph import CycleDetectedError
+from app.planner.scheduler import Scheduler, SchedulingStrategy
+from app.planner.resource_allocator import ResourceAllocator, Resource, ResourceType
 
 
 # File extensions recognized when extracting a path from a planning step.
@@ -170,6 +175,49 @@ class Executor:
         self.llm = llm
         self.tools = tools
         self.engineering_lessons = engineering_lessons
+
+        # Initialize scheduler and resource allocator
+        self._scheduler = None
+        self._allocator = ResourceAllocator()
+        self._initialize_default_resources()
+
+    def _initialize_default_resources(self) -> None:
+        """Initialize default machine and tool resources for task execution."""
+        # Default machine resource
+        machine_resource = Resource(
+            id="resource_machine_default",
+            name="Default Machine",
+            resource_type=ResourceType.MACHINE,
+            capacity=1.0,
+            available=1.0,
+            unit="machine",
+            description="Default execution machine",
+        )
+        self._allocator.add_resource(machine_resource)
+
+        # Default tool resources (common development tools)
+        tool_resource = Resource(
+            id="resource_tools_default",
+            name="Development Tools",
+            resource_type=ResourceType.TOOL,
+            capacity=1.0,
+            available=1.0,
+            unit="toolset",
+            description="Standard development toolset (git, build tools, test runners, etc.)",
+        )
+        self._allocator.add_resource(tool_resource)
+
+        # GPU resource (if available)
+        gpu_resource = Resource(
+            id="resource_gpu_default",
+            name="GPU Resource",
+            resource_type=ResourceType.GPU,
+            capacity=1.0,
+            available=1.0,
+            unit="gpu",
+            description="GPU acceleration resource",
+        )
+        self._allocator.add_resource(gpu_resource)
 
     def _map_step_to_tool(self, step: str) -> dict[str, Any] | None:
         """
@@ -406,26 +454,137 @@ Return ONLY this JSON, no markdown, no extra text:
         logger.info("[Executor]")
         logger.info("Started")
 
-        # Extract steps from Plan object or dict (backward compatibility)
+        # Extract tasks from Plan object or dict (backward compatibility)
         if isinstance(plan, Plan):
-            steps = [task.title for task in plan.tasks[:8]]
+            # Build and validate TaskGraph before execution
+            if plan._graph is not None:
+                try:
+                    # Get topological order from graph (respects dependencies)
+                    topo_order = plan._graph.topological_sort()
+                    tasks = [plan._graph.get_task(tid) for tid in topo_order if plan._graph.get_task(tid)]
+                except CycleDetectedError as e:
+                    logger.error(f"[Executor] Cycle detected in plan: {e}")
+                    raise ValueError(f"Plan contains cyclic dependencies: {e}") from e
+            else:
+                # Fallback: use plan tasks in order
+                tasks = plan.tasks[:8]
         else:
-            steps = plan.get("steps", [])[:8]
+            # Backward compatibility: convert dict steps to simple tasks
+            tasks = []
+            for i, step in enumerate(plan.get("steps", [])[:8]):
+                task = Task(
+                    id=f"task_{uuid.uuid4().hex[:8]}",
+                    title=step,
+                    priority=TaskPriority.MEDIUM,
+                    category=TaskCategory.IMPLEMENTATION,
+                    estimated_hours=1.0,
+                )
+                tasks.append(task)
 
-        results = []
-        if not steps:
+        if not tasks:
             logger.info("[Executor]")
             logger.info("Finished")
-            return results
+            return []
 
-        for step in steps:
-            results.append(
-                {
-                    "step": step,
-                    "result": self.execute_step(step, allowed_tools)
-                }
-            )
+        # Initialize scheduler with the task graph and plan's scheduling strategy
+        if isinstance(plan, Plan) and plan._graph is not None:
+            graph = plan._graph
+            strategy = plan.config.scheduling_strategy if plan.config else SchedulingStrategy.ASAP
+        else:
+            # Create a temporary graph for dict-based plans
+            graph = plan._graph if isinstance(plan, Plan) else None
+            if graph is None:
+                from app.planner.task_graph import TaskGraph
+                graph = TaskGraph()
+                for i, task in enumerate(tasks):
+                    graph.add_task(task)
+                    if i > 0:
+                        # Add sequential dependency for backward compatibility
+                        graph.add_dependency(tasks[i-1].id, task.id)
+            strategy = plan.config.scheduling_strategy if isinstance(plan, Plan) and plan.config else SchedulingStrategy.ASAP
+
+        self._scheduler = Scheduler(graph, strategy)
+
+        # Allocate resources for each task
+        self._allocate_resources_for_tasks(tasks)
+
+        # Generate schedule
+        schedule = self._scheduler.schedule()
+
+        # Execute tasks in scheduled order
+        results = []
+        for schedule_item in schedule.items:
+            task = graph.get_task(schedule_item.task_id)
+            if not task:
+                continue
+
+            # Check if resources are available
+            if not self._check_resources_for_task(task):
+                logger.warning(f"[Executor] Resources not available for task {task.id}, skipping")
+                results.append({
+                    "step": task.title,
+                    "result": {"action": {}, "error": "Insufficient resources"}
+                })
+                continue
+
+            # Allocate resources
+            self._allocate_for_task(task)
+
+            # Execute the task step
+            try:
+                result = self.execute_step(task.title, allowed_tools)
+                results.append({
+                    "step": task.title,
+                    "result": result,
+                    "task_id": task.id,
+                    "scheduled_start": schedule_item.start_time,
+                    "scheduled_end": schedule_item.end_time,
+                })
+
+                # Release resources after execution
+                self._release_for_task(task)
+            except Exception as e:
+                logger.error(f"[Executor] Error executing task {task.id}: {e}")
+                results.append({
+                    "step": task.title,
+                    "result": {"action": {}, "error": str(e)},
+                    "task_id": task.id,
+                })
+                self._release_for_task(task)
 
         logger.info("[Executor]")
         logger.info("Finished")
         return results
+
+    def _allocate_resources_for_tasks(self, tasks: list) -> None:
+        """Pre-allocate required resources for all tasks."""
+        for task in tasks:
+            # Check task's required_resources field
+            required = getattr(task, 'required_resources', [])
+            for resource_id in required:
+                if not self._allocator.is_available(resource_id):
+                    logger.warning(f"[Executor] Resource {resource_id} not available for task {task.id}")
+
+    def _check_resources_for_task(self, task: Task) -> bool:
+        """Check if all required resources are available for a task."""
+        required = getattr(task, 'required_resources', [])
+        # Default: require machine and tool resources
+        default_resources = ["resource_machine_default", "resource_tools_default"]
+        all_required = list(set(required + default_resources))
+        return all(self._allocator.is_available(rid) for rid in all_required)
+
+    def _allocate_for_task(self, task: Task) -> list:
+        """Allocate resources for a task."""
+        required = getattr(task, 'required_resources', [])
+        default_resources = ["resource_machine_default", "resource_tools_default"]
+        all_required = list(set(required + default_resources))
+        allocations = []
+        for resource_id in all_required:
+            allocation = self._allocator.allocate(task.id, resource_id, 1.0)
+            if allocation:
+                allocations.append(allocation)
+        return allocations
+
+    def _release_for_task(self, task: Task) -> None:
+        """Release all resources allocated to a task."""
+        self._allocator.release_for_task(task.id)

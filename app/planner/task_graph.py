@@ -136,6 +136,14 @@ class TaskGraph:
         self._dependents[from_task_id].add(to_task_id)
         self._edges.add(DependencyEdge(from_task_id=from_task_id, to_task_id=to_task_id))
 
+        # Update TaskNode parent/child relationships
+        from_node = self._nodes[from_task_id]
+        to_node = self._nodes[to_task_id]
+        if to_task_id not in from_node.children:
+            from_node.children.append(to_task_id)
+        if from_task_id not in to_node.parents:
+            to_node.parents.append(from_task_id)
+
         return True
 
     def remove_dependency(self, from_task_id: str, to_task_id: str) -> bool:
@@ -146,6 +154,15 @@ class TaskGraph:
         self._dependencies[to_task_id].discard(from_task_id)
         self._dependents[from_task_id].discard(to_task_id)
         self._edges.discard(DependencyEdge(from_task_id=from_task_id, to_task_id=to_task_id))
+
+        # Update TaskNode parent/child relationships
+        if from_task_id in self._nodes and to_task_id in self._nodes:
+            from_node = self._nodes[from_task_id]
+            to_node = self._nodes[to_task_id]
+            if to_task_id in from_node.children:
+                from_node.children.remove(to_task_id)
+            if from_task_id in to_node.parents:
+                to_node.parents.remove(from_task_id)
 
         return True
 

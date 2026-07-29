@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Dict, List, Any, Optional
 
 from app.planner.task import Task, TaskStatus, TaskPriority, TaskCategory
-from app.planner.task_graph import TaskGraph
+from app.planner.task_graph import TaskGraph, CycleDetectedError
 from app.planner.scheduler import Scheduler, Schedule, SchedulingStrategy
 from app.planner.resource_allocator import ResourceAllocator, Resource, ResourceType
 from app.planner.progress_tracker import ProgressTracker
@@ -121,6 +121,19 @@ class Plan:
     def _update_timestamp(self) -> None:
         """Update the updated_at timestamp."""
         self.updated_at = datetime.now(timezone.utc).isoformat()
+
+    def validate_graph(self) -> None:
+        """Validate the task graph for cycles.
+
+        Raises:
+            CycleDetectedError: If the graph contains a cycle.
+        """
+        if self._graph:
+            self._graph.topological_sort()  # Raises CycleDetectedError if cyclic
+
+    def get_task_graph(self) -> Optional[TaskGraph]:
+        """Get the task graph for this plan."""
+        return self._graph
 
 
 class PlanManager:
@@ -421,20 +434,28 @@ class PlanManager:
 
         Returns:
             True if dependency was added
+
+        Raises:
+            CycleDetectedError: If adding the dependency would create a cycle
         """
         plan = self._plans.get(plan_id)
         if not plan:
             return False
 
-        try:
-            result = plan._graph.add_dependency(from_task_id, to_task_id)
-            if result and plan.config.auto_schedule:
+        result = plan._graph.add_dependency(from_task_id, to_task_id)
+        if result:
+            # Also update the task's dependencies field so _rebuild_schedule can reconstruct
+            for task in plan.tasks:
+                if task.id == to_task_id:
+                    if from_task_id not in task.dependencies:
+                        task.dependencies.append(from_task_id)
+                    break
+
+            if plan.config.auto_schedule:
                 self._rebuild_schedule()
-            plan._update_timestamp()
-            self.save_plan(plan)
-            return result
-        except Exception:
-            return False
+        plan._update_timestamp()
+        self.save_plan(plan)
+        return result
 
     # Resource operations
 
@@ -511,6 +532,15 @@ class PlanManager:
         self._active_plan._graph = TaskGraph()
         for task in self._active_plan.tasks:
             self._active_plan._graph.add_task(task)
+
+        # Re-add dependencies from task.dependencies field
+        for task in self._active_plan.tasks:
+            for dep_id in task.dependencies:
+                try:
+                    self._active_plan._graph.add_dependency(dep_id, task.id)
+                except CycleDetectedError:
+                    # Log warning but continue - graph should already be validated
+                    pass
 
         # Rebuild the scheduler
         self._active_plan._scheduler = Scheduler(

@@ -27,7 +27,7 @@ The codebase already contains mature foundation modules across planning, memory,
 | Natural Conversation            | Mostly Complete                |
 | Goal Management                 | Functional (Phases 1–8)         |
 | Memory System                   | Partial                         |
-| Planning and Reasoning          | Phase 1 Complete (PlanManager wired) |
+| Planning and Reasoning          | Phase 3 Complete (Scheduler, ResourceAllocator wired) |
 | Decision Making                 | Not Implemented                |
 | Failure Recovery                | Not Implemented                |
 | World Model                     | Partial                        |
@@ -35,14 +35,14 @@ The codebase already contains mature foundation modules across planning, memory,
 | Self Observation                | Complete (Integration Partial) |
 | Learning System                 | Mostly Complete                 |
 | Safe Self Improvement           | Partial                        |
-| Task Scheduling                 | Not Implemented                |
+| Task Scheduling                 | Complete (ASAP, PRIORITY_FIRST)                       |
 | Knowledge Base                  | Complete (Project Scope)       |
 | Tool Ecosystem                  | Complete                       |
 | Business Productivity           | Minimal                        |
 | Creative Media                  | Not Implemented                |
 | Human Oversight                 | Functional                     |
 | Long-Term Autonomy              | Partial                        |
-| Resource Management             | Not Implemented                |
+| Resource Management             | Complete (default MACHINE, TOOL, GPU resources)      |
 | Multi Agent Coordination        | Not Implemented                |
 | Self Evaluation                 | Not Implemented                |
 | Performance Optimization        | Partial                        |
@@ -91,9 +91,9 @@ Replace the legacy planner pipeline with the modern planning framework.
 ### Objectives
 
 * Integrate PlanManager as the single source of truth for plans. ✅ **COMPLETE (Phase 1)**
-* Integrate TaskGraph.
-* Integrate Scheduler.
-* Integrate ResourceAllocator.
+* Integrate TaskGraph. ✅ **COMPLETE (2026-07-30)**
+* Integrate Scheduler. ✅ **COMPLETE (2026-07-30)**
+* Integrate ResourceAllocator. ✅ **COMPLETE (2026-07-30)**
 * Integrate ProgressTracker.
 * Replace legacy planner implementation.
 * Preserve current planner behavior while expanding capability.
@@ -105,6 +105,9 @@ Freya gains structured execution plans capable of managing complex engineering t
 ### Progress
 
 * Objective 1: `PlanManager` integrated into `FreyaAgent` as the single source of truth; `Planner.create_plan()` creates and populates `Plan` objects; `Executor.execute_plan()` consumes `Plan` objects; backward compatibility with dict plans maintained. ✅ **Complete (2026-07-30)**
+* Objective 2: `Planner.create_plan()` builds `TaskGraph` with sequential dependencies; `TaskGraph.topological_sort()` drives `Executor.execute_plan()` execution order; cycle detection rejects cyclic graphs; completed TaskNode state preserved for replanning. ✅ **Complete (2026-07-30)**
+* Objective 3: `Executor.execute_plan()` uses `Scheduler` (ASAP and PRIORITY_FIRST strategies) to generate execution schedule from TaskGraph; tasks execute in dependency-correct topological order. ✅ **Complete (2026-07-30)**
+* Objective 4: `Executor` initializes `ResourceAllocator` with default MACHINE, TOOL, and GPU resources; tasks allocate required resources before execution and release them after; linear step loop replaced with scheduler-driven execution. ✅ **Complete (2026-07-30)**
 
 ---
 

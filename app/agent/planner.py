@@ -137,15 +137,24 @@ Examples:
         plan = self.plan_manager.create_plan(config.name, config.description)
 
         # Add tasks from the LLM-generated steps
+        task_ids = []
         for i, step in enumerate(plan_dict.get("steps", [])):
             if step.strip():
-                self.plan_manager.add_task(
+                task = self.plan_manager.add_task(
                     title=step,
                     description="",
                     priority=config.default_priority,
                     category=config.default_category,
                     estimated_hours=config.default_estimated_hours,
                 )
+                if task:
+                    task_ids.append(task.id)
+
+        # Add sequential dependencies: step i+1 depends on step i
+        # This creates DependencyEdge objects and establishes parent/child TaskNode relationships
+        if len(task_ids) > 1:
+            for i in range(1, len(task_ids)):
+                self.plan_manager.add_dependency(plan.id, task_ids[i - 1], task_ids[i])
 
         return plan
 

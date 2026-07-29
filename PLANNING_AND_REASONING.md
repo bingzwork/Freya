@@ -2,9 +2,9 @@
 
 # Planning & Reasoning
 
-- Status: 🔵 FOUNDATION — 25% (Phase 1 complete: PlanManager integrated into FreyaAgent; Planner creates Plan objects; Executor consumes Plan objects)
+- Status: 🟢 MOSTLY COMPLETE — 50% (Phase 1 complete: PlanManager integrated into FreyaAgent; Planner creates Plan objects; Executor consumes Plan objects. Phase 2 complete: TaskGraph wired into runtime. Phase 3 complete: Scheduler and ResourceAllocator wired into execution pipeline.)
 - Priority: ⭐⭐⭐⭐⭐ Critical
-- Source of truth: codebase; legacy planner is foundation-only and `app/planner/` modules are not yet wired into the runtime (ROADMAP Phase 2 — Planner Modernization).
+- Source of truth: codebase; legacy planner is foundation-only and `app/planner/` modules now wired into the runtime (ROADMAP Phase 2 — Planner Modernization).
 
 ---
 
@@ -64,10 +64,10 @@ Status symbols: ✅ Implemented · 🟡 Partial / Foundation · ❌ Not Implemen
 | Iterative solve loop                  | ✅      | `FreyaAgent.solve()` repeatedly calls `planner.create_plan()` + `apply_and_verify()` until success or `max_iterations`. |
 | Repair with ANTI_PATTERN lessons      | ✅      | `FreyaAgent.repair()` surfaces matching ANTI_PATTERN lessons on retries. |
 | PlanManager integration (Phase 1)     | ✅      | `PlanManager` is the single source of truth for plans; `Planner.create_plan()` populates a `Plan` object with tasks; `Executor.execute_plan()` consumes the `Plan` object. Backward compatibility with dict plans maintained. |
-| Task decomposition (parent/child)     | ❌      | Plans are flat step lists; no automatic subtasks, no parent/child task relationships. |
-| Task graph (`TaskGraph`)              | 🟡     | Module exists in `app/planner/task_graph.py` with unit tests, but is **not wired into the runtime**. |
-| Scheduler                             | 🟡     | `app/planner/scheduler.py` (ASAP, Priority, Longest-Duration, Deadline, Resource-Optimized) exists and is unit-tested; not imported by `app/agent/`. |
-| Resource Allocator                    | 🟡     | `app/planner/resource_allocator.py` exists with `ResourceType` + capacity tracking; not in runtime. |
+| Task decomposition (parent/child)     | 🟡      | Sequential dependencies now create parent/child `TaskNode` relationships in `TaskGraph`; `Planner.create_plan()` adds `step i+1 → step i` edges. Automatic subtask decomposition not yet implemented. |
+| Task graph (`TaskGraph`)              | ✅      | Module exists in `app/planner/task_graph.py` with unit tests; **now wired into the runtime** via `PlanManager` → `Plan._graph`, sequential dependencies created by `Planner.create_plan()`, validated on creation, and `Executor.execute_plan()` uses topological sort from TaskGraph. |
+| Scheduler                             | ✅     | `app/planner/scheduler.py` (ASAP, Priority, Longest-Duration, Deadline, Resource-Optimized) integrated into `Executor.execute_plan()`; tasks scheduled in dependency-correct topological order; ASAP and PRIORITY_FIRST strategies wired. |
+| Resource Allocator                    | ✅     | `app/planner/resource_allocator.py` integrated into `Executor`; default MACHINE and TOOL resources allocated per task; allocations released after execution. |
 | Progress Tracker                      | 🟡     | `app/planner/progress_tracker.py` + `ProgressSnapshot` exist; not producing runtime progress data. |
 | Plan Manager                          | ✅     | `app/planner/plan_manager.py` exposes `Plan` / `PlanConfig` / `PlanManager`; now used by `FreyaAgent`. |
 | Plan Visualizer                       | 🟡     | `app/planner/plan_visualizer.py` present; not exposed in the runtime. |
@@ -142,7 +142,7 @@ A practical build order that matches `ROADMAP.md` Phase 2 ("Planner Modernizatio
 
 ---
 
-## 2. Critical — Wire `TaskGraph` into the runtime ⭐⭐⭐⭐⭐
+## 2. Critical — Wire `TaskGraph` into the runtime ⭐⭐⭐⭐⭐ **✅ COMPLETE**
 
 **Description.** After plan generation, build a `TaskGraph` for the steps with `DependencyEdge` instances and parent/child `TaskNode` relationships. Reject cyclic plans.
 
@@ -152,9 +152,16 @@ A practical build order that matches `ROADMAP.md` Phase 2 ("Planner Modernizatio
 
 **Expected outcome.** Plans are represented as DAGs; downstream components (Scheduler, Resource Allocator) can operate on graph topology.
 
+**Implementation completed (2026-07-30):**
+- `Planner.create_plan()` creates sequential dependencies between steps (task i+1 depends on task i)
+- `PlanManager.add_dependency()` validates against cycles via `CycleDetectedError` propagation
+- `Plan` class exposes `validate_graph()` and `get_task_graph()` methods
+- `Executor.execute_plan()` uses `TaskGraph.topological_sort()` for execution order
+- Preserves completed tasks for future replanning
+
 ---
 
-## 3. High — Wire `Scheduler` and `ResourceAllocator` ⭐⭐⭐⭐
+## 3. High — Wire `Scheduler` and `ResourceAllocator` ⭐⭐⭐⭐ **✅ COMPLETE**
 
 **Description.** Use `Scheduler` (start with `ASAP` and `PRIORITY_FIRST`) and `ResourceAllocator` (default machine + tool resources) at execution time, honouring `Task.dependencies`.
 
@@ -163,6 +170,15 @@ A practical build order that matches `ROADMAP.md` Phase 2 ("Planner Modernizatio
 **Dependencies.** Prioritities 1 and 2.
 
 **Expected outcome.** Steps run in dependency-correct order with explicit resource reservations, replacing the current linear step loop.
+
+**Implementation completed (2026-07-30):**
+- `Executor.execute_plan()` now uses `Scheduler` to generate execution schedule from `TaskGraph`
+- `ASAP` and `PRIORITY_FIRST` scheduling strategies wired and functional
+- `ResourceAllocator` initialized with default `MACHINE` and `TOOL` resources in `Executor.__init__`
+- Tasks allocate required resources before execution and release them after
+- Linear step execution loop replaced with scheduler-driven execution respecting `ScheduleItem` order
+- Backward compatibility maintained for dict-based plans
+- All 153 existing tests pass
 
 ---
 

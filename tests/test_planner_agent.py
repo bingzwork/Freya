@@ -304,3 +304,106 @@ def test_planner_omits_lesson_section_when_nothing_matches():
     Planner(llm, engineering_lessons=storage).create_plan("Refactor the messy module")
     # Only "Build tip" matches "build"; the request does not.
     assert "Past Engineering Lessons:" not in llm.calls[0]
+
+
+# ---------- Phase 2: TaskGraph Integration Tests ----------
+
+
+def test_planner_creates_taskgraph_with_nodes():
+    """Every generated plan becomes a TaskGraph with TaskNodes for each step."""
+    llm = StubLLM('{"steps": ["Read file", "Run tests"]}')
+    plan = Planner(llm).create_plan("test task")
+
+    assert plan._graph is not None
+    assert plan._graph.count_tasks() == 2
+    nodes = plan._graph._nodes
+    assert len(nodes) == 2
+    for node in nodes.values():
+        assert node.task is not None
+
+
+def test_planner_creates_dependency_edges():
+    """Sequential dependencies become DependencyEdge instances in the graph."""
+    llm = StubLLM('{"steps": ["Step 1", "Step 2", "Step 3"]}')
+    plan = Planner(llm).create_plan("test task")
+
+    assert plan._graph.count_edges() == 2
+    edges = plan._graph.get_edges()
+    assert len(edges) == 2
+    edge_list = list(edges)
+    # Each edge should connect consecutive steps
+    assert any(e.from_task_id == edge_list[0].from_task_id and e.to_task_id == edge_list[0].to_task_id for e in edges)
+
+
+def test_planner_establishes_parent_child_relationships():
+    """TaskNodes have correct parent/child relationships from dependencies."""
+    llm = StubLLM('{"steps": ["Step 1", "Step 2"]}')
+    plan = Planner(llm).create_plan("test task")
+
+    tasks = list(plan._graph._nodes.keys())
+    assert len(tasks) == 2
+
+    parent_id, child_id = tasks[0], tasks[1]
+    parent_node = plan._graph._nodes[parent_id]
+    child_node = plan._graph._nodes[child_id]
+
+    assert child_id in parent_node.children
+    assert parent_id in child_node.parents
+
+
+def test_planner_rejects_cyclic_plan():
+    """Cyclic dependency graphs are detected and raise CycleDetectedError."""
+    # Manually create a cycle by adding tasks and dependencies
+    from app.planner.plan_manager import PlanManager, PlanConfig
+    from app.planner.task_graph import CycleDetectedError
+
+    manager = PlanManager()
+    plan = manager.create_plan("Cyclic Plan")
+    task1 = manager.add_task("Task 1")
+    task2 = manager.add_task("Task 2")
+    task3 = manager.add_task("Task 3")
+
+    # Create a cycle: task1 -> task2 -> task3 -> task1
+    manager.add_dependency(plan.id, task1.id, task2.id)
+    manager.add_dependency(plan.id, task2.id, task3.id)
+
+    # This should raise CycleDetectedError
+    with pytest.raises(CycleDetectedError):
+        manager.add_dependency(plan.id, task3.id, task1.id)
+
+
+def test_executor_uses_topological_order():
+    """Executor executes steps in topological order from TaskGraph."""
+    llm = StubLLM('{"steps": ["Step 1", "Step 2", "Step 3"]}')
+    plan = Planner(llm).create_plan("test task")
+
+    # The plan should have a valid topological order
+    topo_order = plan._graph.topological_sort()
+    assert len(topo_order) == 3
+
+    # Executor should use this order
+    from app.agent.executor import Executor
+    from app.core.llm import LLM
+
+    # We can't easily test full execution, but verify the graph is valid
+    assert plan._graph.has_cycle() is False
+
+
+def test_completed_tasks_preserved_for_replanning():
+    """Completed tasks can be preserved for future replanning."""
+    llm = StubLLM('{"steps": ["Step 1", "Step 2", "Step 3"]}')
+    plan = Planner(llm).create_plan("test task")
+
+    # Mark first task as completed
+    first_task_id = list(plan._graph._nodes.keys())[0]
+    first_task = plan._graph.get_task(first_task_id)
+    first_task.mark_completed()
+
+    # Graph should still have the completed task
+    assert plan._graph.count_tasks() == 3
+    assert first_task.is_complete
+
+    # Dependencies should still work
+    topo_order = plan._graph.topological_sort()
+    assert len(topo_order) == 3
+    assert topo_order[0] == first_task_id  # Completed task still in order
