@@ -74,3 +74,6 @@ new_method.txt
 patch.txt
 llm_explanation.md
 ProjectIndex.md
+
+# Plan files generated during test runs
+.plans/
