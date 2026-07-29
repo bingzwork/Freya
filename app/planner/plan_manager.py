@@ -71,7 +71,7 @@ class Plan:
     _graph: Optional[TaskGraph] = field(default=None, repr=False)
     _scheduler: Optional[Scheduler] = field(default=None, repr=False)
     _allocator: Optional[ResourceAllocator] = field(default=None, repr=False)
-    _tracker: Optional[ProgressTracker] = field(default=False, repr=False)
+    _tracker: Optional[ProgressTracker] = field(default=None, repr=False)
 
     def __post_init__(self):
         # Initialize internal components
@@ -603,6 +603,8 @@ class PlanManager:
 
         task.mark_in_progress()
         plan._tracker.update_task(task)
+        # Emit progress snapshot for the transition (auto-detected)
+        plan._tracker.on_task_status_changed(task)
         plan._update_timestamp()
         self.save_plan(plan)
 
@@ -633,7 +635,106 @@ class PlanManager:
 
         task.mark_completed()
         plan._tracker.update_task(task)
-        plan._tracker.track_completion(task_id)
+        # Emit progress snapshot for the transition (auto-detected)
+        plan._tracker.on_task_status_changed(task)
+        plan._update_timestamp()
+        self.save_plan(plan)
+
+        return True
+
+    def mark_task_ready(self, plan_id: str, task_id: str) -> bool:
+        """Mark a task as ready to start.
+
+        Args:
+            plan_id: ID of the plan
+            task_id: ID of the task
+
+        Returns:
+            True if task was updated
+        """
+        plan = self._plans.get(plan_id)
+        if not plan:
+            return False
+
+        task = None
+        for t in plan.tasks:
+            if t.id == task_id:
+                task = t
+                break
+
+        if not task:
+            return False
+
+        task.mark_ready()
+        plan._tracker.update_task(task)
+        # Emit progress snapshot for the transition (auto-detected)
+        plan._tracker.on_task_status_changed(task)
+        plan._update_timestamp()
+        self.save_plan(plan)
+
+        return True
+
+    def mark_task_failed(self, plan_id: str, task_id: str, reason: str = "") -> bool:
+        """Mark a task as failed.
+
+        Args:
+            plan_id: ID of the plan
+            task_id: ID of the task
+            reason: Reason for failure
+
+        Returns:
+            True if task was updated
+        """
+        plan = self._plans.get(plan_id)
+        if not plan:
+            return False
+
+        task = None
+        for t in plan.tasks:
+            if t.id == task_id:
+                task = t
+                break
+
+        if not task:
+            return False
+
+        task.mark_failed(reason)
+        plan._tracker.update_task(task)
+        # Emit progress snapshot for the transition (auto-detected)
+        plan._tracker.on_task_status_changed(task)
+        plan._update_timestamp()
+        self.save_plan(plan)
+
+        return True
+
+    def mark_task_blocked(self, plan_id: str, task_id: str, reason: str = "") -> bool:
+        """Mark a task as blocked.
+
+        Args:
+            plan_id: ID of the plan
+            task_id: ID of the task
+            reason: Reason for being blocked
+
+        Returns:
+            True if task was updated
+        """
+        plan = self._plans.get(plan_id)
+        if not plan:
+            return False
+
+        task = None
+        for t in plan.tasks:
+            if t.id == task_id:
+                task = t
+                break
+
+        if not task:
+            return False
+
+        task.mark_blocked(reason)
+        plan._tracker.update_task(task)
+        # Emit progress snapshot for the transition (auto-detected)
+        plan._tracker.on_task_status_changed(task)
         plan._update_timestamp()
         self.save_plan(plan)
 
@@ -655,4 +756,38 @@ class PlanManager:
                 }
                 for p in self._plans.values()
             ],
+        }
+
+    # Progress data export methods for diagnostics, monitoring, backlog
+
+    def get_progress_for_diagnostics(self, plan_id: str) -> Optional[Dict[str, Any]]:
+        """Get progress data formatted for diagnostics consumption."""
+        plan = self._plans.get(plan_id)
+        if not plan:
+            return None
+        return plan._tracker.export_for_diagnostics()
+
+    def get_progress_for_monitoring(self, plan_id: str) -> Optional[Dict[str, Any]]:
+        """Get progress data formatted for monitoring consumption."""
+        plan = self._plans.get(plan_id)
+        if not plan:
+            return None
+        return plan._tracker.export_for_monitoring()
+
+    def get_progress_for_backlog(self, plan_id: str) -> Optional[Dict[str, Any]]:
+        """Get progress data formatted for backlog consumption."""
+        plan = self._plans.get(plan_id)
+        if not plan:
+            return None
+        return plan._tracker.export_for_backlog()
+
+    def get_all_active_progress(self) -> Dict[str, Any]:
+        """Get progress data for the active plan (for monitoring/backlog integration)."""
+        if not self._active_plan:
+            return {}
+        return {
+            "plan_id": self._active_plan.id,
+            "diagnostics": self._active_plan._tracker.export_for_diagnostics(),
+            "monitoring": self._active_plan._tracker.export_for_monitoring(),
+            "backlog": self._active_plan._tracker.export_for_backlog(),
         }

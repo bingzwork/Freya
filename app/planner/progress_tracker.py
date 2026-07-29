@@ -6,7 +6,7 @@ including history, metrics, and visualization.
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Callable
 from collections import defaultdict
 
 from app.planner.task import Task, TaskStatus
@@ -25,9 +25,16 @@ class ProgressSnapshot:
     tasks_by_status: Dict[str, int] = field(default_factory=dict)
     tasks_by_priority: Dict[str, int] = field(default_factory=dict)
     tasks_by_category: Dict[str, int] = field(default_factory=dict)
+    # Track which task triggered this snapshot
+    trigger_task_id: Optional[str] = None
+    trigger_transition: Optional[str] = None
+    # Replanning event data
+    replanning_event: Optional[Dict[str, Any]] = None
+    # Replanning event tracking (Phase 5)
+    replanning_event: Optional[Dict[str, Any]] = None
 
     @classmethod
-    def create(cls, tasks: List[Task]) -> "ProgressSnapshot":
+    def create(cls, tasks: List[Task], trigger_task_id: Optional[str] = None, trigger_transition: Optional[str] = None) -> "ProgressSnapshot":
         """Create a snapshot from a list of tasks."""
         timestamp = datetime.now(timezone.utc).isoformat()
         total = len(tasks)
@@ -59,7 +66,20 @@ class ProgressSnapshot:
             tasks_by_status=dict(status_counts),
             tasks_by_priority=dict(priority_counts),
             tasks_by_category=dict(category_counts),
+            trigger_task_id=trigger_task_id,
+            trigger_transition=trigger_transition,
         )
+
+    @classmethod
+    def create_replanning_snapshot(
+        cls,
+        tasks: List[Task],
+        replanning_event: Dict[str, Any],
+    ) -> "ProgressSnapshot":
+        """Create a snapshot specifically for a replanning event."""
+        snapshot = cls.create(tasks)
+        snapshot.replanning_event = replanning_event
+        return snapshot
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -74,6 +94,9 @@ class ProgressSnapshot:
             "tasks_by_status": self.tasks_by_status,
             "tasks_by_priority": self.tasks_by_priority,
             "tasks_by_category": self.tasks_by_category,
+            "trigger_task_id": self.trigger_task_id,
+            "trigger_transition": self.trigger_transition,
+            "replanning_event": self.replanning_event,
         }
 
 
@@ -82,6 +105,7 @@ class ProgressTracker:
 
     This class provides methods for tracking task completion,
     calculating metrics, and generating progress reports.
+    Emits ProgressSnapshot objects on task state transitions.
     """
 
     def __init__(self):
@@ -95,8 +119,17 @@ class ProgressTracker:
         # Task completion history
         self._completion_history: List[Dict[str, Any]] = []
 
+        # Task state history (chronological)
+        self._state_history: List[Dict[str, Any]] = []
+
         # Start time
         self._start_time: Optional[str] = None
+
+        # Callbacks for progress notifications
+        self._callbacks: List[Callable[[ProgressSnapshot], None]] = []
+
+        # Track last known status for each task to detect transitions
+        self._last_status: Dict[str, TaskStatus] = {}
 
     def add_task(self, task: Task) -> None:
         """Add a task to the tracker."""
@@ -123,17 +156,18 @@ class ProgressTracker:
         """Get all tracked tasks."""
         return list(self._tasks.values())
 
-    def take_snapshot(self) -> ProgressSnapshot:
+    def take_snapshot(self, trigger_task_id: Optional[str] = None, trigger_transition: Optional[str] = None) -> ProgressSnapshot:
         """Take a snapshot of the current progress."""
-        snapshot = ProgressSnapshot.create(list(self._tasks.values()))
+        snapshot = ProgressSnapshot.create(list(self._tasks.values()), trigger_task_id=trigger_task_id, trigger_transition=trigger_transition)
         self._snapshots.append(snapshot)
+        self._notify_callbacks(snapshot)
         return snapshot
 
     def get_current_snapshot(self) -> ProgressSnapshot:
         """Get the most recent snapshot."""
         if self._snapshots:
             return self._snapshots[-1]
-        return ProgressSnapshot.create(list(self._tasks.values()))
+        return ProgressSnapshot.create(list(self._tasks.values()), trigger_task_id=None, trigger_transition=None)
 
     def get_snapshots(self, count: Optional[int] = None) -> List[ProgressSnapshot]:
         """Get progress snapshots.
@@ -327,4 +361,203 @@ class ProgressTracker:
         self._tasks.clear()
         self._snapshots.clear()
         self._completion_history.clear()
+        self._state_history.clear()
         self._start_time = None
+        self._last_status.clear()
+        self._callbacks.clear()
+
+    # Progress notification callbacks
+
+    def add_callback(self, callback: Callable[[ProgressSnapshot], None]) -> None:
+        """Add a callback to be notified when a new snapshot is taken."""
+        self._callbacks.append(callback)
+
+    def remove_callback(self, callback: Callable[[ProgressSnapshot], None]) -> None:
+        """Remove a callback."""
+        if callback in self._callbacks:
+            self._callbacks.remove(callback)
+
+    def _notify_callbacks(self, snapshot: ProgressSnapshot) -> None:
+        """Notify all callbacks of a new snapshot."""
+        for callback in self._callbacks:
+            try:
+                callback(snapshot)
+            except Exception:
+                # Don't let callback errors break the tracker
+                pass
+
+    # Task state transition handling
+
+    def _detect_transition(self, task_id: str, new_status: TaskStatus) -> Optional[str]:
+        """Detect and return the transition string if status changed."""
+        old_status = self._last_status.get(task_id)
+        if old_status is None:
+            # First time seeing this task
+            transition = f"PENDING → {new_status.value.upper()}"
+            self._last_status[task_id] = new_status
+            return transition
+        elif old_status != new_status:
+            transition = f"{old_status.value.upper()} → {new_status.value.upper()}"
+            self._last_status[task_id] = new_status
+            return transition
+        return None
+
+    def on_task_status_changed(self, task: Task, transition: Optional[str] = None) -> Optional[ProgressSnapshot]:
+        """Called when a task's status changes. Takes a snapshot and records the transition.
+
+        Args:
+            task: The task whose status changed
+            transition: Optional explicit transition string (e.g., "PENDING -> IN_PROGRESS")
+
+        Returns:
+            The ProgressSnapshot that was created, or None if no status change occurred
+        """
+        # Update the task in our tracking
+        self._tasks[task.id] = task
+        if self._start_time is None:
+            self._start_time = datetime.now(timezone.utc).isoformat()
+
+        # Detect transition if not provided
+        if transition is None:
+            transition = self._detect_transition(task.id, task.status)
+
+        # If no transition (status unchanged), don't take a snapshot
+        if transition is None:
+            return None
+
+        # Record state history
+        state_record = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "task_id": task.id,
+            "task_title": task.title,
+            "new_status": task.status.value,
+            "transition": transition,
+        }
+        self._state_history.append(state_record)
+
+        # Take a snapshot
+        snapshot = self.take_snapshot(trigger_task_id=task.id, trigger_transition=transition)
+
+        # If completed or failed, track completion
+        if task.status in (TaskStatus.COMPLETED, TaskStatus.FAILED):
+            self.track_completion(task.id)
+
+        return snapshot
+
+    def get_state_history(self, count: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Get the chronological state transition history.
+
+        Args:
+            count: Maximum number of records to return (most recent)
+
+        Returns:
+            List of state transition records
+        """
+        if count is None:
+            return list(self._state_history)
+        return list(self._state_history[-count:])
+
+    def get_snapshots(self, count: Optional[int] = None) -> List[ProgressSnapshot]:
+        """Get progress snapshots.
+
+        Args:
+            count: Maximum number of snapshots to return (most recent)
+        """
+        if count is None:
+            return list(self._snapshots)
+        return list(self._snapshots[-count:])
+
+    def get_progress_history_summary(self) -> Dict[str, Any]:
+        """Get a summary of the progress history for external consumers (diagnostics, monitoring, backlog).
+
+        Returns:
+            Dictionary with progress summary suitable for diagnostics/monitoring/backlog
+        """
+        snapshots = self._snapshots
+        if not snapshots:
+            return {
+                "total_snapshots": 0,
+                "first_snapshot": None,
+                "last_snapshot": None,
+                "total_duration_seconds": 0,
+                "state_transitions": len(self._state_history),
+                "final_progress": 0,
+            }
+
+        first = snapshots[0]
+        last = snapshots[-1]
+
+        # Calculate total duration
+        try:
+            first_time = datetime.fromisoformat(first.timestamp)
+            last_time = datetime.fromisoformat(last.timestamp)
+            duration = (last_time - first_time).total_seconds()
+        except Exception:
+            duration = 0
+
+        # Count unique transitions
+        transitions = defaultdict(int)
+        for record in self._state_history:
+            if record.get("transition"):
+                transitions[record["transition"]] += 1
+
+        return {
+            "total_snapshots": len(snapshots),
+            "first_snapshot": first.to_dict(),
+            "last_snapshot": last.to_dict(),
+            "total_duration_seconds": duration,
+            "state_transitions": len(self._state_history),
+            "transitions_by_type": dict(transitions),
+            "final_progress": last.overall_progress,
+            "completed_tasks": last.completed_tasks,
+            "total_tasks": last.total_tasks,
+            "state_history": self._state_history[-50:],  # Last 50 records
+        }
+
+    # Export methods for diagnostics, monitoring, backlog
+
+    def export_for_diagnostics(self) -> Dict[str, Any]:
+        """Export progress data formatted for diagnostics consumption."""
+        return {
+            "source": "ProgressTracker",
+            "type": "execution_progress",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "summary": self.get_progress_history_summary(),
+            "snapshots": [s.to_dict() for s in self._snapshots],
+            "completion_history": self._completion_history,
+        }
+
+    def export_for_monitoring(self) -> Dict[str, Any]:
+        """Export progress data formatted for monitoring consumption."""
+        return {
+            "source": "ProgressTracker",
+            "type": "task_execution_metrics",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "summary": self.get_progress_history_summary(),
+            "velocity": self.get_velocity(),
+            "burndown": self.get_burndown_data(),
+            "current_tasks": [t.to_dict() for t in self._tasks.values()],
+        }
+
+    def export_for_backlog(self) -> Dict[str, Any]:
+        """Export progress data formatted for backlog consumption."""
+        completed_tasks = [t for t in self._tasks.values() if t.status == TaskStatus.COMPLETED]
+        failed_tasks = [t for t in self._tasks.values() if t.status == TaskStatus.FAILED]
+        blocked_tasks = [t for t in self._tasks.values() if t.status == TaskStatus.BLOCKED]
+
+        return {
+            "source": "ProgressTracker",
+            "type": "execution_outcome",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "summary": self.get_progress_history_summary(),
+            "outcomes": {
+                "completed": len(completed_tasks),
+                "failed": len(failed_tasks),
+                "blocked": len(blocked_tasks),
+                "total": len(self._tasks),
+            },
+            "completed_task_details": [t.to_dict() for t in completed_tasks],
+            "failed_task_details": [t.to_dict() for t in failed_tasks],
+            "blocked_task_details": [t.to_dict() for t in blocked_tasks],
+            "state_history": self._state_history,
+        }

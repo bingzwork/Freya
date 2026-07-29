@@ -1227,6 +1227,297 @@ class TestVisualizationOptions:
         assert options.show_priority is True
 
 
+class TestProgressTrackerIntegration:
+    """Tests for ProgressTracker state transition integration."""
+
+    def test_progress_tracker_emits_snapshot_on_task_status_change(self):
+        """Test that on_task_status_changed emits a ProgressSnapshot."""
+        tracker = ProgressTracker()
+        task = Task(id="task1", title="Test Task")
+        tracker.add_task(task)
+
+        # Initially no snapshots
+        assert len(tracker.get_snapshots()) == 0
+
+        # Change task status - should emit a snapshot
+        task.mark_ready()
+        snapshot = tracker.on_task_status_changed(task)
+
+        assert len(tracker.get_snapshots()) == 1
+        assert snapshot is not None
+        assert snapshot.trigger_task_id == "task1"
+        assert "PENDING → READY" in snapshot.trigger_transition
+
+    def test_progress_tracker_emits_snapshot_on_in_progress_transition(self):
+        """Test that IN_PROGRESS transition emits a snapshot."""
+        tracker = ProgressTracker()
+        task = Task(id="task1", title="Test Task")
+        tracker.add_task(task)
+
+        task.mark_ready()
+        tracker.on_task_status_changed(task)
+
+        task.mark_in_progress()
+        snapshot = tracker.on_task_status_changed(task)
+
+        snapshots = tracker.get_snapshots()
+        assert len(snapshots) == 2
+        assert snapshots[-1].trigger_task_id == "task1"
+        assert "READY → IN_PROGRESS" in snapshots[-1].trigger_transition
+
+    def test_progress_tracker_emits_snapshot_on_completed_transition(self):
+        """Test that COMPLETED transition emits a snapshot."""
+        tracker = ProgressTracker()
+        task = Task(id="task1", title="Test Task")
+        tracker.add_task(task)
+
+        task.mark_ready()
+        tracker.on_task_status_changed(task)
+        task.mark_in_progress()
+        tracker.on_task_status_changed(task)
+        task.mark_completed()
+        snapshot = tracker.on_task_status_changed(task)
+
+        snapshots = tracker.get_snapshots()
+        assert len(snapshots) == 3
+        assert snapshots[-1].trigger_task_id == "task1"
+        assert "IN_PROGRESS → COMPLETED" in snapshots[-1].trigger_transition
+
+    def test_progress_tracker_emits_snapshot_on_failed_transition(self):
+        """Test that FAILED transition emits a snapshot."""
+        tracker = ProgressTracker()
+        task = Task(id="task1", title="Test Task")
+        tracker.add_task(task)
+
+        task.mark_in_progress()
+        tracker.on_task_status_changed(task)
+        task.mark_failed("Build failed")
+        snapshot = tracker.on_task_status_changed(task)
+
+        snapshots = tracker.get_snapshots()
+        assert len(snapshots) == 2
+        assert snapshots[-1].trigger_task_id == "task1"
+        assert "IN_PROGRESS → FAILED" in snapshot.trigger_transition
+
+    def test_progress_tracker_tracks_blocked_transition(self):
+        """Test that BLOCKED transition emits a snapshot."""
+        tracker = ProgressTracker()
+        task = Task(id="task1", title="Test Task")
+        tracker.add_task(task)
+
+        task.mark_ready()
+        tracker.on_task_status_changed(task)
+        task.mark_blocked("Waiting for review")
+        snapshot = tracker.on_task_status_changed(task)
+
+        snapshots = tracker.get_snapshots()
+        assert len(snapshots) == 2
+        assert "BLOCKED" in snapshot.trigger_transition
+
+    def test_progress_tracker_chronological_order(self):
+        """Test that snapshots are in chronological order."""
+        tracker = ProgressTracker()
+        task = Task(id="task1", title="Test Task")
+        tracker.add_task(task)
+
+        task.mark_ready()
+        s1 = tracker.on_task_status_changed(task)
+        task.mark_in_progress()
+        s2 = tracker.on_task_status_changed(task)
+        task.mark_completed()
+        s3 = tracker.on_task_status_changed(task)
+
+        snapshots = tracker.get_snapshots()
+        assert len(snapshots) == 3
+        # Verify chronological order
+        assert s1.timestamp <= s2.timestamp <= s3.timestamp
+        # Verify state progression
+        assert snapshots[0].pending_tasks == 0  # One task became ready
+        assert snapshots[1].in_progress_tasks == 1
+        assert snapshots[2].completed_tasks == 1
+
+    def test_progress_tracker_state_history(self):
+        """Test that get_state_history returns chronological state transitions."""
+        tracker = ProgressTracker()
+        task = Task(id="task1", title="Test Task")
+        tracker.add_task(task)
+
+        task.mark_ready()
+        tracker.on_task_status_changed(task)
+        task.mark_in_progress()
+        tracker.on_task_status_changed(task)
+        task.mark_completed()
+        tracker.on_task_status_changed(task)
+
+        history = tracker.get_state_history()
+        assert len(history) == 3
+        assert history[0]["new_status"] == "ready"
+        assert history[1]["new_status"] == "in_progress"
+        assert history[2]["new_status"] == "completed"
+        assert "transition" in history[0]
+        assert "transition" in history[1]
+        assert "transition" in history[2]
+
+    def test_progress_tracker_multiple_tasks_independent_transitions(self):
+        """Test that multiple tasks can transition independently."""
+        tracker = ProgressTracker()
+        task1 = Task(id="task1", title="Task 1")
+        task2 = Task(id="task2", title="Task 2")
+        tracker.add_task(task1)
+        tracker.add_task(task2)
+
+        task1.mark_ready()
+        tracker.on_task_status_changed(task1)
+        task2.mark_ready()
+        tracker.on_task_status_changed(task2)
+
+        # Both tasks should have their own snapshots
+        snapshots = tracker.get_snapshots()
+        assert len(snapshots) == 2
+
+        # Check final progress
+        progress = tracker.get_overall_progress()
+        assert progress == 0.0  # None completed yet
+
+        task1.mark_completed()
+        tracker.on_task_status_changed(task1)
+
+        snapshots = tracker.get_snapshots()
+        assert len(snapshots) == 3
+        assert snapshots[-1].completed_tasks == 1
+
+    def test_progress_tracker_no_duplicate_snapshots_on_same_status(self):
+        """Test that calling on_task_status_changed with same status doesn't create new snapshot."""
+        tracker = ProgressTracker()
+        task = Task(id="task1", title="Test Task")
+        tracker.add_task(task)
+
+        task.mark_ready()
+        tracker.on_task_status_changed(task)
+        initial_snapshots = len(tracker.get_snapshots())
+
+        # Calling again with same status (mark_ready already called)
+        tracker.on_task_status_changed(task)
+
+        # Should not create a new snapshot since status didn't change
+        assert len(tracker.get_snapshots()) == initial_snapshots
+
+    def test_progress_tracker_export_for_diagnostics(self):
+        """Test export_for_diagnostics method."""
+        tracker = ProgressTracker()
+        task = Task(id="task1", title="Test Task")
+        tracker.add_task(task)
+        task.mark_completed()
+        tracker.on_task_status_changed(task)
+
+        export = tracker.export_for_diagnostics()
+        assert export["source"] == "ProgressTracker"
+        assert export["type"] == "execution_progress"
+        assert "summary" in export
+        assert "snapshots" in export
+        assert "completion_history" in export
+        assert len(export["snapshots"]) == 1
+
+    def test_progress_tracker_export_for_monitoring(self):
+        """Test export_for_monitoring method."""
+        tracker = ProgressTracker()
+        task = Task(id="task1", title="Test Task")
+        tracker.add_task(task)
+        task.mark_completed()
+        tracker.on_task_status_changed(task)
+
+        export = tracker.export_for_monitoring()
+        assert export["source"] == "ProgressTracker"
+        assert export["type"] == "task_execution_metrics"
+        assert "summary" in export
+        assert "velocity" in export
+        assert "burndown" in export
+        assert "current_tasks" in export
+
+    def test_progress_tracker_export_for_backlog(self):
+        """Test export_for_backlog method."""
+        tracker = ProgressTracker()
+        task = Task(id="task1", title="Test Task")
+        tracker.add_task(task)
+        task.mark_completed()
+        tracker.on_task_status_changed(task)
+
+        task2 = Task(id="task2", title="Failed Task")
+        tracker.add_task(task2)
+        task2.mark_failed("Error")
+        tracker.on_task_status_changed(task2)
+
+        export = tracker.export_for_backlog()
+        assert export["source"] == "ProgressTracker"
+        assert export["type"] == "execution_outcome"
+        assert "summary" in export
+        assert "outcomes" in export
+        assert export["outcomes"]["completed"] == 1
+        assert export["outcomes"]["failed"] == 1
+        assert export["outcomes"]["total"] == 2
+        assert "state_history" in export
+
+    def test_progress_tracker_progress_history_summary(self):
+        """Test get_progress_history_summary method."""
+        tracker = ProgressTracker()
+        task = Task(id="task1", title="Test Task")
+        tracker.add_task(task)
+        task.mark_completed()
+        tracker.on_task_status_changed(task)
+
+        summary = tracker.get_progress_history_summary()
+        assert summary["total_snapshots"] == 1
+        assert summary["state_transitions"] == 1
+        assert summary["final_progress"] == 100.0
+        assert summary["completed_tasks"] == 1
+        assert summary["total_tasks"] == 1
+        assert "transitions_by_type" in summary
+        assert "PENDING → COMPLETED" in summary["transitions_by_type"]
+
+
+class TestProgressTrackerCallbacks:
+    """Tests for ProgressTracker callback system."""
+
+    def test_callback_notified_on_snapshot(self):
+        """Test that callbacks are notified when snapshot is taken."""
+        tracker = ProgressTracker()
+        task = Task(id="task1", title="Test Task")
+        tracker.add_task(task)
+
+        received_snapshots = []
+
+        def callback(snapshot):
+            received_snapshots.append(snapshot)
+
+        tracker.add_callback(callback)
+        task.mark_completed()
+        tracker.on_task_status_changed(task)
+
+        assert len(received_snapshots) == 1
+        assert received_snapshots[0].trigger_task_id == "task1"
+
+    def test_callback_removed(self):
+        """Test that removed callbacks don't receive notifications."""
+        tracker = ProgressTracker()
+        task = Task(id="task1", title="Test Task")
+        tracker.add_task(task)
+
+        received = []
+
+        def callback(snapshot):
+            received.append(snapshot)
+
+        tracker.add_callback(callback)
+        task.mark_ready()
+        tracker.on_task_status_changed(task)
+
+        tracker.remove_callback(callback)
+        task.mark_in_progress()
+        tracker.on_task_status_changed(task)
+
+        assert len(received) == 1
+
+
 class TestPlanConfig:
     """Tests for PlanConfig."""
 

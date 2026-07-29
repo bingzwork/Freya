@@ -2,7 +2,7 @@ from app.agent.executor import Executor
 from app.agent.planner import Planner
 from app.brain.state import ConversationState
 from app.core.llm import LLM
-from app.planner.plan_manager import PlanManager
+from app.planner.plan_manager import PlanManager, Plan
 from typing import Optional, Dict, List, Any
 from app.core.logger import logger
 from app.core.project_index import ProjectIndex
@@ -214,6 +214,9 @@ class FreyaAgent:
         self.planner = Planner(self.llm, self.memory, engineering_lessons=self.engineering_lessons)
         self.conversation = ConversationState(max_history=max_conversation_history, persistence_path=conversation_persistence_path)
 
+        # Progress tracking - stores the last execution's progress snapshot
+        self.last_execution_progress: Optional[Dict[str, Any]] = None
+
         self.project_index = ProjectIndex(workspace)
         self.symbol_index = SymbolIndex(workspace)
         logger.info("Building project index...")
@@ -337,6 +340,26 @@ Answer the user's request directly."""
             allowed_tools.update(Executor.MUTATING_TOOLS)
         # Execute using the Plan object (Executor now accepts Plan or dict)
         results = self.executor.execute_plan(plan, allowed_tools)
+
+        # Capture progress tracking data from the plan's ProgressTracker
+        if isinstance(plan, Plan):
+            snapshot = plan._tracker.get_current_snapshot()
+            self.last_execution_progress = {
+                "plan_id": plan.id,
+                "plan_name": plan.config.name,
+                "total_tasks": snapshot.total_tasks,
+                "completed_tasks": snapshot.completed_tasks,
+                "in_progress_tasks": snapshot.in_progress_tasks,
+                "pending_tasks": snapshot.pending_tasks,
+                "blocked_tasks": snapshot.blocked_tasks,
+                "overall_progress": snapshot.overall_progress,
+                "tasks_by_status": snapshot.tasks_by_status,
+                "tasks_by_priority": snapshot.tasks_by_priority,
+                "tasks_by_category": snapshot.tasks_by_category,
+                "snapshots_count": len(plan._tracker.get_snapshots()),
+                "state_history": plan._tracker.get_state_history(),
+            }
+
         # For the LLM prompt, use the plan's steps
         plan_steps = plan.tasks if hasattr(plan, 'tasks') else plan.get("steps", [])
         conversation_history = self.conversation.get_history_text()
@@ -976,3 +999,17 @@ Tool results:
     def load_conversation(self, path: str) -> None:
         """Load conversation history from a file."""
         self.conversation.load(path)
+
+    def get_last_execution_progress(self) -> Optional[Dict[str, Any]]:
+        """Get the progress tracking data from the last engineering task execution.
+
+        Returns a dictionary with progress snapshot data including:
+        - total_tasks, completed_tasks, in_progress_tasks, pending_tasks, blocked_tasks
+        - overall_progress (percentage)
+        - tasks_by_status, tasks_by_priority, tasks_by_category
+        - snapshots_count (number of ProgressSnapshot objects captured)
+        - state_history (chronological list of task state transitions)
+
+        Returns None if no engineering task has been executed yet.
+        """
+        return self.last_execution_progress

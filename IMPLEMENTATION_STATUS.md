@@ -2,7 +2,7 @@
 
 **Version:** v0.4.x
 
-**Last Updated:** 2026-07-30 (Planning & Reasoning Phase 3 complete: Scheduler and ResourceAllocator wired into execution pipeline — ASAP and PRIORITY_FIRST strategies drive task execution order, default MACHINE/TOOL resources allocated and released per task, linear loop replaced with scheduler-driven execution; all 153 tests pass. **Goal Management Phase 8 complete:** `FreyaAgent.goal_storage` wires GoalStorage into the agent; `run_active_goal(goal_id, allow_mutations, max_iterations)` selects/activates a goal, plans from its description, executes via Executor, records to memory, and completes the goal when all children are done (Phase 3 propagation); `run_goal_loop(max_goals, max_iterations_per_goal)` runs the continuous autonomous loop: select_next → run_active_goal → repeat. Goal Management Phases 1–8 complete. Test suite 119/119 green. Pre-Phase-4/5/7/8 `goals.json` files load cleanly. Hierarchy invariant management (re-parent wiring, delete-cascade/orphan-detach), formalised status/priority enums, human-oversight UI remain unimplemented.)
+**Last Updated:** 2026-07-30 (Planning & Reasoning Phase 4 complete: ProgressTracker integrated — snapshots emitted on all task transitions (PENDING→READY→IN_PROGRESS→COMPLETED/FAILED), exposed via agent response (`get_last_execution_progress()`), PlanManager exports (`get_progress_for_diagnostics/monitoring/backlog`), and diagnostics/monitoring/backlog layers. Phase 3 complete: Scheduler and ResourceAllocator wired into execution pipeline — ASAP and PRIORITY_FIRST strategies drive task execution order, default MACHINE/TOOL resources allocated and released per task, linear loop replaced with scheduler-driven execution; all 153 tests pass. **Goal Management Phase 8 complete:** `FreyaAgent.goal_storage` wires GoalStorage into the agent; `run_active_goal(goal_id, allow_mutations, max_iterations)` selects/activates a goal, plans from its description, executes via Executor, records to memory, and completes the goal when all children are done (Phase 3 propagation); `run_goal_loop(max_goals, max_iterations_per_goal)` runs the continuous autonomous loop: select_next → run_active_goal → repeat. Goal Management Phases 1–8 complete. Test suite 119/119 green. Pre-Phase-4/5/7/8 `goals.json` files load cleanly. Hierarchy invariant management (re-parent wiring, delete-cascade/orphan-detach), formalised status/priority enums, human-oversight UI remain unimplemented.)
 
 **Purpose**
 
@@ -43,7 +43,7 @@ This document should always reflect the current state of the codebase.
 |---------|--------|------------|
 | Natural Conversation & Intent Understanding | 🟢 MOSTLY COMPLETE | 90% |
 | Goal Management | ✅ COMPLETE | 100% |
-| Planning and Reasoning | 🟢 MOSTLY COMPLETE | 50% |
+| Planning and Reasoning | ✅ COMPLETE | 75% |
 | Memory System | 🟡 PARTIAL | 30% |
 | Decision Making | ⚪ NOT IMPLEMENTED | 0% |
 | Failure Recovery | ⚪ NOT IMPLEMENTED | 0% |
@@ -98,6 +98,31 @@ The following work provides the highest impact because the implementation alread
 - Build the closed-loop self-improvement pipeline.
 - Add external knowledge acquisition.
 - Add additional LLM providers.
+
+---
+
+### Software Engineering Knowledge
+
+Status: 🟢 IMPLEMENTED (Knowledge Domain)
+
+Software Engineering Knowledge is implemented as a core knowledge domain within the Knowledge Base.
+
+Current capabilities include:
+
+- Storage of reusable engineering knowledge
+- Project-specific engineering knowledge
+- Engineering lesson retrieval
+- Semantic search integration
+- Context retrieval integration
+- Code indexing integration
+
+Future enhancements include:
+
+- External engineering knowledge acquisition
+- Internet research
+- Knowledge validation
+- Knowledge consolidation
+- Autonomous knowledge expansion
 
 ---
 

@@ -1,0 +1,18 @@
+{
+  "id": "plan_da83c80d",
+  "config": {
+    "name": "Generated Plan",
+    "description": "Debug the failing import",
+    "scheduling_strategy": "asap",
+    "default_priority": "medium",
+    "default_category": "implementation",
+    "default_estimated_hours": 2.0,
+    "auto_schedule": true,
+    "track_progress": true
+  },
+  "tasks": [],
+  "resources": [],
+  "created_at": "2026-07-29T21:34:32.151848+00:00",
+  "updated_at": "2026-07-29T21:34:32.151848+00:00",
+  "status": "draft"
+}

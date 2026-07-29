@@ -530,6 +530,16 @@ Return ONLY this JSON, no markdown, no extra text:
             # Allocate resources
             self._allocate_for_task(task)
 
+            # Mark task as READY (dependencies satisfied, ready to start)
+            if isinstance(plan, Plan) and hasattr(plan, '_tracker') and plan._tracker:
+                task.mark_ready()
+                plan._tracker.on_task_status_changed(task, transition="PENDING → READY")
+
+            # Mark task as IN_PROGRESS
+            if isinstance(plan, Plan) and hasattr(plan, '_tracker') and plan._tracker:
+                task.mark_in_progress()
+                plan._tracker.on_task_status_changed(task, transition="READY → IN_PROGRESS")
+
             # Execute the task step
             try:
                 result = self.execute_step(task.title, allowed_tools)
@@ -541,6 +551,11 @@ Return ONLY this JSON, no markdown, no extra text:
                     "scheduled_end": schedule_item.end_time,
                 })
 
+                # Mark task as COMPLETED on success
+                if isinstance(plan, Plan) and hasattr(plan, '_tracker') and plan._tracker:
+                    task.mark_completed()
+                    plan._tracker.on_task_status_changed(task, transition="IN_PROGRESS → COMPLETED")
+
                 # Release resources after execution
                 self._release_for_task(task)
             except Exception as e:
@@ -550,6 +565,12 @@ Return ONLY this JSON, no markdown, no extra text:
                     "result": {"action": {}, "error": str(e)},
                     "task_id": task.id,
                 })
+
+                # Mark task as FAILED on exception
+                if isinstance(plan, Plan) and hasattr(plan, '_tracker') and plan._tracker:
+                    task.mark_failed(str(e))
+                    plan._tracker.on_task_status_changed(task, transition="IN_PROGRESS → FAILED")
+
                 self._release_for_task(task)
 
         logger.info("[Executor]")
