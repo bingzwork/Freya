@@ -27,6 +27,8 @@ class Goal:
             in a later phase).
         parent_goal_id: ID of this goal's parent, or None for top-level.
         child_goal_ids: IDs of this goal's children.
+        created_at: ISO timestamp captured on creation (UTC).
+        updated_at: ISO timestamp of the most recent write (UTC).
     """
 
     id: str
@@ -36,6 +38,8 @@ class Goal:
     priority: str = "medium"
     parent_goal_id: Optional[str] = None
     child_goal_ids: List[str] = field(default_factory=list)
+    created_at: str = ""
+    updated_at: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert goal to dictionary for serialization."""
@@ -69,6 +73,7 @@ class GoalStorage:
         self.storage_path = self.workspace / storage_path
         self._lock = threading.RLock()
         self._goals: Dict[str, Goal] = {}
+        self._active_goal_id: Optional[str] = None
         self._load()
 
     # --- internals -------------------------------------------------------
@@ -95,6 +100,7 @@ class GoalStorage:
                 for goal_data in data.get("goals", [])
                 if "id" in goal_data
             }
+            self._active_goal_id = (data.get("metadata") or {}).get("active_goal_id")
 
     def _save_file(self) -> None:
         """Atomic write of the in-memory map to disk."""
@@ -105,6 +111,7 @@ class GoalStorage:
             "metadata": {
                 "count": len(self._goals),
                 "last_updated": self._now(),
+                "active_goal_id": self._active_goal_id,
             },
         }
         with open(temp_path, "w", encoding="utf-8") as f:
@@ -152,10 +159,13 @@ class GoalStorage:
 
         ``id`` is allocated via ``uuid4().hex[:12]`` (matches the
         ``goal_<12hex>`` shape used elsewhere — see ``uuid.uuid4``).
+        ``created_at`` and ``updated_at`` are stamped with the current
+        UTC ISO timestamp.
         """
         with self._lock:
             import uuid
 
+            now = self._now()
             goal = Goal(
                 id=f"goal_{uuid.uuid4().hex[:12]}",
                 name=name,
@@ -164,6 +174,8 @@ class GoalStorage:
                 priority=priority,
                 parent_goal_id=parent_goal_id,
                 child_goal_ids=list(child_goal_ids) if child_goal_ids else [],
+                created_at=now,
+                updated_at=now,
             )
             self._goals[goal.id] = goal
             self._save_file()
@@ -184,23 +196,28 @@ class GoalStorage:
         Only the fields explicitly passed (i.e. not ``None``) are written;
         passing ``child_goal_ids=[]`` explicitly clears the list. Returns
         the updated ``Goal`` or ``None`` if ``goal_id`` does not exist.
+        When at least one field actually changes, ``updated_at`` is bumped
+        to the current UTC ISO timestamp; ``created_at`` is preserved.
         """
         with self._lock:
             goal = self._goals.get(goal_id)
             if goal is None:
                 return None
-            if name is not None:
-                goal.name = name
-            if description is not None:
-                goal.description = description
-            if status is not None:
-                goal.status = status
-            if priority is not None:
-                goal.priority = priority
-            if parent_goal_id is not None:
-                goal.parent_goal_id = parent_goal_id
-            if child_goal_ids is not None:
-                goal.child_goal_ids = list(child_goal_ids)
+            changed = False
+            if name is not None and goal.name != name:
+                goal.name = name; changed = True
+            if description is not None and goal.description != description:
+                goal.description = description; changed = True
+            if status is not None and goal.status != status:
+                goal.status = status; changed = True
+            if priority is not None and goal.priority != priority:
+                goal.priority = priority; changed = True
+            if parent_goal_id is not None and goal.parent_goal_id != parent_goal_id:
+                goal.parent_goal_id = parent_goal_id; changed = True
+            if child_goal_ids is not None and goal.child_goal_ids != list(child_goal_ids):
+                goal.child_goal_ids = list(child_goal_ids); changed = True
+            if changed:
+                goal.updated_at = self._now()
             self._save_file()
             return goal
 
@@ -319,5 +336,70 @@ class GoalStorage:
 
             return goal
 
+    # --- progress / active indicator (Phase 4) ---------------------------
 
+    def progress(self, goal_id: str) -> Dict[str, Any]:
+        """Return progress metrics for a goal derived from its observed children.
+
+        Shape::
+
+            {"total_children": int, "completed_children": int, "percentage": float}
+
+        The values are computed at call time from the live in-memory map, so
+        they update automatically as children are added, removed, or marked
+        completed — and as ``complete()`` propagation promotes ancestors. A
+        leaf goal (no observed children) reports ``0 / 0 / 0.0``; an unknown
+        goal id reports the same zero triple rather than raising.
+        """
+        with self._lock:
+            goal = self._goals.get(goal_id)
+            if goal is None:
+                return {"total_children": 0, "completed_children": 0, "percentage": 0.0}
+            child_ids = self._children_ids_of(goal_id)
+            total = len(child_ids)
+            completed = sum(
+                1 for cid in child_ids
+                if cid in self._goals and self._goals[cid].status == "completed"
+            )
+            pct = (100.0 * completed / total) if total else 0.0
+            return {
+                "total_children": total,
+                "completed_children": completed,
+                "percentage": pct,
+            }
+
+    def is_completed(self, goal_id: str) -> bool:
+        """Return ``True`` iff the goal exists and has ``status == "completed"``."""
+        with self._lock:
+            g = self._goals.get(goal_id)
+            return g is not None and g.status == "completed"
+
+    def set_active(self, goal_id: str) -> bool:
+        """Mark ``goal_id`` as the currently-active goal.
+
+        The active flag is single-tenant and persisted inside the same
+        ``data/memory/goals.json`` file (under the storage ``metadata``
+        block) so it survives restarts. Unknown ids return ``False``.
+        """
+        with self._lock:
+            if goal_id not in self._goals:
+                return False
+            self._active_goal_id = goal_id
+            self._save_file()
+            return True
+
+    def active_goal(self) -> Optional[Goal]:
+        """Return the currently-active goal, or ``None`` if none is set."""
+        with self._lock:
+            if self._active_goal_id is None:
+                return None
+            return self._goals.get(self._active_goal_id)
+
+    def clear_active(self) -> None:
+        """Drop the active goal marker. No-op if nothing is set."""
+        with self._lock:
+            if self._active_goal_id is None:
+                return
+            self._active_goal_id = None
+            self._save_file()
 

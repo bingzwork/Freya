@@ -1,7 +1,11 @@
-"""Tests for the Goal Management module (Phase 1).
+"""Tests for the Goal Management module.
 
-Covers the Goal dataclass and GoalStorage save/load/CRUD surface.
+Covers the Goal dataclass and GoalStorage save/load/CRUD/hierarchy/progress
+surface (Phases 1–4).
 """
+
+import time
+from datetime import datetime
 
 import pytest
 
@@ -415,4 +419,275 @@ class TestGoalStorageHierarchy:
         leaf = store.create(name="leaf", parent_goal_id=None)
         store.complete(leaf.id)
         assert store.load(orphan_parent.id).status != "completed"
+
+
+# ---------------------------------------------------------------------------
+# GoalStorage — progress / timestamps / active indicator (Phase 4)
+# ---------------------------------------------------------------------------
+
+
+class TestGoalTimestamps:
+    """Goal-level ``created_at`` / ``updated_at`` lifecycle."""
+
+    @pytest.fixture
+    def store(self, tmp_path):
+        return GoalStorage(workspace=str(tmp_path), storage_path="memory/goals.json")
+
+    def test_create_sets_both_timestamps(self, store):
+        before = datetime.utcnow()
+        goal = store.create(name="g")
+        after = datetime.utcnow()
+
+        loaded = store.load(goal.id)
+        assert loaded.created_at
+        assert loaded.updated_at
+        # Timestamps should parse as ISO and sit within the test window.
+        created = datetime.fromisoformat(loaded.created_at)
+        updated = datetime.fromisoformat(loaded.updated_at)
+        assert created == updated  # freshly created; both stamped at "now"
+
+    def test_create_timestamps_round_trip(self, store):
+        goal = store.create(name="g")
+        reread = Goal.from_dict(goal.to_dict())
+        assert reread.created_at == goal.created_at
+        assert reread.updated_at == goal.updated_at
+
+    def test_update_bumps_updated_at_only(self, store):
+        original = store.create(name="g")
+        original_created = original.created_at
+        original_updated = original.updated_at
+        time.sleep(0.01)  # ensure clock advances at least one millisecond
+        patched = store.update(original.id, name="g2")
+        assert patched.name == "g2"
+        assert patched.created_at == original_created
+        assert patched.updated_at > original_updated
+
+    def test_update_with_no_real_change_does_not_bump_updated_at(self, store):
+        original = store.create(name="g")
+        # Update(name=...) with the same value: no real change → no bump.
+        again = store.update(original.id, name="g")
+        assert again.created_at == original.created_at
+        assert again.updated_at == original.updated_at
+
+    def test_update_unknown_does_not_write(self, store):
+        baseline = store.count()
+        assert store.update("missing", name="x") is None
+        assert store.count() == baseline
+
+    def test_loaded_goals_preserve_timestamps(self, store, tmp_path):
+        """Timestamps survive a fresh ``GoalStorage`` over the same file."""
+        original = store.create(name="g")
+        time.sleep(0.01)
+        store.update(original.id, name="g2")
+
+        reopened = GoalStorage(
+            workspace=store.workspace,
+            storage_path=str(store.storage_path.relative_to(store.workspace)),
+        )
+        rel = reopened.load(original.id)
+        assert rel.created_at == original.created_at
+        assert rel.updated_at == original.updated_at
+
+    def test_backwards_compat_load_without_timestamps(self, tmp_path):
+        """A goals.json written without timestamp keys must still load."""
+        storage_dir = tmp_path / "memory"
+        storage_dir.mkdir(parents=True)
+        (storage_dir / "goals.json").write_text(
+            '{"goals": [{"id": "legacy", "name": "old"}], "metadata": {}}',
+            encoding="utf-8",
+        )
+        store = GoalStorage(workspace=str(tmp_path), storage_path="memory/goals.json")
+        legacy = store.load("legacy")
+        assert legacy is not None
+        assert legacy.name == "old"
+        # Timestamp defaults trip in cleanly.
+        assert legacy.created_at == ""
+        assert legacy.updated_at == ""
+
+
+class TestGoalProgress:
+    """Progress metrics derived from a goal's children."""
+
+    @pytest.fixture
+    def store(self, tmp_path):
+        return GoalStorage(workspace=str(tmp_path), storage_path="memory/goals.json")
+
+    def test_progress_shape(self, store):
+        g = store.create(name="g")
+        # Touch every key of the return so regression in any one is loud.
+        p = store.progress(g.id)
+        assert set(p.keys()) == {"total_children", "completed_children", "percentage"}
+        assert isinstance(p["total_children"], int)
+        assert isinstance(p["completed_children"], int)
+        assert isinstance(p["percentage"], float)
+
+    def test_progress_leaf_is_zero(self, store):
+        g = store.create(name="leaf")
+        assert store.progress(g.id) == {
+            "total_children": 0,
+            "completed_children": 0,
+            "percentage": 0.0,
+        }
+
+    def test_progress_root_unknown_is_zero(self, store):
+        assert store.progress("missing") == {
+            "total_children": 0,
+            "completed_children": 0,
+            "percentage": 0.0,
+        }
+
+    def test_progress_with_partial_completion(self, store):
+        parent = store.create(name="parent")
+        store.create(name="c1", parent_goal_id=parent.id)
+        store.create(name="c2", parent_goal_id=parent.id)
+        store.create(name="c3", parent_goal_id=parent.id)
+        # Complete one of three.
+        c1 = store.children_of(parent.id)[0]
+        store.complete(c1.id)
+        p = store.progress(parent.id)
+        assert p["total_children"] == 3
+        assert p["completed_children"] == 1
+        assert p["percentage"] == pytest.approx(33.3333333333, abs=1e-6)
+
+    def test_progress_full(self, store):
+        parent = store.create(name="parent")
+        c1 = store.create(name="c1", parent_goal_id=parent.id)
+        c2 = store.create(name="c2", parent_goal_id=parent.id)
+        store.complete(c1.id)
+        store.complete(c2.id)
+        p = store.progress(parent.id)
+        assert p == {
+            "total_children": 2,
+            "completed_children": 2,
+            "percentage": 100.0,
+        }
+
+    def test_progress_updates_automatically_after_completion(self, store):
+        """Progress is computed live — completing a child bumps the parent."""
+        parent = store.create(name="parent")
+        c1 = store.create(name="c1", parent_goal_id=parent.id)
+        c2 = store.create(name="c2", parent_goal_id=parent.id)
+        assert store.progress(parent.id)["completed_children"] == 0
+
+        store.complete(c1.id)
+        p1 = store.progress(parent.id)
+        assert p1["completed_children"] == 1
+        assert p1["percentage"] == pytest.approx(50.0)
+
+        store.complete(c2.id)
+        p2 = store.progress(parent.id)
+        assert p2["completed_children"] == 2
+        assert p2["percentage"] == 100.0
+
+    def test_progress_does_not_count_non_completed_states(self, store):
+        """Children blocked / failed / pending are NOT counted as completed."""
+        parent = store.create(name="parent")
+        c1 = store.create(name="c1", parent_goal_id=parent.id)
+        c2 = store.create(name="c2", parent_goal_id=parent.id, status="blocked")
+        c3 = store.create(name="c3", parent_goal_id=parent.id, status="failed")
+        store.complete(c1.id)
+        p = store.progress(parent.id)
+        assert p["total_children"] == 3
+        assert p["completed_children"] == 1  # only the explicit complete()
+
+
+class TestCompletedDetection:
+    """``is_completed`` correctly detects completed goals."""
+
+    @pytest.fixture
+    def store(self, tmp_path):
+        return GoalStorage(workspace=str(tmp_path), storage_path="memory/goals.json")
+
+    def test_is_completed_true_after_complete(self, store):
+        g = store.create(name="g")
+        assert store.is_completed(g.id) is False
+        store.complete(g.id)
+        assert store.is_completed(g.id) is True
+
+    def test_is_completed_true_when_create_with_status(self, store):
+        g = store.create(name="g", status="completed")
+        assert store.is_completed(g.id) is True
+
+    def test_is_completed_false_for_other_states(self, store):
+        g = store.create(name="g", status="in_progress")
+        assert store.is_completed(g.id) is False
+        assert store.is_completed(g.id) is False
+
+    def test_is_completed_false_for_unknown_id(self, store):
+        assert store.is_completed("missing") is False
+
+    def test_is_completed_after_completion_propagation(self, store):
+        """Completing the only child auto-completes the parent."""
+        parent = store.create(name="parent")
+        only = store.create(name="only", parent_goal_id=parent.id)
+        store.complete(only.id)
+        assert store.is_completed(parent.id) is True
+
+
+class TestActiveGoalIndicator:
+    """The single-tenant active-goal marker."""
+
+    @pytest.fixture
+    def store(self, tmp_path):
+        return GoalStorage(workspace=str(tmp_path), storage_path="memory/goals.json")
+
+    def test_active_default_is_none(self, store):
+        assert store.active_goal() is None
+
+    def test_set_active_returns_true_and_makes_goal_active(self, store):
+        g = store.create(name="g")
+        assert store.set_active(g.id) is True
+        active = store.active_goal()
+        assert active is not None
+        assert active.id == g.id
+
+    def test_set_active_unknown_returns_false(self, store):
+        assert store.set_active("missing") is False
+        assert store.active_goal() is None
+
+    def test_set_active_replaces(self, store):
+        a = store.create(name="a")
+        b = store.create(name="b")
+        store.set_active(a.id)
+        store.set_active(b.id)
+        assert store.active_goal().id == b.id
+
+    def test_active_returns_none_if_active_id_was_deleted(self, store):
+        g = store.create(name="g")
+        store.set_active(g.id)
+        store.delete(g.id)
+        assert store.active_goal() is None
+
+    def test_clear_active(self, store):
+        g = store.create(name="g")
+        store.set_active(g.id)
+        store.clear_active()
+        assert store.active_goal() is None
+
+    def test_clear_active_when_none_set_is_a_noop(self, store):
+        # Must not raise even with nothing to clear.
+        store.clear_active()
+        assert store.active_goal() is None
+
+    def test_active_persists_across_storage_instances(self, tmp_path):
+        workspace = str(tmp_path)
+        first = GoalStorage(workspace=workspace, storage_path="memory/goals.json")
+        g = first.create(name="survives")
+        first.set_active(g.id)
+
+        second = GoalStorage(workspace=workspace, storage_path="memory/goals.json")
+        active = second.active_goal()
+        assert active is not None
+        assert active.id == g.id
+
+    def test_active_survives_completion_propagation(self, store):
+        """``complete()`` propagation must not clobber the active marker."""
+        parent = store.create(name="parent")
+        only = store.create(name="only", parent_goal_id=parent.id)
+        store.set_active(only.id)
+        store.complete(only.id)
+        # Parent is now auto-promoted, but the active marker should still
+        # point at the originally-completed goal.
+        assert store.active_goal().id == only.id
+
 
