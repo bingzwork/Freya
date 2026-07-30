@@ -72,7 +72,7 @@ from app.providers.base import ProviderConfig
 # Create a provider using the factory
 provider = ProviderFactory.create(
     provider_name="ollama",
-    model="qwen2.5-coder:14b",
+    model="qwen3:8b",
     base_url="http://localhost:11434",
     timeout=120.0,
 )
@@ -89,7 +89,7 @@ The provider system supports both legacy and new configuration via environment v
 
 #### Legacy (Backward Compatible)
 ```bash
-MODEL=qwen2.5-coder:14b
+MODEL=qwen3:8b
 LLM_TIMEOUT=120
 ```
 
@@ -100,7 +100,7 @@ DEFAULT_PROVIDER=ollama
 
 # Ollama-specific settings
 OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_MODEL=qwen2.5-coder:14b
+OLLAMA_MODEL=qwen3:8b
 OLLAMA_TIMEOUT=120.0
 
 # Claude-specific settings
@@ -135,7 +135,7 @@ WORKSPACE=./
 
 # LLM settings
 DEFAULT_PROVIDER=ollama
-OLLAMA_MODEL=qwen2.5-coder:14b
+OLLAMA_MODEL=qwen3:8b
 OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_TIMEOUT=120
 
@@ -273,12 +273,12 @@ from app.core.llm import LLM
 # This will raise an exception if health check fails
 LLM.perform_startup_health_check(
     provider="ollama",
-    model="qwen2.5-coder:14b",
+    model="qwen3:8b",
     raise_on_failure=True,
 )
 
 # Or with an existing provider instance (avoids creating a duplicate provider)
-llm = LLM(provider="ollama", model="qwen2.5-coder:14b")
+llm = LLM(provider="ollama", model="qwen3:8b")
 LLM.perform_startup_health_check(
     provider="ollama",
     provider_instance=llm._provider,  # Reuse existing provider
@@ -345,12 +345,12 @@ All methods return a `HealthCheckResult` with detailed status information.
 The provider system logs all operations:
 
 ```
-[LLM] Initialized with provider=ollama, model=qwen2.5-coder:14b, timeout=120.0
-[LLM] Ask: provider=ollama, model=qwen2.5-coder:14b
+[LLM] Initialized with provider=ollama, model=qwen3:8b, timeout=120.0
+[LLM] Ask: provider=ollama, model=qwen3:8b
 [LLM] Prompt: Hello, world!
-[Ollama] Sending request to qwen2.5-coder:14b (timeout: 120.0s)
-[Ollama] Received response from qwen2.5-coder:14b (request: 1.50s, response: 0.01s, length: 13 chars)
-[LLM] Response received in 1.52s (provider=ollama, model=qwen2.5-coder:14b)
+[Ollama] Sending request to qwen3:8b (timeout: 120.0s)
+[Ollama] Received response from qwen3:8b (request: 1.50s, response: 0.01s, length: 13 chars)
+[LLM] Response received in 1.52s (provider=ollama, model=qwen3:8b)
 ```
 
 ## Best Practices
@@ -375,7 +375,7 @@ The new provider layer is designed to be backward compatible with the existing L
 ```python
 from app.core.llm import LLM
 
-llm = LLM(model="qwen2.5-coder:14b")
+llm = LLM(model="qwen3:8b")
 response = llm.ask("Hello")
 ```
 
@@ -384,11 +384,11 @@ response = llm.ask("Hello")
 from app.core.llm import LLM
 
 # This still works exactly the same way
-llm = LLM(model="qwen2.5-coder:14b")
+llm = LLM(model="qwen3:8b")
 response = llm.ask("Hello")
 
 # Or with explicit provider
-llm = LLM(provider="ollama", model="qwen2.5-coder:14b")
+llm = LLM(provider="ollama", model="qwen3:8b")
 response = llm.ask("Hello")
 ```
 
@@ -411,7 +411,7 @@ response = ollama.chat(
 ```python
 from app.core.llm import LLM
 
-llm = LLM(provider="ollama", model="qwen2.5-coder:14b")
+llm = LLM(provider="ollama", model="qwen3:8b")
 response = llm.ask("Hello", system="You are helpful")
 ```
 
@@ -419,7 +419,7 @@ response = llm.ask("Hello", system="You are helpful")
 
 | Provider | Status | Default Model | Configuration |
 |----------|--------|--------------|---------------|
-| Ollama | ✅ Implemented | qwen2.5-coder:14b | OLLAMA_BASE_URL, OLLAMA_MODEL, OLLAMA_TIMEOUT |
+| Ollama | ✅ Implemented | qwen3:8b | OLLAMA_BASE_URL, OLLAMA_MODEL, OLLAMA_TIMEOUT |
 | Claude | 🔲 Planned | claude-3-5-sonnet-20250620 | CLAUDE_API_KEY, CLAUDE_MODEL, CLAUDE_BASE_URL |
 | OpenAI | 🔲 Planned | gpt-4o-mini | OPENAI_API_KEY, OPENAI_MODEL, OPENAI_BASE_URL |
 | Gemini | 🔲 Planned | gemini-1.5-flash | GEMINI_API_KEY, GEMINI_MODEL, GEMINI_BASE_URL |
@@ -447,7 +447,7 @@ Ensure the model exists on your provider. For Ollama:
 ollama list
 
 # Pull a model
-ollama pull qwen2.5-coder:14b
+ollama pull qwen3:8b
 ```
 
 ### "Connection refused" error
@@ -459,7 +459,7 @@ Ensure the provider server is running. For Ollama:
 ollama serve
 
 # Or run a model directly
-ollama run qwen2.5-coder:14b
+ollama run qwen3:8b
 ```
 
 ### Timeout errors

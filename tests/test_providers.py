@@ -88,11 +88,11 @@ class TestProviderResponse:
         """Test basic response creation."""
         response = ProviderResponse(
             content="Hello!",
-            model="qwen2.5-coder:14b",
+            model="qwen3:8b",
             provider="ollama",
         )
         assert response.content == "Hello!"
-        assert response.model == "qwen2.5-coder:14b"
+        assert response.model == "qwen3:8b"
         assert response.provider == "ollama"
         assert response.finish_reason is None
         assert response.usage is None
@@ -129,12 +129,12 @@ class TestProviderHealthStatus:
             is_healthy=True,
             is_reachable=True,
             model_available=True,
-            model_name="qwen2.5-coder:14b",
+            model_name="qwen3:8b",
         )
         assert status.is_healthy is True
         assert status.is_reachable is True
         assert status.model_available is True
-        assert status.model_name == "qwen2.5-coder:14b"
+        assert status.model_name == "qwen3:8b"
         assert status.error_message is None
 
     def test_unhealthy_status(self):
@@ -159,7 +159,7 @@ class TestProviderHealthStatus:
             is_reachable=True,
             model_available=True,
             model_name="llama3:70b",
-            details={"available_models": ["llama3:70b", "qwen2.5-coder:14b"]},
+            details={"available_models": ["llama3:70b", "qwen3:8b"]},
         )
         result = status.to_dict()
         assert result["provider_name"] == "ollama"
@@ -167,7 +167,7 @@ class TestProviderHealthStatus:
         assert result["is_reachable"] is True
         assert result["model_available"] is True
         assert result["model_name"] == "llama3:70b"
-        assert result["details"] == {"available_models": ["llama3:70b", "qwen2.5-coder:14b"]}
+        assert result["details"] == {"available_models": ["llama3:70b", "qwen3:8b"]}
 
 
 class TestProviderErrorHierarchy:
@@ -215,7 +215,7 @@ class TestProviderErrorHierarchy:
             message="Model not available",
             provider_name="ollama",
             model_name="nonexistent:model",
-            available_models=["llama3:70b", "qwen2.5-coder:14b"],
+            available_models=["llama3:70b", "qwen3:8b"],
         )
         assert isinstance(error, ProviderError)
         error_str = str(error)
@@ -321,7 +321,7 @@ class TestOllamaProvider:
         """Test OllamaProvider initialization with default config."""
         provider = OllamaProvider()
         assert provider.provider_name == "ollama"
-        assert provider.model == "qwen2.5-coder:14b"
+        assert provider.model == "qwen3:8b"
         assert provider.base_url == "http://localhost:11434"
         assert provider.timeout == 120.0
 
@@ -350,7 +350,7 @@ class TestOllamaProvider:
 
         assert isinstance(response, ProviderResponse)
         assert response.content == "Hello!"
-        assert response.model == "qwen2.5-coder:14b"
+        assert response.model == "qwen3:8b"
         assert response.provider == "ollama"
         assert response.finish_reason is True
 
@@ -367,7 +367,7 @@ class TestOllamaProvider:
         assert response.content == "I am helpful"
         # Verify system message was included
         call_kwargs = mock_client.chat.call_args[1]
-        assert call_kwargs["model"] == "qwen2.5-coder:14b"
+        assert call_kwargs["model"] == "qwen3:8b"
         assert len(call_kwargs["messages"]) == 2
         assert call_kwargs["messages"][0]["role"] == "system"
         assert call_kwargs["messages"][0]["content"] == "You are helpful"
@@ -437,7 +437,7 @@ class TestOllamaProvider:
         """Test successful health check."""
         mock_client.get.return_value = {
             "models": [
-                {"name": "qwen2.5-coder:14b"},
+                {"name": "qwen3:8b"},
                 {"name": "llama3:70b"},
             ]
         }
@@ -488,7 +488,7 @@ class TestOllamaProvider:
         """Test successful model listing."""
         mock_client.get.return_value = {
             "models": [
-                {"name": "qwen2.5-coder:14b"},
+                {"name": "qwen3:8b"},
                 {"name": "llama3:70b"},
                 {"name": "mistral:7b"},
             ]
@@ -498,7 +498,7 @@ class TestOllamaProvider:
         models = provider.list_models()
 
         assert len(models) == 3
-        assert "qwen2.5-coder:14b" in models
+        assert "qwen3:8b" in models
         assert "llama3:70b" in models
         assert "mistral:7b" in models
 
@@ -517,7 +517,7 @@ class TestOllamaProvider:
         provider = OllamaProvider()
         repr_str = repr(provider)
         assert "OllamaProvider" in repr_str
-        assert "qwen2.5-coder:14b" in repr_str
+        assert "qwen3:8b" in repr_str
 
 
 class TestProviderFactory:
@@ -609,12 +609,12 @@ class TestProviderHealthChecker:
         with patch('app.providers.ollama.OllamaClient') as mock_client_class:
             mock_client = MagicMock()
             mock_client.get.return_value = {
-                "models": [{"name": "qwen2.5-coder:14b"}]
+                "models": [{"name": "qwen3:8b"}]
             }
             mock_client_class.return_value = mock_client
 
             checker = ProviderHealthChecker()
-            result = checker.check_provider("ollama", model="qwen2.5-coder:14b")
+            result = checker.check_provider("ollama", model="qwen3:8b")
 
             assert isinstance(result, HealthCheckResult)
             assert result.is_healthy is True
@@ -638,7 +638,7 @@ class TestProviderHealthChecker:
         with patch('app.providers.ollama.OllamaClient') as mock_client_class:
             mock_client = MagicMock()
             mock_client.get.return_value = {
-                "models": [{"name": "qwen2.5-coder:14b"}]
+                "models": [{"name": "qwen3:8b"}]
             }
             mock_client_class.return_value = mock_client
 
@@ -654,7 +654,7 @@ class TestProviderHealthChecker:
         with patch('app.providers.ollama.OllamaClient') as mock_client_class:
             mock_client = MagicMock()
             mock_client.get.return_value = {
-                "models": [{"name": "qwen2.5-coder:14b"}]
+                "models": [{"name": "qwen3:8b"}]
             }
             mock_client_class.return_value = mock_client
 
@@ -669,12 +669,12 @@ class TestProviderHealthChecker:
         with patch('app.providers.ollama.OllamaClient') as mock_client_class:
             mock_client = MagicMock()
             mock_client.get.return_value = {
-                "models": [{"name": "qwen2.5-coder:14b"}]
+                "models": [{"name": "qwen3:8b"}]
             }
             mock_client_class.return_value = mock_client
 
             checker = ProviderHealthChecker()
-            result = checker.verify_startup(model="qwen2.5-coder:14b")
+            result = checker.verify_startup(model="qwen3:8b")
 
             assert result.is_healthy is True
 
@@ -781,7 +781,7 @@ class TestStartupHealthCheckBug:
             # Create a provider with full configuration
             config = ProviderConfig(
                 provider_name="ollama",
-                model="qwen2.5-coder:14b",
+                model="qwen3:8b",
                 base_url="http://localhost:11434",
                 timeout=120.0,
             )
@@ -796,7 +796,7 @@ class TestStartupHealthCheckBug:
                 is_healthy=True,
                 is_reachable=True,
                 model_available=True,
-                model_name="qwen2.5-coder:14b",
+                model_name="qwen3:8b",
             ))
 
             # Call check_provider with the existing provider
@@ -814,7 +814,7 @@ class TestStartupHealthCheckBug:
             # Create a provider with full configuration
             config = ProviderConfig(
                 provider_name="ollama",
-                model="qwen2.5-coder:14b",
+                model="qwen3:8b",
                 base_url="http://localhost:11434",
                 timeout=120.0,
             )
@@ -826,7 +826,7 @@ class TestStartupHealthCheckBug:
                 is_healthy=True,
                 is_reachable=True,
                 model_available=True,
-                model_name="qwen2.5-coder:14b",
+                model_name="qwen3:8b",
             ))
 
             # Create health checker and verify startup with existing provider
@@ -848,7 +848,7 @@ class TestStartupHealthCheckBug:
             # Create a provider with full configuration
             config = ProviderConfig(
                 provider_name="ollama",
-                model="qwen2.5-coder:14b",
+                model="qwen3:8b",
                 base_url="http://localhost:11434",
                 timeout=120.0,
             )
@@ -860,7 +860,7 @@ class TestStartupHealthCheckBug:
                 is_healthy=True,
                 is_reachable=True,
                 model_available=True,
-                model_name="qwen2.5-coder:14b",
+                model_name="qwen3:8b",
             ))
 
             # Create health checker and check default provider with existing provider

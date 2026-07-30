@@ -21,7 +21,7 @@ class TestLLM:
     def test_llm_init_default_model(self):
         """Test LLM initialization with default model."""
         llm = LLM()
-        assert llm.model == "qwen2.5-coder:14b"
+        assert llm.model == "qwen3:8b"
 
     def test_llm_init_custom_model(self):
         """Test LLM initialization with custom model."""

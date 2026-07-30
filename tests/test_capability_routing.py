@@ -249,7 +249,7 @@ class TestFormatter:
             data={
                 "connected": True,
                 "healthy": True,
-                "model": "qwen2.5-coder:14b",
+                "model": "qwen3:8b",
                 "provider": "ollama",
             },
             capability_name="ollama_status",

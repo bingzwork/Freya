@@ -84,7 +84,7 @@ agent = FreyaAgent(
 
 ## Architecture Components
 
-- **LLM**: Communicates with Ollama (default: qwen2.5-coder:14b)
+- **LLM**: Communicates with Ollama (default: qwen3:8b)
 - **ProjectIndex**: Scans and stores project files
 - **SymbolIndex**: Parses Python AST and indexes symbols
 - **LexicalSearch**: Keyword-based relevance ranking
@@ -105,7 +105,7 @@ agent = FreyaAgent(
 ## Requirements
 
 - Python 3.11+
-- Ollama with qwen2.5-coder:14b (or configure another model in .env)
+- Ollama with qwen3:8b (or configure another model in .env)
 - Dependencies in requirements.txt
 
 ## Configuration
@@ -113,7 +113,7 @@ agent = FreyaAgent(
 Create a .env file:
 
 ```
-MODEL=qwen2.5-coder:14b
+MODEL=qwen3:8b
 PROJECT_NAME=Freya
 WORKSPACE=.
 MEMORY_PATH=data/memory

@@ -23,7 +23,7 @@ Freya AI‑Agent – How to start using it (no‑code‑expert version)
   ──────────────────────────────────────  ──────────────────────────────────────  ──────────────────────────────────────
    Ollama (optional but recommended) –     Gives Freya a “brain” that can          Download from https://ollama.com,
    the local AI model that actually        generate real Python code               install, then run ollama pull
-   writes the code                                                                 qwen2.5-coder:14b (or any model you
+   writes the code                                                                 qwen3:8b (or any model you
                                                                                    like) and leave ollama serve running
                                                                                    in a background window. If you don’t
                                                                                    do this, Freya will still work –
@@ -105,7 +105,7 @@ Freya AI‑Agent – How to start using it (no‑code‑expert version)
 
   2. You’ll see a line like Listening on 127.0.0.1:11434.
      Leave that window open – it’s the local AI server.
-     (In a separate window you can also pull a model if you haven’t already: ollama pull qwen2.5-coder:14b.)
+     (In a separate window you can also pull a model if you haven’t already: ollama pull qwen3:8b.)
 
   If you skip this step, Freya will still run; she’ll just tell you the LLM isn’t available and give you a placeholder
   answer. That’s fine for testing the on/off switch.

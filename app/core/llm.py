@@ -28,8 +28,10 @@ FREYA_SYSTEM_PROMPT = (
 
 class LLM:
 
-    def __init__(self, model="qwen2.5-coder:14b"):
+    def __init__(self, model="qwen3:8b"):
         self.model = model
+        from app.core.logger import logger
+        logger.info(f"[LLM] Initialized with provider=ollama, model={self.model}")
 
     def ask(self, prompt, system=FREYA_SYSTEM_PROMPT):
         if not OLLAMA_AVAILABLE:

@@ -21,7 +21,7 @@ class Config:
 
         self.model = os.getenv(
             "MODEL",
-            "qwen2.5-coder:14b",
+            "qwen3:8b",
         )
 
         self.workspace = os.getenv(
