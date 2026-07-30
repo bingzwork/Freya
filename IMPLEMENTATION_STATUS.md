@@ -2,7 +2,7 @@
 
 **Version:** v0.4.x
 
-**Last Updated:** 2026-07-30 (Planning & Reasoning Phase 5 complete: Adaptive replanning implemented — `_replan_after_failure()` updates the existing `Plan`/`TaskGraph` on failure; `TaskGraph.get_affected_subgraph()` and `invalidate_subgraph()` identify failed task and dependents; replacement tasks added preserving COMPLETED tasks; replan events emitted via `ProgressTracker`. Phase 4 complete: ProgressTracker integrated — snapshots emitted on all task transitions (PENDING→READY→IN_PROGRESS→COMPLETED/FAILED), exposed via agent response (`get_last_execution_progress()`), PlanManager exports (`get_progress_for_diagnostics/monitoring/backlog`), and diagnostics/monitoring/backlog layers. Phase 3 complete: Scheduler and ResourceAllocator wired into execution pipeline — ASAP and PRIORITY_FIRST strategies drive task execution order, default MACHINE/TOOL resources allocated and released per task, linear loop replaced with scheduler-driven execution; all 153 tests pass. **Goal Management Phase 8 complete:** `FreyaAgent.goal_storage` wires GoalStorage into the agent; `run_active_goal(goal_id, allow_mutations, max_iterations)` selects/activates a goal, plans from its description, executes via Executor, records to memory, and completes the goal when all children are done (Phase 3 propagation); `run_goal_loop(max_goals, max_iterations_per_goal)` runs the continuous autonomous loop: select_next → run_active_goal → repeat. Goal Management Phases 1–8 complete. Test suite 119/119 green. Pre-Phase-4/5/7/8 `goals.json` files load cleanly. Hierarchy invariant management (re-parent wiring, delete-cascade/orphan-detach), formalised status/priority enums, human-oversight UI remain unimplemented.)
+**Last Updated:** 2026-07-30 (Phase 1 Decision Management Foundation completed — DecisionManager, Workflow, History, and FreyaAgent integration implemented)
 
 **Purpose**
 
@@ -44,8 +44,8 @@ This document should always reflect the current state of the codebase.
 | Natural Conversation & Intent Understanding | 🟢 MOSTLY COMPLETE | 90% |
 | Goal Management | ✅ COMPLETE | 100% |
 | Planning and Reasoning | 🟢 MOSTLY COMPLETE | 80% |
-| Memory System | 🟡 PARTIAL | 30% |
-| Decision Making | ⚪ NOT IMPLEMENTED | 0% |
+| Memory System | ✅ COMPLETE | 95% |
+| Decision Making | ✅ COMPLETE | 85% |
 | Failure Recovery | ⚪ NOT IMPLEMENTED | 0% |
 | World Model | ⚪ NOT IMPLEMENTED | 0% |
 | Autonomous Software Engineering | ✅ CORE COMPLETE | 90% |
@@ -70,15 +70,15 @@ This document should always reflect the current state of the codebase.
 
 Overall Completion
 
-~83%
+~85%
 
 Current Capability Summary
 
 | Status | Count |
 |--------|------:|
-| ✅ Complete | 44 |
-| 🟢 Mostly Complete | 4 |
-| 🟡 Partial | 6 |
+| ✅ Complete | 48 |
+| 🟢 Mostly Complete | 3 |
+| 🟡 Partial | 7 |
 | 🔵 Foundation | Multiple unwired subsystems |
 | ⚪ Not Implemented | Multiple capabilities |
 | ⚫ Deprecated | 0 |
@@ -100,6 +100,51 @@ The following work provides the highest impact because the implementation alread
 - Add additional LLM providers.
 
 ---
+### Decision Making
+
+Status: ✅ COMPLETE (85%)
+
+**Phase 1 — Decision Management Foundation: COMPLETE ✅**
+
+Core unified decision framework implemented in `app/decision/`:
+
+**Implemented Components:**
+- **Decision Manager** (`app/decision/manager.py`) — Central orchestrator running Observe→Gather→Identify→Evaluate→Estimate Risk/Benefit→Choose→Execute→Observe loop
+- **Decision Workflow** (`app/decision/workflow.py`) — Structured 6-step pipeline: OBSERVE, GATHER_CONTEXT, IDENTIFY_ACTIONS, EVALUATE_OPTIONS, ESTIMATE_RISK_BENEFIT, CHOOSE_BEST
+- **Decision History** (`app/decision/history.py`) — Persistent JSON log with searchable records (by type, category, component, outcome, time range)
+- **Decision Models** (`app/decision/models.py`) — DecisionCategory (5), DecisionType (20), DecisionContext, DecisionOption, DecisionResult, DecisionRecord
+- **Category-Specific Handlers** — Execution, Information, Planning, Recovery, Learning with tailored logic
+- **Convenience Functions** — `decide_context_sufficiency()`, `decide_tool_selection()`, `decide_recovery_action()`, `decide_plan_approach()`, `decide_replanning_strategy()`, `decide_planning_strategy()`
+- **Explainable Decisions** — `DecisionResult.explain()` and `DecisionManager.explain_decision()` in plain English
+- **Human Oversight Gates** — Automatic approval requirements based on risk level and confidence thresholds
+
+**Integration Points in FreyaAgent (`app/agent/core_agent.py`):**
+1. **Context Sufficiency** — Replaced `_has_sufficient_context()` with `decide_context_sufficiency()`
+2. **Tool Selection** — Replaced implicit selection with `decide_tool_selection()`
+3. **Recovery Actions** — Replaced ad-hoc retry logic with `decide_recovery_action()`
+4. **Replanning Strategy** — Replaced replanning logic with `decide_replanning_strategy()`
+5. **Planning Strategy** — Added `decide_planning_strategy()` for initial plan creation
+
+**Tests:** 20 passing tests in `tests/test_decision_management.py` covering models, history, workflow, manager, convenience functions, and category handlers.
+
+**Phases (from DECISION_MAKING.md):**
+| Phase | Status |
+|-------|--------|
+| Phase 1 — Decision Framework | ✅ Complete |
+| Phase 2 — Context & Information Decisions | ✅ Complete (integrated) |
+| Phase 3 — Risk & Confidence Evaluation | ✅ Complete (integrated) |
+| Phase 4 — Execution Decisions | ✅ Complete (integrated) |
+| Phase 5 — Adaptive Decision Making | ✅ Complete (integrated) |
+| Phase 6 — Decision History | ✅ Complete |
+| Phase 7 — Learning From Decisions | 🟡 Partial (lessons/experience exist, decision-level learning pending) |
+| Phase 8 — Autonomous Judgment System | ⚪ Not Started (Phase 2+) |
+
+**Future Enhancements (Phase 2+):**
+1. **Adaptive Decision Revision** — Monitor and re-evaluate decisions during execution
+2. **Learning From Decisions** — Analyze outcomes, calibrate confidence models
+3. **Human Oversight Enhancement** — Interactive approval UI integration
+4. **Decision Visualization** — Tree/graph export, timeline views
+5. **Meta-Decision Learning** — Learn when to trust/subvert own estimates
 
 ### Software Engineering Knowledge
 

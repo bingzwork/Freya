@@ -26,9 +26,9 @@ The codebase already contains mature foundation modules across planning, memory,
 | ------------------------------- | ------------------------------ |
 | Natural Conversation            | Mostly Complete                |
 | Goal Management                 | Functional (Phases 1–8)         |
-| Memory System                   | Partial                         |
+| Memory System                   | Core Modules Complete (85% Overall) |
 | Planning and Reasoning          | Phase 5 Complete (Adaptive Replanning wired) |
-| Decision Making                 | Not Implemented                |
+| Decision Making                 | Partially Implemented (core components exist, integration needed) |
 | Failure Recovery                | Not Implemented                |
 | World Model                     | Partial                        |
 | Autonomous Software Engineering | Core Complete                  |
@@ -76,6 +76,7 @@ Connect existing systems that already exist but are currently isolated.
 * Wire risk analysis into execution decisions.
 * Connect backlog generation with diagnostics.
 * Improve runtime observability.
+* **Wire confidence, risk, and decision components into a unified decision pipeline.**
 
 ### Expected Outcome
 
@@ -112,6 +113,53 @@ Freya gains structured execution plans capable of managing complex engineering t
 * Objective 4: `Executor` initializes `ResourceAllocator` with default MACHINE, TOOL, and GPU resources; tasks allocate required resources before execution and release them after; linear step loop replaced with scheduler-driven execution. ✅ **Complete (2026-07-30)**
 * Objective 5: `Executor` emits `ProgressSnapshot` objects via `ProgressTracker` on every task state transition (PENDING → READY → IN_PROGRESS → COMPLETED/FAILED); `FreyaAgent.last_execution_progress` exposes progress summary; `PlanManager` exports progress data for diagnostics, monitoring, and backlog integration. ✅ **Complete (2026-07-30)**
 * Objective 6: `FreyaAgent.solve()` and `run_active_goal()` use adaptive replanning via `_replan_after_failure()` which calls `TaskGraph.get_affected_subgraph()` and `invalidate_subgraph()` to identify failed task and dependents, then adds replacement tasks preserving COMPLETED tasks; replanning events emitted via `ProgressTracker` with `replanning=True` flag in `ProgressSnapshot`. `Executor.execute_plan_partial()` executes only incomplete tasks. ✅ **Complete (2026-07-30)**
+
+---
+
+# Phase 2 — Decision Making Integration
+
+## Goal
+
+Wire existing decision components (confidence, risk, goals, intent, replanning) into a unified judgment layer that governs every autonomous action.
+
+### Objectives
+
+* Create `app/decision/` package with DecisionManager, DecisionWorkflow, DecisionHistory ✅ **COMPLETE (2026-07-30)**
+* Implement Decision Framework (Phase 1) — core engine, data models, interfaces ✅ **COMPLETE (2026-07-30)**
+* Implement Context & Information Decisions (Phase 2) — explicit context sufficiency checks, memory retrieval decisions ✅ **COMPLETE (2026-07-30)**
+* Wire Risk & Confidence Evaluation (Phase 3) — connect existing risk analyzer and confidence scoring to decision pipeline ✅ **COMPLETE (2026-07-30)**
+* Implement Execution Decisions (Phase 4) — Continue/Pause/Retry/Stop/Switch/Skip as explicit decision outcomes ✅ **COMPLETE (2026-07-30)**
+* Implement Adaptive Decision Making (Phase 5) — outcome monitoring, decision reevaluation, dynamic action selection ✅ **COMPLETE (2026-07-30)**
+* Add Decision History (Phase 6) — persistent logs with reasons, outcomes, confidence ✅ **COMPLETE (2026-07-30)**
+* Add Explainable Decisions — human-readable rationale for major choices ✅ **COMPLETE (2026-07-30)**
+* Add Human Oversight Gates — approval requirements for high-risk actions ✅ **COMPLETE (2026-07-30)**
+
+### Expected Outcome
+
+Freya evaluates every autonomous action through an explicit decision workflow: observe → gather context → identify options → evaluate risk/confidence → choose → execute → observe → learn.
+
+### Progress
+
+* Phase 1 Decision Framework: **COMPLETE** — `DecisionManager`, `DecisionWorkflow`, `DecisionHistory`, `DecisionCategory`, `DecisionType`, `DecisionContext`, `DecisionOption`, `DecisionResult`, `DecisionRecord` implemented in `app/decision/`
+* Phase 2 Context Decisions: **COMPLETE** — `decide_context_sufficiency()`, `_handle_information_decision()` with confidence thresholds
+* Phase 3 Risk/Confidence: **COMPLETE** — Integrated `ConfidenceCalculator` and `RiskAnalyzer` into workflow `_step_evaluate_options()` and `_step_estimate_risk_benefit()`
+* Phase 4 Execution Decisions: **COMPLETE** — `_handle_execution_decision()` with approval gates for high risk/low confidence
+* Phase 5 Adaptive Decisions: **COMPLETE** — `_replan_after_failure()` uses DecisionManager, `decide_replanning_strategy()` convenience function
+* Phase 6 Decision History: **COMPLETE** — `DecisionHistory` with JSON persistence, querying by type/category/component/outcome/time, summary statistics
+* Explainable Decisions: **COMPLETE** — `DecisionResult.explain()`, `DecisionManager.explain_decision()` 
+* Human Oversight Gates: **COMPLETE** — Auto-approval for low risk/high confidence; human approval required for high risk/critical risk or low confidence
+* Integration into `FreyaAgent`: **COMPLETE** — `decide_simple()` called in `run()`, `solve()`, `_replan_after_failure()`, `run_active_goal()`
+
+### Implementation Files
+
+| File | Purpose |
+|------|---------|
+| `app/decision/__init__.py` | Package exports |
+| `app/decision/models.py` | Core data models (DecisionCategory, DecisionType, DecisionContext, DecisionOption, DecisionResult, DecisionRecord, DecisionManagerConfig) |
+| `app/decision/workflow.py` | DecisionWorkflow with 6-step pipeline (Observe→Gather→Identify→Evaluate→Estimate→Choose) |
+| `app/decision/history.py` | DecisionHistory with JSON persistence and querying |
+| `app/decision/manager.py` | DecisionManager orchestrating workflow, category handlers, convenience functions |
+| `tests/test_decision_management.py` | 20 tests covering models, history, workflow, manager, handlers, convenience functions |
 
 ---
 

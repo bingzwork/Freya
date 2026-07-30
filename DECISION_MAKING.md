@@ -1,666 +1,200 @@
-# DECISION_MAKING.md
-
 # Decision Making
 
-Status: NOT IMPLEMENTED
+**Status:** ✅ IMPLEMENTED (Phase 1 Complete - Unified Decision Framework)
 
-Priority: ⭐⭐⭐⭐⭐ Critical
-
----
-
-# Overview
-
-Decision Making is Freya's judgment system.
-
-While Goal Management determines **what** Freya should accomplish, and Planning & Reasoning determines **how** to accomplish it, Decision Making determines **whether** an action should be taken at all.
-
-Every autonomous action begins with a decision.
-
-Freya should evaluate available information, assess risk, consider alternatives, and choose the most appropriate course of action before acting.
-
-Without Decision Making, autonomy becomes impulsive rather than intelligent.
+**Priority:** ⭐⭐⭐⭐⭐ Critical
 
 ---
 
-# Why Decision Making Matters
+## Overview
 
-Without Decision Making, Freya simply follows the next obvious action.
+Decision Making is Freya's judgment layer — the system that evaluates whether an action should be taken.
 
-Example
-
-Task
-
-Update the Planner.
-
-Freya immediately edits files.
-
----
-
-With Decision Making
-
-Freya first asks:
-
-- Should I edit this file?
-- Is there enough information?
-- Should I inspect related files first?
-- Is user approval required?
-- Is this the safest solution?
-- Should I search documentation?
-- Should I retry?
-- Should I stop?
-
-Only after evaluating these questions does execution begin.
-
-This produces safer, more reliable autonomous behavior.
+| Component | Status | Description |
+|-----------|--------|-------------|
+| **Confidence Scoring** | ✅ Complete | Multi-factor confidence models for decisions, actions, recommendations |
+| **Risk Assessment** | ✅ Complete | Code/system risk analysis with severity, probability, mitigation |
+| **Goal Scheduling** | ✅ Complete | Priority-based goal queue with dependency blocking |
+| **Adaptive Replanning** | ✅ Complete | Plan modification on failure, preserving completed work |
+| **Intent Classification** | ✅ Complete | Routes requests with confidence thresholds |
+| **Memory Retrieval** | ✅ Complete | Context gathering from multiple memory systems |
+| **Decision Engine** | ✅ Complete | Unified decision workflow orchestrator |
+| **Decision History** | ✅ Complete | Structured decision log with outcomes |
+| **Explainable Decisions** | ✅ Complete | Plain-English decision explanations |
+| **Human Oversight Integration** | ✅ Complete | Approval gates based on risk/confidence |
 
 ---
 
-# Objectives
+## What Exists Today
 
-Freya should continuously decide:
+### ✅ Confidence Scoring (`app/confidence/`)
+Multi-dimensional confidence evaluation:
+- **DecisionConfidence** — complexity, alternatives, context quality, best-practice alignment, impact
+- **ActionConfidence** — reversibility, side effects, historical success rate, system state, action type
+- **RecommendationConfidence** — evidence, benefit, risk, source reliability, applicability
+- **ConfidenceCalculator** — weighted event aggregation with risk adjustment
+- **ConfidenceTracker** — persistent history with summaries
 
-- Should I act?
-- Should I wait?
-- Should I ask the user?
-- Should I continue?
-- Should I stop?
-- Should I retry?
-- Should I search for more information?
-- Should I inspect additional files?
-- Should I switch strategies?
-- Should I abandon this approach?
-- Is this worth doing?
-- Is the expected benefit greater than the risk?
+### ✅ Risk Assessment (`app/risk/`)
+Code and system risk analysis:
+- **RiskItem** — severity (critical→info), probability (certain→rare), category (security, performance, reliability, etc.)
+- **RiskAnalyzer** — pattern-based detection (hardcoded secrets, SQL injection, error swallowing, TODO comments)
+- **RiskAssessment** — complete assessment sessions with findings and recommendations
 
----
+### ✅ Goal Scheduling (`app/memory/goals.py`)
+- Priority queue (`queue()`) sorted by critical→high→medium→low→optional
+- Dependency blocking (`is_blocked()`) — unmet deps = blocked
+- Next goal selection (`select_next()`) with auto-resume of paused goals
 
-# Design Principles
+### ✅ Adaptive Replanning (`app/agent/core_agent.py`)
+- `_replan_after_failure()` — replaces failed tasks, preserves COMPLETED work
+- ProgressTracker emits replanning events
+- Works for both `solve()` and `run_active_goal()`
 
-Decision Making should be:
+### ✅ Intent Classification (`app/intent/classifier.py`)
+- 8 intent types with routing priority (CONVERSATIONAL_CONTROL → SYSTEM_STATUS → engineering → chat)
+- Confidence thresholds: ACCEPT=0.70, LOW=0.40, mid-band triggers clarification
+- Engineering intents include runtime context
 
-- Logical
-- Explainable
-- Context-aware
-- Risk-aware
-- Consistent
-- Adaptive
-- Conservative when uncertain
+### ✅ Memory Retrieval (`app/memory/`)
+- Unified retrieval across working, episodic, semantic, long-term, task, project memory
+- Engineering lessons (patterns + anti-patterns) surfaced during planning/repair
+- Experience memory with outcomes for similar tasks
 
-Every decision should have a clear reason.
-
----
-
-# Decision Workflow
-
-Observe Situation
-
-↓
-
-Gather Context
-
-↓
-
-Identify Possible Actions
-
-↓
-
-Evaluate Each Option
-
-↓
-
-Estimate Risk
-
-↓
-
-Estimate Benefit
-
-↓
-
-Choose Best Action
-
-↓
-
-Execute
-
-↓
-
-Observe Outcome
-
-↓
-
-Make Next Decision
-
-Decision making is continuous throughout execution.
+### ✅ Decision Management (`app/decision/`)
+**Phase 1 - Decision Management Foundation Complete:**
+- **Decision Manager** (`app/decision/manager.py`) — Central orchestrator running the Observe→Gather→Identify→Evaluate→Estimate Risk/Benefit→Choose→Execute→Observe loop
+- **Decision Workflow** (`app/decision/workflow.py`) — Structured 6-step pipeline replacing ad-hoc decision points
+- **Decision History** (`app/decision/history.py`) — Persistent searchable log with decision, reason, outcome, timestamp, confidence, result
+- **Decision Models** (`app/decision/models.py`) — Core data models: DecisionCategory, DecisionType, DecisionContext, DecisionOption, DecisionResult, DecisionRecord
+- **Category-Specific Handlers** — Execution, Information, Planning, Recovery, Learning decision types with tailored logic
+- **Convenience Functions** — `decide_context_sufficiency()`, `decide_tool_selection()`, `decide_recovery_action()`, `decide_plan_approach()`, `decide_replanning_strategy()`, `decide_planning_strategy()`
+- **Explainable Decisions** — `DecisionResult.explain()` and `DecisionManager.explain_decision()` in plain English
+- **Human Oversight Gates** — Automatic approval requirements based on risk level and confidence thresholds
 
 ---
 
-# Decision Categories
+## What's Missing (Phase 2+ Enhancements)
 
-Freya should make decisions in multiple areas.
-
-Execution Decisions
-
-Examples
-
-- Should I edit this file?
-- Should I execute this tool?
-- Should I continue this task?
-- Should I stop?
+| Missing Piece | Purpose | Dependencies |
+|---------------|---------|--------------|
+| **Adaptive Decision Revision** | Monitor outcomes during execution, re-evaluate when context changes | Decision Manager |
+| **Learning From Decisions** | Analyze successful vs failed decisions, update confidence models | Decision History |
+| **Decision Visualization** | Decision tree/graph export, timeline view | Decision History |
+| **Meta-Decision Learning** | Learn when to trust/subvert own confidence estimates | Learning From Decisions |
 
 ---
 
-Information Decisions
+## Decision Categories (Implemented)
 
-Examples
+| Category | Examples | Handler |
+|----------|----------|---------|
+| **Execution** | Edit file? Execute tool? Continue task? Stop? | `_handle_execution_decision` |
+| **Information** | Read another file? Search docs? Retrieve memory? Enough context? | `_handle_information_decision` |
+| **Planning** | Break into subtasks? Simplify? Change strategy? | `_handle_planning_decision` |
+| **Recovery** | Retry? Alternative? Pause? Ask user? | `_handle_recovery_decision` |
+| **Learning** | Store lesson? Long-term memory? Knowledge base? | `_handle_learning_decision` |
 
-- Should I read another file?
-- Should I search documentation?
-- Should I retrieve memory?
-- Do I have enough context?
-
----
-
-Planning Decisions
-
-Examples
-
-- Should I break this task into subtasks?
-- Should I simplify the plan?
-- Should I change strategy?
+**Decision Types by Category:**
+- **Execution**: TOOL_SELECTION, FILE_OPERATION, COMMAND_EXECUTION, AGENT_ACTION, TASK_CONTINUATION
+- **Information**: CONTEXT_SUFFICIENCY, MEMORY_RETRIEVAL, USER_QUERY, EXTERNAL_SEARCH
+- **Planning**: TASK_DECOMPOSITION, STRATEGY_SELECTION, PRIORITY_ORDERING, RESOURCE_ALLOCATION
+- **Recovery**: RETRY_WITH_ALTERNATIVE, ESCALATE, PAUSE_AND_ASK, ABORT_TASK
+- **Learning**: STORE_LESSON, CONSOLIDATE_EXPERIENCE, UPDATE_KNOWLEDGE_BASE
 
 ---
 
-Recovery Decisions
+## Remaining Implementation Tasks
 
-Examples
+### ⭐⭐⭐⭐⭐ Critical (Phase 1 - COMPLETE ✅)
+1. **Decision Manager Module** (`app/decision/manager.py`)
+   - Orchestrate the full decision workflow
+   - Integrate Confidence, Risk, Goals, Planning, Memory
+   - Expose `decide(context, options) -> DecisionResult`
 
-- Should I retry?
-- Should I use another solution?
-- Should I pause?
-- Should I ask the user?
+2. **Decision Workflow Pipeline**
+   - Observe Situation → Gather Context → Identify Actions → Evaluate Options → Estimate Risk/Benefit → Choose Best → Execute → Observe Outcome → Next Decision
+   - Replace implicit decision points in agent with explicit calls
 
----
+3. **Decision History Store** (`app/decision/history.py`)
+   - Persistent log with decision, rationale, confidence, risk, outcome, timestamp
+   - Searchable by type, component, time range, outcome
 
-Learning Decisions
+### ⭐⭐⭐⭐ High (Phase 2+ - Future Enhancements)
+4. **Adaptive Decision Revision**
+   - Monitor outcomes during execution
+   - Re-evaluate decisions when context changes significantly
+   - Dynamic action selection based on new information
 
-Examples
+5. **Learning From Decisions**
+   - Analyze successful vs failed decisions
+   - Update confidence models from outcomes
+   - Pattern recognition for recurring decision contexts
 
-- Should this experience become a lesson?
-- Is this important enough for long-term memory?
-- Should this be added to the Knowledge Base?
+6. **Human Oversight Enhancement**
+   - Interactive approval UI integration
+   - Review history and override APIs
 
----
+### ⭐⭐⭐ Medium (Phase 3 - Optional Improvements)
+7. **Decision Visualization**
+   - Decision tree/graph export for debugging
+   - Timeline view of decision → outcome chains
 
-# Available Actions
-
-For every situation, Freya considers multiple actions.
-
-Examples
-
-Continue
-
-Pause
-
-Retry
-
-Stop
-
-Ask User
-
-Read More Files
-
-Search Documentation
-
-Switch Strategy
-
-Create Goal
-
-Update Memory
-
-Skip Task
-
-Archive Task
-
-No Action
-
-The best action is selected after evaluation.
+### ⭐⭐ Low (Phase 4 - Future Ideas)
+8. **Meta-Decision Learning**
+   - Learn when to trust/subvert own confidence estimates
+   - Transfer decision patterns across projects
 
 ---
 
-# Decision Factors
+## Integration Points
 
-Each decision should consider:
+The Decision Manager connects these existing systems:
 
-Goal priority
-
-Current context
-
-Available information
-
-Dependencies
-
-Risk
-
-Expected benefit
-
-Confidence
-
-User preferences
-
-Project constraints
-
-Previous experience
-
-No single factor should determine every decision.
-
----
-
-# Confidence Estimation
-
-Every important decision should estimate confidence.
-
-Possible levels
-
-- Very High
-- High
-- Medium
-- Low
-- Very Low
-
-Low-confidence decisions may require:
-
-- Additional context
-- More investigation
-- User approval
-
-Confidence should influence—not replace—decision making.
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    DECISION MANAGER                         │
+├─────────────────────────────────────────────────────────────┤
+│  Observe → Gather Context → Identify Actions → Evaluate    │
+│         → Estimate Risk/Benefit → Choose → Execute → Learn │
+└─────────────────────────────────────────────────────────────┘
+        │              │              │            │
+        ▼              ▼              ▼            ▼
+   ┌────────┐    ┌──────────┐   ┌─────────┐ ┌──────────┐
+   │Intent  │    │ Memory   │   │Planning  Risk    Confidence   │
+   │ Class. │◄──►│ Systems  │◄─►││ Manager ││ Assess.  │ │ Scoring  │
+   └────────┘    └──────────┘   └─────────┘ └──────────┘
+                                               │
+                                               ▼
+                                        ┌────────────┐
+                                        │ Goal       │
+                                        │ Scheduling │
+                                        └────────────┘
+```
 
 ---
 
-# Risk Assessment
+## Completion Estimate
 
-Before acting, Freya should estimate risk.
+**Current: ~85%** — Core Phase 1 complete with unified orchestration layer.
 
-Examples
-
-Low Risk
-
-- Read a file
-- Analyze code
-- Update documentation
-
-Medium Risk
-
-- Modify implementation
-- Refactor code
-- Generate tests
-
-High Risk
-
-- Delete files
-- Major architectural changes
-- Large automated refactoring
-
-Higher-risk actions require greater caution.
+| Phase | Status |
+|-------|--------|
+| Phase 1 — Decision Framework | ✅ Complete |
+| Phase 2 — Context & Information Decisions | ✅ Complete (integrated) |
+| Phase 3 — Risk & Confidence Evaluation | ✅ Complete (integrated) |
+| Phase 4 — Execution Decisions | ✅ Complete (integrated) |
+| Phase 5 — Adaptive Decision Making | ✅ Complete (integrated) |
+| Phase 6 — Decision History | ✅ Complete |
+| Phase 7 — Learning From Decisions | 🟡 Partial (lessons/experience exist, decision-level learning pending) |
+| Phase 8 — Autonomous Judgment System | ⚪ Not Started (Phase 2+) |
 
 ---
 
-# Decision Rules
-
-Freya should follow simple guiding principles.
-
-When information is insufficient
-
-↓
-
-Gather more information.
-
-When confidence is low
-
-↓
-
-Investigate or ask the user.
-
-When risk is high
-
-↓
-
-Require approval if appropriate.
-
-When blocked
-
-↓
-
-Attempt recovery before giving up.
-
-When no useful action exists
-
-↓
-
-Stop and explain why.
-
----
-
-# Decision History
-
-Important decisions should be recorded.
-
-Store
-
-- Decision
-- Reason
-- Outcome
-- Timestamp
-- Confidence
-- Result
-
-Example
-
-Decision
-
-Retry failed test
-
-Reason
-
-Temporary API timeout
-
-Outcome
-
-Succeeded
-
-Decision history supports learning and future improvement.
-
----
-
-# Adaptive Decision Making
-
-Decisions should change as circumstances change.
-
-Example
-
-Initial decision
-
-Retry
-
-↓
-
-Retry fails
-
-↓
-
-Choose alternative solution
-
-↓
-
-Alternative also fails
-
-↓
-
-Ask the user
-
-↓
-
-Resume after clarification
-
-Decision making should remain flexible.
-
----
-
-# Explainable Decisions
-
-Freya should explain major decisions in plain English.
-
-Example
-
-Why did you inspect another file?
-
-Because the requested change depends on code defined elsewhere, and reviewing that file reduces the risk of introducing errors.
-
-Users should understand why important actions were chosen.
-
----
-
-# Human Oversight
-
-Users should always be able to:
-
-- Override decisions
-- Approve decisions
-- Reject decisions
-- Force execution
-- Cancel execution
-- Review decision history
-
-Human decisions always take precedence.
-
----
-
-# Future Integration
-
-Decision Making should integrate with:
-
-- Goal Management
-- Planning & Reasoning
-- Memory System
-- Tool Selection
-- Planner
-- Learning System
-- Risk Assessment
-- Human Oversight
-- Autonomous Runtime
-- Self Improvement
-
-Decision Making becomes the judgment layer that guides every autonomous action.
-
----
-
-# Incremental Implementation Roadmap
-
-The capability should be implemented in small, independent phases.
-
----
-
-## Phase 1 — Decision Framework ⭐
-
-Objective
-
-Create the core decision engine.
-
-Implement
-
-- Decision manager
-- Decision data model
-- Decision interfaces
-- Decision outcomes
-
-Success Criteria
-
-- Freya evaluates actions before execution.
-- Decisions follow a consistent structure.
-
----
-
-## Phase 2 — Context & Information Decisions ⭐⭐
-
-Objective
-
-Determine whether enough information exists.
-
-Implement
-
-- Context evaluation
-- Information sufficiency checks
-- Memory retrieval decisions
-- Documentation search decisions
-
-Success Criteria
-
-- Freya gathers missing context before acting.
-- Unnecessary searches are avoided.
-
----
-
-## Phase 3 — Risk & Confidence Evaluation ⭐⭐⭐
-
-Objective
-
-Estimate confidence and risk for important actions.
-
-Implement
-
-- Risk scoring
-- Confidence estimation
-- Decision thresholds
-- Approval recommendations
-
-Success Criteria
-
-- Decisions include confidence and risk estimates.
-- High-risk actions are identified before execution.
-
----
-
-## Phase 4 — Execution Decisions ⭐⭐⭐
-
-Objective
-
-Control task execution intelligently.
-
-Implement
-
-- Continue
-- Pause
-- Retry
-- Stop
-- Switch strategy
-- Skip task
-
-Success Criteria
-
-- Freya chooses appropriate execution actions based on context.
-- Failed tasks trigger intelligent recovery.
-
----
-
-## Phase 5 — Adaptive Decision Making ⭐⭐⭐⭐
-
-Objective
-
-Continuously revise decisions during execution.
-
-Implement
-
-- Outcome monitoring
-- Decision reevaluation
-- Dynamic action selection
-- Failure recovery
-
-Success Criteria
-
-- Decisions adapt as new information becomes available.
-- Freya avoids repeatedly making ineffective choices.
-
----
-
-## Phase 6 — Decision History ⭐⭐⭐⭐
-
-Objective
-
-Record important decisions for future reference.
-
-Implement
-
-- Decision logs
-- Reasons
-- Outcomes
-- Confidence
-- Success tracking
-
-Success Criteria
-
-- Significant decisions are searchable.
-- Past outcomes influence future choices.
-
----
-
-## Phase 7 — Learning From Decisions ⭐⭐⭐⭐⭐
-
-Objective
-
-Improve future judgment using previous experience.
-
-Implement
-
-- Success analysis
-- Failure analysis
-- Decision pattern recognition
-- Recommendation updates
-
-Success Criteria
-
-- Successful decisions become preferred strategies.
-- Repeated mistakes become less likely.
-
----
-
-## Phase 8 — Autonomous Judgment System ⭐⭐⭐⭐⭐
-
-Objective
-
-Make Decision Making the judgment layer of Freya.
-
-Workflow
-
-Observe
-
-↓
-
-Gather Context
-
-↓
-
-Generate Possible Actions
-
-↓
-
-Evaluate Risk
-
-↓
-
-Estimate Confidence
-
-↓
-
-Choose Best Action
-
-↓
-
-Execute
-
-↓
-
-Observe Result
-
-↓
-
-Learn
-
-↓
-
-Make Next Decision
-
-Success Criteria
-
-- Every autonomous action is preceded by an informed decision.
-- Freya consistently chooses actions that balance safety, efficiency, and project goals.
-- Decision Making works seamlessly with Goal Management, Planning & Reasoning, and the Memory System.
-
----
-
-# Final Vision
-
-Decision Making gives Freya the ability to exercise judgment rather than simply execute instructions.
-
-Instead of reacting automatically, Freya evaluates available information, weighs risks and benefits, estimates confidence, and determines the most appropriate action before proceeding.
-
-Combined with Goal Management, Planning & Reasoning, and the Memory System, Decision Making forms the judgment layer that enables safe, explainable, and intelligent autonomous software engineering.
+## Next Steps
+
+1. **Phase 2**: Implement Adaptive Decision Revision - monitor and re-evaluate decisions during execution
+2. **Phase 2**: Enhance Learning From Decisions - analyze outcomes and update confidence models
+3. **Phase 2**: Human Oversight Enhancement - interactive approval UI
+4. **Phase 3**: Decision Visualization - tree/graph export and timeline views
+5. **Phase 4**: Meta-Decision Learning - learn when to trust/subvert confidence estimates

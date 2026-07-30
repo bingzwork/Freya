@@ -23,14 +23,35 @@ from app.intent import (
     should_clarify,
     IntentType,
 )
-from app.memory.project_memory import ProjectMemory
-from app.memory.experience_memory import ExperienceMemory
+from app.memory.episodic_memory import EpisodicMemory, create_episodic_memory
 from app.memory.engineering_lessons import EngineeringLessonStorage, LessonSeverity, LessonType
+from app.memory.experience_memory import ExperienceMemory
 from app.memory.goals import GoalStorage
+from app.memory.long_term_memory import LongTermMemory, create_long_term_memory
+from app.memory.project_memory import ProjectMemory
+from app.memory.semantic_memory import SemanticMemory, create_semantic_memory
+from app.memory.task_memory import TaskMemory, create_task_memory
+from app.memory.unified_retrieval import create_unified_retrieval
+from app.memory.working_memory import WorkingMemory, get_working_memory
+
+# Phase C: Memory Optimization
+from app.memory.consolidation import ConsolidationEngine, create_consolidation_engine, ConsolidationTrigger
+from app.memory.forgetting import ForgettingEngine, create_forgetting_engine
+from app.memory.cross_references import CrossMemoryReferences, create_cross_memory_references
+from app.memory.retrieval_ranking import RankingEngine, create_ranking_engine, RankedUnifiedRetrieval
 from app.verification.repair_loop import RepairLoop
 from app.verification.runner import VerificationRunner
 from app.rag import SimpleRetriever
-import re
+
+# Decision Management (Phase 1)
+from app.decision.manager import DecisionManager, DecisionManagerConfig
+from app.decision.models import (
+    DecisionContext,
+    DecisionOption,
+    DecisionType,
+    DecisionCategory,
+)
+
 try:
     from app.retrieval.enhanced_retriever import EnhancedRetriever
 except ImportError:
@@ -213,7 +234,89 @@ class FreyaAgent:
         self.patch_generator = PatchGenerator(self.llm, self.patch_engine)
         self.verifier = VerificationRunner(workspace)
         self.planner = Planner(self.llm, self.memory, engineering_lessons=self.engineering_lessons)
-        self.conversation = ConversationState(max_history=max_conversation_history, persistence_path=conversation_persistence_path)
+
+        # Conversation Memory - using ConversationState for backward compatibility
+        self.conversation = ConversationState(
+            max_history=max_conversation_history,
+            persistence_path=conversation_persistence_path,
+            workspace=workspace,
+        )
+
+        # Working Memory - scratchpad for active task execution
+        self.working_memory = get_working_memory()
+
+        # Phase B: Extended Memory Systems
+        # Task Memory - persistent storage for active task execution state
+        self.task_memory = create_task_memory(workspace)
+
+        # Long-Term Memory - user preferences, permanent facts, cross-project knowledge
+        self.long_term_memory = create_long_term_memory(workspace)
+
+        # Episodic Memory - append-only event log for "what happened when"
+        self.episodic_memory = create_episodic_memory(workspace)
+
+        # Semantic Memory - general programming knowledge base
+        self.semantic_memory = create_semantic_memory(workspace)
+
+        # Unified Retrieval Layer - single interface for all memories
+        self.unified_retrieval = create_unified_retrieval(self)
+
+        # Phase C: Memory Optimization
+        # Consolidation Engine - promotes high-value experiences/lessons to long-term memory
+        self.consolidation_engine = create_consolidation_engine(
+            experience_memory=self.experience_memory,
+            engineering_lessons=self.engineering_lessons,
+            long_term_memory=self.long_term_memory,
+            project_memory=self.memory,
+        )
+
+        # Forgetting Engine - controlled TTL-based expiration and archival
+        self.forgetting_engine = create_forgetting_engine(
+            experience_memory=self.experience_memory,
+            engineering_lessons=self.engineering_lessons,
+            project_memory=self.memory,
+            task_memory=self.task_memory,
+            episodic_memory=self.episodic_memory,
+            semantic_memory=self.semantic_memory,
+            long_term_memory=self.long_term_memory,
+            working_memory=self.working_memory,
+        )
+
+        # Cross-Memory References - traceability between memory types
+        self.cross_references = create_cross_memory_references()
+
+        # Ranking Engine - advanced relevance ranking for unified retrieval
+        self.ranking_engine = create_ranking_engine(
+            vector_db=None,  # Could be enhanced with vector DB later
+            long_term_memory=self.long_term_memory,
+        )
+        self.ranked_retrieval = RankedUnifiedRetrieval(self.unified_retrieval, self.ranking_engine)
+
+        # Phase 1: Decision Management
+        # Central decision orchestrator integrating confidence, risk, goals, planning, memory
+        self.decision_manager = DecisionManager(
+            workspace=workspace,
+            config=DecisionManagerConfig(
+                min_confidence_for_auto_execute=0.6,
+                min_confidence_for_recommendation=0.4,
+                max_risk_for_auto_execute="medium",
+                require_approval_above_risk="high",
+                enable_explainable_decisions=True,
+                enable_human_oversight=True,
+                record_all_decisions=True,
+                calibrate_confidence_from_outcomes=True,
+                use_confidence_scoring=True,
+                use_risk_assessment=True,
+                use_goal_scheduling=True,
+                use_memory_retrieval=True,
+                use_intent_classification=True,
+            ),
+            goal_storage=self.goal_storage,
+            unified_retrieval=self.unified_retrieval,
+            intent_classifier=classify_intent,
+            planner=self.planner,
+            plan_manager=self.plan_manager,
+        )
 
         # Progress tracking - stores the last execution's progress snapshot
         self.last_execution_progress: Optional[Dict[str, Any]] = None
@@ -254,20 +357,26 @@ class FreyaAgent:
 
     def run(self, task, allow_mutations=True):
         """Plan, execute bounded workspace actions, and summarize the result. Mutating tools will prompt for confirmation before each use."""
-        classification = classify_intent(task)
+        classification = classify_intent(
+            task,
+            context={
+                "last_intent": self.conversation.get_last_intent() if hasattr(self.conversation, 'get_last_intent') else None,
+            }
+        )
 
-        # Conversational control short-circuits all routing and bypasses the LLM.
-        if classification.is_control:
+        # Conversational control and system status short-circuit all routing and bypass the LLM.
+        if classification.is_control or classification.intent == IntentType.SYSTEM_STATUS:
             result = route_query(
                 task, intent_type=classification.intent.value
             )
             if result is not None:
                 answer = format_capability_result(result)
                 self.conversation.add_message("user", task)
-                self.conversation.add_message("assistant", answer)
+                self.conversation.add_message("assistant", answer, classification.intent.value)
                 if self.conversation._persistence_path:
                     self.conversation.save()
                 return answer
+            # If no capability matched, fall through to LLM (but this shouldn't happen for SYSTEM_STATUS)
 
         # Mid-band confidence: ask a paraphrased clarifying question.
         if should_clarify(classification):
@@ -283,7 +392,7 @@ class FreyaAgent:
                  "confidence": classification.confidence, "outcome": answer[:500]},
             )
             self.conversation.add_message("user", task)
-            self.conversation.add_message("assistant", answer)
+            self.conversation.add_message("assistant", answer, classification.intent.value)
             if self.conversation._persistence_path:
                 self.conversation.save()
             return answer
@@ -308,26 +417,43 @@ Answer the user's request directly."""
             answer = self.llm.ask(prompt)
             self.memory.record("task", {"request": task, "outcome": answer[:500]})
             self.conversation.add_message("user", task)
-            self.conversation.add_message("assistant", answer)
+            self.conversation.add_message("assistant", answer, classification.intent.value)
             if self.conversation._persistence_path:
                 self.conversation.save()
             return answer
 
-        # Validate that engineering tasks have sufficient context
-        if not _has_sufficient_context(task, classification.intent):
+        # Validate that engineering tasks have sufficient context using Decision Manager
+        from app.decision.manager import decide_context_sufficiency
+
+        built_context = self.build_context(task)
+        unified_context = self.unified_retrieval.retrieve_for_planner(task, {"phase": "planning"})
+        memory_context = self.memory.context()
+        if unified_context:
+            combined_context = unified_context + "\n\n" + memory_context
+        else:
+            combined_context = memory_context
+
+        context_sufficiency = decide_context_sufficiency(
+            self.decision_manager,
+            task=task,
+            current_context=built_context + "\n\n" + combined_context,
+            intent_type=classification.intent.value,
+        )
+
+        if not context_sufficiency.should_execute or context_sufficiency.requires_approval:
             # Missing essential information - ask user instead of inventing fake plans
             prompt = _get_missing_context_prompt(task, classification.intent)
             answer = self.llm.ask(prompt)
             self.memory.record("task", {"request": task, "outcome": answer[:500]})
             self.conversation.add_message("user", task)
-            self.conversation.add_message("assistant", answer)
+            self.conversation.add_message("assistant", answer, classification.intent.value)
             if self.conversation._persistence_path:
                 self.conversation.save()
             return answer
 
         # Engineering tasks -> full planning and execution pipeline
-        context = self.build_context(task)
-        memory_context = self.memory.context()
+        context = built_context
+
         plan = self.planner.create_plan(task)
         # Priority 4 (Self-Learning): retrieve relevant Engineering Lessons and
         # ExperienceMemory hits immediately before execution so the post-
@@ -385,7 +511,7 @@ Tool results:
         answer = self.llm.ask(prompt)
         self.memory.record("task", {"request": task, "outcome": answer[:500]})
         self.conversation.add_message("user", task)
-        self.conversation.add_message("assistant", answer)
+        self.conversation.add_message("assistant", answer, classification.intent.value)
         if self.conversation._persistence_path:
             self.conversation.save()
         return answer
@@ -448,6 +574,9 @@ Tool results:
         if not allow_mutations:
             raise PermissionError("Autonomous solving requires allow_mutations=True.")
         context = self.build_context(task)
+
+        # Initialize working memory for this solve() execution
+        self.working_memory.start_task(f"solve_{task[:30]}")
         history = []
         plan = None
         replanning_count = 0
@@ -455,7 +584,13 @@ Tool results:
         for it in range(1, max_iterations + 1):
             # On first iteration, create a new plan. On subsequent iterations, reuse and adapt existing plan.
             if plan is None:
-                plan = self.planner.create_plan(task)
+                # Use Decision Manager for initial planning decision
+                plan_decision = self.decision_manager.decide(
+                    decision_type=DecisionType.PLAN_SELECTION,
+                    context={"task": task, "context": context, "iteration": 1},
+                    category=DecisionCategory.PLANNING,
+                )
+                plan = self.planner.create_plan(task, plan_decision.guidance if hasattr(plan_decision, 'guidance') else None)
             else:
                 # Adaptive replanning: update the existing plan based on failures
                 replanning_count += 1
@@ -473,6 +608,23 @@ Tool results:
             # Apply and verify
             result = self.patch_engine.apply_and_verify(
                 self.tools, proposal["operations"], self.verifier
+            )
+
+            # Record tool outputs in working memory
+            for op in proposal.get("operations", []):
+                self.working_memory.record_tool_output(
+                    tool_name="patch_apply",
+                    arguments={"operation": op.get("op"), "file": op.get("path")},
+                    result=f"Applied {op.get('op')} to {op.get('path')}",
+                    success=result.get("verification", {}).success if hasattr(result.get("verification", {}), 'success') else True,
+                    error=None if result.get("verification", {}).success else str(result.get("verification", {}).stderr)[:200],
+                )
+            self.working_memory.record_tool_output(
+                tool_name="patch_verify",
+                arguments={},
+                result="Verification passed" if result["verification"].success else "Verification failed",
+                success=result["verification"].success,
+                error=result["verification"].stderr if not result["verification"].success else None,
             )
 
             # Record outcome
@@ -534,6 +686,12 @@ Tool results:
                     confidence=0.8,
                     metadata={"iterations": it, "replans": replanning_count, "kind": "solve"},
                 )
+                # Trigger consolidation after new experience/lesson
+                self.consolidation_engine.record_new_entries(2)
+                if self.consolidation_engine.should_run():
+                    self.consolidation_engine.run_consolidation()
+                # End working memory task
+                self.working_memory.end_task()
                 return {
                     "success": True,
                     "iterations": it,
@@ -586,6 +744,12 @@ Tool results:
             confidence=0.6,
             metadata={"iterations": max_iterations, "replans": replanning_count, "kind": "solve"},
         )
+        # Trigger consolidation after new experience/lesson
+        self.consolidation_engine.record_new_entries(2)
+        if self.consolidation_engine.should_run():
+            self.consolidation_engine.run_consolidation()
+        # End working memory task
+        self.working_memory.end_task()
         return {
             "success": False,
             "iterations": max_iterations,
@@ -607,6 +771,7 @@ Tool results:
             The updated plan (same object, modified in place)
         """
         from app.core.logger import logger
+        from app.decision.manager import decide_replanning_strategy
 
         logger.info(f"[Adaptive Replanning] Adapting plan {plan.id} after failure")
 
@@ -635,6 +800,14 @@ Tool results:
             if verification:
                 last_failure = (getattr(verification, "stdout", "") or "") + "\n" + (getattr(verification, "stderr", "") or "")
 
+        # Use Decision Manager for replanning strategy decision
+        replan_decision = decide_replanning_strategy(
+            self.decision_manager,
+            failed_task=failed_tasks[0].title if failed_tasks else "unknown",
+            failure_context=last_failure,
+            original_task=original_task,
+        )
+
         # For each failed task, generate replacement tasks
         for failed_task in failed_tasks:
             logger.info(f"[Adaptive Replanning] Replacing failed task: {failed_task.title}")
@@ -656,6 +829,8 @@ Failure context:
 {last_failure}
 
 Original task: {original_task}
+
+Replanning guidance: {replan_decision.rationale if hasattr(replan_decision, 'rationale') else 'Try a different approach'}
 
 Generate 1-3 new concrete, executable steps to achieve the same goal in a different way.
 Each step must map to ONE tool action (read_file, write_file, replace_in_file, run_terminal, etc.).
@@ -687,7 +862,7 @@ Return ONLY valid JSON: {{"steps": ["step 1", "step 2"]}}"""
                 plan._tracker.add_task(new_task)
                 new_task_ids.append(new_task.id)
 
-            # Connect new tasks: first new task depends on failed task's dependencies
+            # Connect new tasks: first new task inherits failed task's dependencies
             # Last new task feeds into the original dependents
             if new_task_ids:
                 # First new task inherits failed task's dependencies
@@ -716,6 +891,7 @@ Return ONLY valid JSON: {{"steps": ["step 1", "step 2"]}}"""
                 "failed_task_ids": failed_task_ids,
                 "new_task_ids": new_task_ids,
                 "iteration": len(history),
+                "replanning_strategy": replan_decision.decision_type.value if hasattr(replan_decision, 'decision_type') else "adaptive",
             }
             plan._tracker.take_snapshot()
             # Get the latest snapshot and add replanning event
@@ -785,6 +961,10 @@ Return ONLY valid JSON: {{"steps": ["step 1", "step 2"]}}"""
                     confidence=0.7,
                     metadata={"attempts": len(attempts), "kind": "repair"},
                 )
+                # Trigger consolidation after new experience/lesson
+                self.consolidation_engine.record_new_entries(2)
+                if self.consolidation_engine.should_run():
+                    self.consolidation_engine.run_consolidation()
             else:
                 self.engineering_lessons.store(
                     title=task[:60],
@@ -812,6 +992,10 @@ Return ONLY valid JSON: {{"steps": ["step 1", "step 2"]}}"""
                     confidence=0.5,
                     metadata={"attempts": len(attempts), "kind": "repair"},
                 )
+                # Trigger consolidation after new experience/lesson
+                self.consolidation_engine.record_new_entries(2)
+                if self.consolidation_engine.should_run():
+                    self.consolidation_engine.run_consolidation()
         except Exception as exc:
             # Capture is best-effort; never let logging disturb the repair outcome.
             logger.warning(f"Failed to record repair lesson: {exc}")
@@ -853,6 +1037,7 @@ Return ONLY valid JSON: {{"steps": ["step 1", "step 2"]}}"""
                 - "replanning_count": Number of adaptive replans performed
         """
         from app.core.logger import logger
+        from app.decision.manager import decide_plan_approach
 
         # Resolve the goal to execute
         if goal_id is not None:
@@ -893,7 +1078,15 @@ Return ONLY valid JSON: {{"steps": ["step 1", "step 2"]}}"""
             memory_context = self.memory.context()
 
             if plan is None:
-                plan = self.planner.create_plan(task_description)
+                # Use Decision Manager to decide on planning approach
+                plan_decision = decide_plan_approach(
+                    self.decision_manager,
+                    task=task_description,
+                    context=context + "\n\n" + memory_context,
+                    goal_id=goal.id,
+                    goal_name=goal.name,
+                )
+                plan = self.planner.create_plan(task_description, plan_decision.guidance if hasattr(plan_decision, 'guidance') else None)
             else:
                 # Adaptive replanning: update existing plan based on failures
                 replanning_count += 1
