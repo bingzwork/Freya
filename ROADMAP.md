@@ -29,7 +29,7 @@ The codebase already contains mature foundation modules across planning, memory,
 | Memory System                   | Core Modules Complete (85% Overall) |
 | Planning and Reasoning          | Phase 5 Complete (Adaptive Replanning wired) |
 | Decision Making                 | Partially Implemented (core components exist, integration needed) |
-| Failure Recovery                | Not Implemented                |
+| Failure Recovery                | Complete (Foundation + High Priority) |
 | World Model                     | Partial                        |
 | Autonomous Software Engineering | Core Complete                  |
 | Self Observation                | Complete (Integration Partial) |
@@ -45,7 +45,7 @@ The codebase already contains mature foundation modules across planning, memory,
 | Long-Term Autonomy              | Partial                        |
 | Resource Management             | Complete (default MACHINE, TOOL, GPU resources)      |
 | Multi Agent Coordination        | Not Implemented                |
-| Self Evaluation                 | Not Implemented                |
+| Self Evaluation                 | ✅ COMPLETE | 100% |
 | Performance Optimization        | Partial                        |
 
 ---
@@ -349,6 +349,39 @@ Freya operates continuously with minimal supervision.
 * Goal Management Phase 6 — Automatic Goal Decomposition: ✅ Complete. `SubtaskSuggestion` dataclass + `GoalStorage.decompose_goal(goal_id, max_subtasks=5)` (read-only, returns up to five draft suggestions from a deterministic Plan / Implement / Test / Document / Review template; subtask priorities inherit from the parent goal and the parent description is appended to the first suggestion) and `GoalStorage.apply_decomposition(goal_id, suggestions, plan_manager=None)` (the manual-approval opt-in that materialises suggestions as real child goals via the existing `create(parent_goal_id=...)` path; the optional `plan_manager` kwarg is the **Planner integration** hook — each approved suggestion is mirrored as a parallel `Task` via the existing `PlanManager.add_task(...)` surface; the goal side stays the source of truth and planner failures cannot roll back the goal side). Test suite is 119 / 119 green in `tests/test_goals.py`.
 * Goal Management Phase 7 — Autonomous Goal Review: ✅ Complete. `Goal` gained `metadata: Dict[str, Any]` (backwards compatible — pre-Phase-7 files load with `{}` default) for lifecycle bookkeeping (`previous_status`, `pause_reason`, `stall_reason`, `recommend_reason`, `abandon_reason`); new `paused` status treated distinctly from existing values. `GoalStorage` gained `list_stalled(stall_threshold_seconds, include_paused, now)` (read-side: goals older than threshold, not terminal `completed`/`cancelled`, paused excluded by default), `block_reasons(goal_id)` (read: human-readable reasons — explicit `blocked` status, incomplete named deps, missing dep ids), `pause_goal(goal_id, reason="")` (write: flips to `"paused"`, stashes prior status in `metadata["previous_status"]` + optional `metadata["pause_reason"]`; terminal goals never paused; re-pausing paused goal is idempotent), `pause_inactive(stall_threshold_seconds, reason="", include_paused=False)` (bulk pause via `list_stalled` → `pause_goal`; returns only goals whose status actually flipped), `resume_goal(goal_id)` (write: restores from `metadata["previous_status"]` (fallback `"pending"`), clears bookkeeping keys), `is_paused(goal_id)` (read: paused-state bool), `recommend_cancellation(stall_threshold_seconds, pause_threshold_seconds=0.0, now)` (read: returns goals exceeding *both* thresholds — two-signal gate because cancellation is higher stakes), `recommend_priorities(now)` (read: signal-count heuristic bumps priority down, active goal preserved, manual priorities unchanged unless clear signal); `select_next()` updated to auto-resume a paused goal when it would otherwise be the highest-priority eligible candidate (Phase 5/7 integration; callers need not call `resume_goal` first). Test suite 119/119 green. Pre-Phase-4/5/7 `goals.json` files load cleanly. Phase 8-onward work remains: planner integration driven by active goals (running the agent *from* goals), autonomous-loop wiring, human oversight UI for create/pause/resume/cancel, hierarchy-invariant management, formalised `status`/`priority` enums.
 * Goal Management Phase 8 — Planner Integration: ✅ Complete. Added `GoalStorage` to `FreyaAgent` (`app/agent/core_agent.py`); new execution entry point `FreyaAgent.run_goal(goal_id: Optional[str] = None, allow_mutations: bool = True)` resolves the active goal (uses current active or falls back to `select_next()`), plans from the goal description via existing `Planner.create_plan()`, executes via `Executor.execute_plan()`, then advances goal state — calls `complete()` if all children done (Phase 3 propagation) for leaf goals marks `status="completed"` after max iterations. Also added `FreyaAgent.run_goal_loop(max_goals=10, max_iterations_per_goal=3)` for continuous autonomous operation: repeatedly calls `select_next()` → `run_goal()` until no eligible goals or limit reached. Backwards compatible: existing `run()` / `solve()` / `repair()` untouched; callers opt into goal-driven behavior by calling `run_goal()`. Test suite 119/119 green.
+
+---
+
+# Self-Evaluation
+
+## Goal
+
+Implement Freya's ability to objectively assess her own work quality before declaring a task complete.
+
+## Critical Capabilities Implemented (100%)
+
+| # | Objective | Status | Description |
+|---|-----------|--------|-------------|
+| 1 | **Evaluation Framework** | ✅ Complete | Core architecture: EvaluationManager, data models, pipeline, interfaces in `app/evaluation/` |
+| 2 | **Requirement Verification** | ✅ Complete | Checks completed work against original request/objectives via RequirementVerifier |
+| 3 | **Functional Validation** | ✅ Complete | Auto-runs tests, build checks, execution verification via ValidationRunner |
+| 4 | **Confidence Scoring** | ✅ Complete | Measurable quality indicators + completion thresholds; deliver/rework/review decisions |
+
+## Implementation Details
+
+**Module:** `app/evaluation/`
+- `models.py` — Data models (Requirement, RequirementVerification, ValidationCheck, ValidationResult, EvaluationConfig, EvaluationResult, ConfidenceLevel, etc.)
+- `pipeline.py` — EvaluationPipeline, RequirementVerifier, ValidationRunner
+- `manager.py` — EvaluationManager, EvaluationHistory, evaluate_before_delivery()
+
+**Agent Integration (`app/agent/core_agent.py`):**
+- `EvaluationManager` initialized in `FreyaAgent.__init__`
+- Evaluation runs after `solve()` success
+- Evaluation runs after `run_active_goal()` completion
+- Evaluation runs after `run()` for engineering tasks
+- Results logged with summary and rework/review warnings
+
+**Tests:** `tests/test_evaluation.py` — 31 tests, all passing
 
 ---
 

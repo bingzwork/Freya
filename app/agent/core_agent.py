@@ -44,13 +44,22 @@ from app.verification.runner import VerificationRunner
 from app.rag import SimpleRetriever
 
 # Decision Management (Phase 1)
-from app.decision.manager import DecisionManager, DecisionManagerConfig
+from app.decision.manager import DecisionManager, DecisionManagerConfig, decide_planning_strategy
 from app.decision.models import (
     DecisionContext,
     DecisionOption,
     DecisionType,
     DecisionCategory,
 )
+
+# Phase 1: Failure Recovery
+from app.failure_recovery.detector import FailureDetector, FailureEvent
+from app.failure_recovery.analyzer import RootCauseAnalyzer
+from app.failure_recovery.orchestrator import RecoveryOrchestrator, RecoveryStrategy
+
+# Self-Evaluation
+from app.evaluation.manager import EvaluationManager, evaluate_before_delivery
+from app.evaluation.models import EvaluationType
 
 try:
     from app.retrieval.enhanced_retriever import EnhancedRetriever
@@ -318,6 +327,27 @@ class FreyaAgent:
             plan_manager=self.plan_manager,
         )
 
+        # Phase 1: Failure Recovery
+        # Unified failure detection, root cause analysis, and recovery orchestration
+        self.failure_detector = FailureDetector(workspace=workspace)
+        self.root_cause_analyzer = RootCauseAnalyzer()
+        self.recovery_orchestrator = RecoveryOrchestrator(
+            failure_detector=self.failure_detector,
+            root_cause_analyzer=self.root_cause_analyzer,
+            decision_manager=self.decision_manager,
+            verification_callback=lambda: self.verifier.dry_run_verify(),
+            max_recovery_attempts=3,
+            workspace=workspace,
+        )
+
+        # Self-Evaluation - runs before declaring task completion
+        self.evaluation_manager = EvaluationManager(
+            workspace=workspace,
+            agent=self,
+            decision_manager=self.decision_manager,
+            verifier=self.verifier,
+        )
+
         # Progress tracking - stores the last execution's progress snapshot
         self.last_execution_progress: Optional[Dict[str, Any]] = None
 
@@ -514,6 +544,22 @@ Tool results:
         self.conversation.add_message("assistant", answer, classification.intent.value)
         if self.conversation._persistence_path:
             self.conversation.save()
+
+        # Self-Evaluation for engineering tasks run through run()
+        eval_result = self.evaluation_manager.evaluate_task_completion(
+            task_description=task,
+            original_request=task,
+            task_id=f"run_{task[:30]}",
+            plan_id=plan.id if isinstance(plan, Plan) else None,
+            evaluation_type=EvaluationType.COMPREHENSIVE,
+        )
+        logger.info(f"[Self-Evaluation] {eval_result.summary}")
+
+        if eval_result.requires_rework:
+            logger.warning(f"[Self-Evaluation] Rework recommended: {eval_result.rework_reasons}")
+        if eval_result.requires_human_review:
+            logger.warning(f"[Self-Evaluation] Human review recommended (confidence: {eval_result.overall_confidence:.0%})")
+
         return answer
 
     def propose_patch(self, task):
@@ -585,12 +631,13 @@ Tool results:
             # On first iteration, create a new plan. On subsequent iterations, reuse and adapt existing plan.
             if plan is None:
                 # Use Decision Manager for initial planning decision
-                plan_decision = self.decision_manager.decide(
-                    decision_type=DecisionType.PLAN_SELECTION,
-                    context={"task": task, "context": context, "iteration": 1},
-                    category=DecisionCategory.PLANNING,
+                plan_decision = decide_planning_strategy(
+                    manager=self.decision_manager,
+                    task=task,
+                    context=context,
+                    iteration=1,
                 )
-                plan = self.planner.create_plan(task, plan_decision.guidance if hasattr(plan_decision, 'guidance') else None)
+                plan = self.planner.create_plan(task)
             else:
                 # Adaptive replanning: update the existing plan based on failures
                 replanning_count += 1
@@ -692,12 +739,54 @@ Tool results:
                     self.consolidation_engine.run_consolidation()
                 # End working memory task
                 self.working_memory.end_task()
+
+                # Self-Evaluation before declaring completion
+                eval_result = self.evaluation_manager.evaluate_task_completion(
+                    task_description=task,
+                    original_request=task,
+                    task_id=f"solve_{task[:30]}",
+                    plan_id=plan.id if isinstance(plan, Plan) else None,
+                )
+                logger.info(f"[Self-Evaluation] {eval_result.summary}")
+
+                # If evaluation requires rework, log but don't auto-rework (could add iterative improvement loop later)
+                if eval_result.requires_rework:
+                    logger.warning(f"[Self-Evaluation] Rework recommended: {eval_result.rework_reasons}")
+                if eval_result.requires_human_review:
+                    logger.warning(f"[Self-Evaluation] Human review recommended (confidence: {eval_result.overall_confidence:.0%})")
+
                 return {
                     "success": True,
                     "iterations": it,
                     "history": history,
                     "replanning_count": replanning_count,
+                    "evaluation": eval_result.to_dict(),
                 }
+
+            # Failure detected - attempt recovery using RecoveryOrchestrator
+            if it < max_iterations:
+                logger.info(f"[Recovery] Iteration {it} failed, attempting recovery via RecoveryOrchestrator")
+                failure_event = self.failure_detector.detect_from_result(
+                    result=result["verification"],
+                    component="solver",
+                    operation="apply_and_verify",
+                    task_description=task,
+                    attempt_number=it,
+                    max_attempts=max_iterations,
+                    metadata={"plan_id": plan.id if hasattr(plan, 'id') else None, "iteration": it},
+                )
+                root_causes = self.root_cause_analyzer.analyze(failure_event)
+                recovery_result = self.recovery_orchestrator.recover(
+                    failure_event=failure_event,
+                    root_causes=root_causes,
+                    context={"task": task, "plan_id": plan.id if hasattr(plan, 'id') else None, "iteration": it},
+                )
+                if recovery_result.success:
+                    logger.info(f"[Recovery] Recovery successful with strategy: {recovery_result.strategy_used.value}")
+                    # If recovery succeeded, we can potentially retry verification
+                    # For now, just continue to next iteration which will replan
+                else:
+                    logger.warning(f"[Recovery] Recovery failed: {recovery_result.final_failure}")
 
             # Failure: record the failure in the plan so we can replan from it
             if isinstance(plan, Plan):
@@ -1158,6 +1247,19 @@ Return ONLY valid JSON: {{"steps": ["step 1", "step 2"]}}"""
         final_progress = self.goal_storage.progress(goal.id)
         is_completed = self.goal_storage.is_completed(goal.id)
 
+        # Self-Evaluation before declaring goal completion
+        eval_result = self.evaluation_manager.evaluate_goal_completion(
+            goal_id=goal.id,
+            goal_name=goal.name,
+            goal_description=goal.description or "",
+        )
+        logger.info(f"[Self-Evaluation] {eval_result.summary}")
+
+        if eval_result.requires_rework:
+            logger.warning(f"[Self-Evaluation] Rework recommended for goal: {eval_result.rework_reasons}")
+        if eval_result.requires_human_review:
+            logger.warning(f"[Self-Evaluation] Human review recommended for goal (confidence: {eval_result.overall_confidence:.0%})")
+
         result = {
             "goal_id": goal.id,
             "goal_name": goal.name,
@@ -1166,6 +1268,7 @@ Return ONLY valid JSON: {{"steps": ["step 1", "step 2"]}}"""
             "history": history,
             "progress": final_progress,
             "replanning_count": replanning_count,
+            "evaluation": eval_result.to_dict(),
         }
 
         logger.info(f"[Goal Execution] Finished: {goal.name} — completed={is_completed}, "
