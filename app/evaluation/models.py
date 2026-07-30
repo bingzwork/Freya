@@ -19,6 +19,57 @@ class EvaluationType(Enum):
     CODE_QUALITY_REVIEW = "code_quality_review"
     DOCUMENTATION_VERIFICATION = "documentation_verification"
     COMPREHENSIVE = "comprehensive"
+    IMPROVEMENT_LOOP = "improvement_loop"
+
+
+class RegressionType(Enum):
+    """Type of regression detected."""
+    TEST_FAILURE = "test_failure"
+    BUILD_FAILURE = "build_failure"
+    LINT_REGRESSION = "lint_regression"
+    PERFORMANCE_REGRESSION = "performance_regression"
+    BEHAVIORAL_CHANGE = "behavioral_change"
+    API_BREAKING = "api_breaking"
+
+
+class QualityDimension(Enum):
+    """Code quality dimensions to evaluate."""
+    SIMPLICITY = "simplicity"
+    READABILITY = "readability"
+    MAINTAINABILITY = "maintainability"
+    CONSISTENCY = "consistency"
+    ARCHITECTURE_COMPLIANCE = "architecture_compliance"
+    COMPLEXITY = "complexity"
+    DUPLICATION = "duplication"
+    DOCUMENTATION = "documentation"
+    TESTING = "testing"
+    ERROR_HANDLING = "error_handling"
+
+
+class DocumentationCheck(Enum):
+    """Types of documentation verification checks."""
+    README_EXISTS = "readme_exists"
+    DOCS_MATCH_IMPLEMENTATION = "docs_match_implementation"
+    EXAMPLES_WORK = "examples_work"
+    API_DOCS_CURRENT = "api_docs_current"
+    CHANGELOG_CURRENT = "changelog_current"
+    ROADMAP_CURRENT = "roadmap_current"
+    IMPLEMENTATION_STATUS_CURRENT = "implementation_status_current"
+    ARCHITECTURE_DOCS_CURRENT = "architecture_docs_current"
+    INLINE_DOCS_PRESENT = "inline_docs_present"
+    TYPE_HINTS_PRESENT = "type_hints_present"
+
+
+class ImprovementAction(Enum):
+    """Types of improvement actions."""
+    REFACTOR = "refactor"
+    ADD_TESTS = "add_tests"
+    ADD_DOCS = "add_docs"
+    FIX_COMPLEXITY = "fix_complexity"
+    FIX_DUPLICATION = "fix_duplication"
+    FIX_STYLE = "fix_style"
+    UPDATE_DOCS = "update_docs"
+    FIX_REQUIREMENTS = "fix_requirements"
 
 
 class EvaluationStatus(Enum):
@@ -201,6 +252,194 @@ class ValidationResult:
         }
 
 
+# ============================================================================
+# HIGH PRIORITY: Regression Detection Models
+# ============================================================================
+
+@dataclass
+class RegressionCheck:
+    """A single regression check comparing pre/post state."""
+    id: str = field(default_factory=lambda: f"reg_{uuid.uuid4().hex[:8]}")
+    name: str = ""
+    type: str = "test"  # test, build, lint, execution, file_hash
+    pre_state: Dict[str, Any] = field(default_factory=dict)
+    post_state: Dict[str, Any] = field(default_factory=dict)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class RegressionResult:
+    """Result of a regression check."""
+    check_id: str
+    check_name: str
+    check_type: str
+    has_regression: bool = False
+    regression_details: List[str] = field(default_factory=list)
+    pre_value: Any = None
+    post_value: Any = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "check_id": self.check_id,
+            "check_name": self.check_name,
+            "check_type": self.check_type,
+            "has_regression": self.has_regression,
+            "regression_details": self.regression_details,
+            "pre_value": self.pre_value,
+            "post_value": self.post_value,
+            "metadata": self.metadata,
+        }
+
+
+# ============================================================================
+# HIGH PRIORITY: Code Quality Review Models
+# ============================================================================
+
+@dataclass
+class QualityIssue:
+    """A code quality issue found during review."""
+    id: str = field(default_factory=lambda: f"qual_{uuid.uuid4().hex[:8]}")
+    file_path: str = ""
+    line_number: Optional[int] = None
+    category: str = "style"  # style, complexity, architecture, security, performance, maintainability
+    severity: str = "warning"  # info, warning, error, critical
+    title: str = ""
+    description: str = ""
+    suggestion: str = ""
+    rule_id: str = ""
+    confidence: float = 0.8
+
+
+@dataclass
+class QualityReview:
+    """Result of a code quality review."""
+    review_id: str = field(default_factory=lambda: f"qr_{uuid.uuid4().hex[:8]}")
+    issues: List[QualityIssue] = field(default_factory=list)
+    overall_score: float = 1.0  # 0.0 - 1.0, lower is worse
+    category_scores: Dict[str, float] = field(default_factory=dict)
+    summary: str = ""
+
+    @property
+    def issue_count(self) -> int:
+        return len(self.issues)
+
+    @property
+    def critical_count(self) -> int:
+        return sum(1 for i in self.issues if i.severity == "critical")
+
+    @property
+    def error_count(self) -> int:
+        return sum(1 for i in self.issues if i.severity == "error")
+
+    @property
+    def warning_count(self) -> int:
+        return sum(1 for i in self.issues if i.severity == "warning")
+
+    @property
+    def info_count(self) -> int:
+        return sum(1 for i in self.issues if i.severity == "info")
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "review_id": self.review_id,
+            "issues": [i.__dict__ for i in self.issues],
+            "overall_score": self.overall_score,
+            "category_scores": self.category_scores,
+            "summary": self.summary,
+            "issue_count": self.issue_count,
+            "critical_count": self.critical_count,
+            "error_count": self.error_count,
+            "warning_count": self.warning_count,
+            "info_count": self.info_count,
+        }
+
+
+# ============================================================================
+# HIGH PRIORITY: Documentation Verification Models
+# ============================================================================
+
+@dataclass
+class DocCheck:
+    """A documentation check to perform."""
+    id: str = field(default_factory=lambda: f"doc_{uuid.uuid4().hex[:8]}")
+    name: str = ""
+    type: str = "consistency"  # consistency, examples, roadmap, api_docs, readme
+    target_files: List[str] = field(default_factory=list)
+    expected_content: str = ""
+    check_function: str = ""  # Name of check function to run
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class DocCheckResult:
+    """Result of a documentation check."""
+    check_id: str
+    check_name: str
+    check_type: str
+    passed: bool = False
+    issues: List[str] = field(default_factory=list)
+    suggestions: List[str] = field(default_factory=list)
+    details: str = ""
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "check_id": self.check_id,
+            "check_name": self.check_name,
+            "check_type": self.check_type,
+            "passed": self.passed,
+            "issues": self.issues,
+            "suggestions": self.suggestions,
+            "details": self.details,
+            "metadata": self.metadata,
+        }
+
+
+# ============================================================================
+# HIGH PRIORITY: Improvement Loop Models
+# ============================================================================
+
+@dataclass
+class ImprovementIteration:
+    """A single iteration in the improvement loop."""
+    iteration: int
+    evaluation_id: str
+    overall_confidence: float
+    issues_found: int
+    issues_fixed: int
+    improvements_made: List[str] = field(default_factory=list)
+    duration_seconds: float = 0.0
+    met_threshold: bool = False
+
+
+@dataclass
+class ImprovementLoopResult:
+    """Result of running the improvement loop."""
+    loop_id: str = field(default_factory=lambda: f"il_{uuid.uuid4().hex[:8]}")
+    iterations: List[ImprovementIteration] = field(default_factory=list)
+    initial_confidence: float = 0.0
+    final_confidence: float = 0.0
+    total_issues_fixed: int = 0
+    total_improvements: int = 0
+    stopped_reason: str = ""  # threshold_met, max_iterations, error, no_improvement
+    total_duration_seconds: float = 0.0
+    success: bool = False
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "loop_id": self.loop_id,
+            "iterations": [i.__dict__ for i in self.iterations],
+            "initial_confidence": self.initial_confidence,
+            "final_confidence": self.final_confidence,
+            "total_issues_fixed": self.total_issues_fixed,
+            "total_improvements": self.total_improvements,
+            "stopped_reason": self.stopped_reason,
+            "total_duration_seconds": self.total_duration_seconds,
+            "success": self.success,
+        }
+
+
 @dataclass
 class EvaluationConfig:
     """Configuration for an evaluation run."""
@@ -223,10 +462,18 @@ class EvaluationConfig:
     run_execution: bool = False
     custom_validations: List[ValidationCheck] = field(default_factory=list)
 
+    # High Priority capabilities
+    run_regression_detection: bool = True
+    run_code_quality_review: bool = True
+    run_documentation_verification: bool = True
+
     # Confidence scoring settings
     confidence_thresholds: Dict[str, float] = field(default_factory=lambda: {
         "requirement_verification": 0.6,
         "functional_validation": 0.7,
+        "regression_detection": 0.8,
+        "code_quality": 0.6,
+        "documentation": 0.7,
         "overall": 0.65,
     })
 
@@ -253,6 +500,11 @@ class EvaluationResult:
     # Functional validation results
     validation_checks: List[ValidationCheck] = field(default_factory=list)
     validation_results: List[ValidationResult] = field(default_factory=list)
+
+    # High Priority results
+    regression_results: List[RegressionResult] = field(default_factory=list)
+    quality_review: Optional[QualityReview] = None
+    doc_check_results: List[DocCheckResult] = field(default_factory=list)
 
     # Overall scores
     requirement_score: float = 0.0
@@ -300,6 +552,9 @@ class EvaluationResult:
             "requirement_verifications": [v.to_dict() for v in self.requirement_verifications],
             "validation_checks": [c.to_dict() for c in self.validation_checks],
             "validation_results": [r.to_dict() for r in self.validation_results],
+            "regression_results": [r.to_dict() for r in self.regression_results],
+            "quality_review": self.quality_review.to_dict() if self.quality_review else None,
+            "doc_check_results": [r.to_dict() for r in self.doc_check_results],
             "requirement_score": self.requirement_score,
             "validation_score": self.validation_score,
             "overall_confidence": self.overall_confidence,
@@ -346,6 +601,9 @@ class EvaluationResult:
             requirement_verifications=[RequirementVerification(**v) for v in data.get("requirement_verifications", [])],
             validation_checks=[ValidationCheck(**c) for c in data.get("validation_checks", [])],
             validation_results=[ValidationResult(**r) for r in data.get("validation_results", [])],
+            regression_results=[RegressionResult(**r) for r in data.get("regression_results", [])],
+            quality_review=QualityReview(**data["quality_review"]) if data.get("quality_review") else None,
+            doc_check_results=[DocCheckResult(**r) for r in data.get("doc_check_results", [])],
             requirement_score=data.get("requirement_score", 0.0),
             validation_score=data.get("validation_score", 0.0),
             overall_confidence=data.get("overall_confidence", 0.0),
@@ -376,6 +634,9 @@ def _config_to_dict(self) -> Dict[str, Any]:
         "run_lint": self.run_lint,
         "run_build": self.run_build,
         "run_execution": self.run_execution,
+        "run_regression_detection": self.run_regression_detection,
+        "run_code_quality_review": self.run_code_quality_review,
+        "run_documentation_verification": self.run_documentation_verification,
         "custom_validations": [c.to_dict() for c in self.custom_validations],
         "confidence_thresholds": self.confidence_thresholds,
         "fail_fast": self.fail_fast,

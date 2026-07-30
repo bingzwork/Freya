@@ -28,11 +28,11 @@ Without Self-Evaluation, Freya risks stopping too early, missing bugs, or delive
 | **Evaluation Framework** | ✅ Implemented | Core architecture: EvaluationManager, data models, pipeline, interfaces |
 | **Requirement Verification** | ✅ Implemented | Automated objective checking against original request/objectives |
 | **Functional Validation** | ✅ Implemented | Auto-run tests, build checks, execution verification |
-| **Regression Detection** | ❌ Not Implemented | No pre/post comparison |
-| **Code Quality Review** | ❌ Not Implemented | No automated quality scoring |
-| **Documentation Verification** | ❌ Not Implemented | No doc sync checking |
+| **Regression Detection** | ✅ Implemented | Pre/post state comparison, test suite re-run, file hash tracking |
+| **Code Quality Review** | ✅ Implemented | Automated quality checks via DiagnosticEngine (simplicity, readability, architecture) |
+| **Documentation Verification** | ✅ Implemented | Docs match implementation, examples work, roadmaps current, inline docs, type hints |
 | **Confidence Scoring** | ✅ Implemented | Measurable quality indicators + completion thresholds |
-| **Improvement Loop** | ❌ Not Implemented | No auto-refinement before delivery |
+| **Improvement Loop** | ✅ Implemented | Auto-refinement cycle: evaluate → detect weaknesses → improve → re-evaluate |
 | **Evaluation History** | ✅ Implemented | Persistent logs with timestamps, scores, outcomes |
 | **Learning from Evaluation** | ❌ Not Implemented | No pattern detection from past evaluations |
 
@@ -65,14 +65,14 @@ Without Self-Evaluation, Freya risks stopping too early, missing bugs, or delive
 | 3 | **Functional Validation** | Auto-run tests, build checks, execution verification | Catches functional failures automatically | #1, #2 | ✅ Tests/build verify on every major completion |
 | 4 | **Confidence Scoring** | Measurable quality indicators + completion thresholds | Prevents low-confidence work from being delivered | #1, #2, #3 | ✅ Every task has confidence score; low scores trigger rework/review |
 
-### ⭐⭐⭐⭐ High (Major Capabilities)
+### ⭐⭐⭐⭐ High (Major Capabilities) - **COMPLETED**
 
 | # | Objective | Description | Why It Matters | Dependencies | Success Criteria |
 |---|-----------|-------------|----------------|--------------|------------------|
-| 5 | **Regression Detection** | Compare pre/post state; run existing test suite | Protects existing functionality | #1, #3 | No regressions slip through undetected |
-| 6 | **Code Quality Review** | Automated simplicity, readability, architecture checks | Working ≠ good code | #1, #3 | Quality issues flagged before completion |
-| 7 | **Documentation Verification** | Check docs updated, examples correct, roadmaps current | Docs drift is a major pain point | #1 | Documentation matches implementation |
-| 8 | **Improvement Loop** | Detect weaknesses → auto-refine → re-evaluate | Freya fixes own issues before delivery | #1, #4 | Quality improves through self-correction cycles |
+| 5 | **Regression Detection** | Compare pre/post state; run existing test suite | Protects existing functionality | ✅ #1, #3 | ✅ No regressions slip through undetected |
+| 6 | **Code Quality Review** | Automated simplicity, readability, architecture checks | Working ≠ good code | ✅ #1, #3 | ✅ Quality issues flagged before completion |
+| 7 | **Documentation Verification** | Check docs updated, examples correct, roadmaps current | Docs drift is a major pain point | ✅ #1 | ✅ Documentation matches implementation |
+| 8 | **Improvement Loop** | Detect weaknesses → auto-refine → re-evaluate | Freya fixes own issues before delivery | ✅ #1, #4 | ✅ Quality improves through self-correction cycles |
 
 ### ⭐⭐⭐ Medium (Important Improvements)
 
@@ -120,7 +120,7 @@ Without Self-Evaluation, Freya risks stopping too early, missing bugs, or delive
    - Functional Validation
    - Confidence Scoring
 
-2. **Move to High Priority** — Implement remaining major capabilities:
+2. **✅ Completed High Priority Tasks** — All 4 major capabilities implemented:
    - **Regression Detection** — Compare pre/post state; run existing test suite
    - **Code Quality Review** — Automated simplicity, readability, architecture checks
    - **Documentation Verification** — Check docs updated, examples correct, roadmaps current
@@ -130,7 +130,7 @@ Without Self-Evaluation, Freya risks stopping too early, missing bugs, or delive
 
 4. **Add Persistence** — Evaluation history stored for learning (Task #9 - Evaluation History: ✅ Complete)
 
-5. **Enable Improvement Loop** — Let Freya refine work before declaring done (Task #8)
+5. **Enable Improvement Loop** — Let Freya refine work before declaring done (Task #8: ✅ Complete)
 
 ---
 

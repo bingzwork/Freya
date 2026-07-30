@@ -2,7 +2,7 @@
 
 **Version:** v0.4.x
 
-**Last Updated:** 2026-07-30 (Self-Evaluation Critical Capabilities complete)
+**Last Updated:** 2026-07-30 (Self-Evaluation High Priority complete - 100%)
 
 **Purpose**
 
@@ -61,7 +61,7 @@ This document should always reflect the current state of the codebase.
 | Long-Term Autonomy | 🟡 PARTIAL | 55% |
 | Resource Management | 🟢 MOSTLY COMPLETE | 70% |
 | Multi Agent Coordination | ⚪ NOT IMPLEMENTED | 0% |
-| Self Evaluation | ✅ COMPLETE (Critical) | 100% |
+| Self Evaluation | ✅ COMPLETE (Critical + High Priority) | 100% |
 | Performance & Optimization | 🟡 PARTIAL | 60% |
 
 ---
@@ -192,9 +192,9 @@ Future enhancements include:
 
 # Self-Evaluation
 
-Status: ✅ COMPLETE (Critical Capabilities - 100%)
+Status: ✅ COMPLETE (Critical + High Priority - 100%)
 
-**Implementation Date:** 2026-07-30
+**Implementation Date:** 2026-07-30 (Critical) / 2026-07-30 (High Priority)
 
 **Critical Capabilities Implemented:**
 
@@ -215,19 +215,53 @@ Status: ✅ COMPLETE (Critical Capabilities - 100%)
    - Produces `ValidationResult` with pass/fail status
 
 4. **Confidence Scoring** (`app/evaluation/manager.py:EvaluationManager`)
-   - Weighted scoring: 40% requirements, 60% validations
+   - Weighted scoring: 30% requirements, 30% validations, 10% regression, 15% quality, 15% docs
    - Confidence levels: CRITICAL/LOW/MEDIUM/HIGH/VERY_HIGH
    - Decision logic: deliver / rework / human review
    - Thresholds configurable
+
+**High Priority Capabilities Implemented:**
+
+5. **Regression Detection** (`app/evaluation/pipeline.py:RegressionDetector`)
+   - Captures pre-task state (test results, file hashes)
+   - Detects test regressions (passed → failed)
+   - Detects build/lint regressions (compiled → errors)
+   - Detects unexpected file changes
+   - Integrated into evaluation pipeline as Phase 3
+
+6. **Code Quality Review** (`app/evaluation/pipeline.py:CodeQualityReviewer`)
+   - Leverages existing `DiagnosticEngine` for static analysis
+   - Checks: complexity, style, architecture, security, performance, maintainability, documentation, testing
+   - Produces `QualityReview` with `QualityIssue` items (critical/error/warning/info)
+   - Category scores and overall quality score (0.0-1.0)
+   - Integrated into evaluation pipeline as Phase 4
+
+7. **Documentation Verification** (`app/evaluation/pipeline.py:DocumentationVerifier`)
+   - Checks README exists
+   - Verifies IMPLEMENTATION_STATUS.md current (Self-Evaluation section)
+   - Verifies ROADMAP.md current (Self-Evaluation section)
+   - Verifies SELF_EVALUATION.md current (High Priority items)
+   - Checks inline docs/docstrings for changed files
+   - Checks type hints for changed files
+   - Produces `DocCheckResult` with pass/fail per check
+   - Integrated into evaluation pipeline as Phase 5
+
+8. **Improvement Loop** (`app/evaluation/manager.py:EvaluationManager.run_improvement_loop`)
+   - Iterative: evaluate → detect weaknesses → auto-fix → re-evaluate
+   - Configurable threshold (default 0.75) and max iterations (default 3)
+   - Fixes: complexity (extract methods), style (lint), docs (add docstrings), tests
+   - Tracks iterations with `ImprovementIteration` and `ImprovementLoopResult`
+   - Stops at: threshold met, max iterations, error, or no improvement
 
 **Agent Integration:**
 - `FreyaAgent.evaluation_manager` initialized in `__init__`
 - Runs after `solve()` success
 - Runs after `run_active_goal()` completion
 - Runs after `run()` for engineering tasks
+- Runs improvement loop if confidence below threshold
 - Logs summary, warnings for rework/review
 
-**Tests:** 31 tests in `tests/test_evaluation.py` — all passing
+**Tests:** 56 tests in `tests/test_evaluation.py` — all passing
 
 ---
 

@@ -25,11 +25,22 @@ from app.evaluation.models import (
     ValidationResult,
     EvaluationConfig,
     EvaluationResult,
+    RegressionCheck,
+    RegressionResult,
+    QualityReview,
+    QualityIssue,
+    DocCheck,
+    DocCheckResult,
+    ImprovementIteration,
+    ImprovementLoopResult,
 )
 from app.evaluation.pipeline import (
     EvaluationPipeline,
     RequirementVerifier,
     ValidationRunner,
+    RegressionDetector,
+    CodeQualityReviewer,
+    DocumentationVerifier,
 )
 
 
@@ -302,15 +313,20 @@ class TestEvaluationPipeline:
         pipeline._calculate_scores(result, config)
 
         # Requirement score: (1 + 0.5 + 0) / 3 = 0.5
-        # But confidence-weighted: (0.9 + 0.6*0.5 + 0.3*0) / 3? No, the implementation uses status-based scoring
-        # The actual implementation: satisfied=1.0, partially=0.5, not_satisfied=0
         assert 0.45 <= result.requirement_score <= 0.55
 
         # Validation score: 2/3 = 0.67
         assert 0.6 <= result.validation_score <= 0.7
 
-        # Overall: req_score * 0.4 + val_score * 0.6
-        expected_overall = result.requirement_score * 0.4 + result.validation_score * 0.6
+        # Overall: 5-weight breakdown (req 30%, val 30%, regression 10%, quality 15%, docs 15%)
+        # Defaults when not present: regression=1.0, quality=1.0, docs=1.0
+        expected_overall = (
+            result.requirement_score * 0.3 +
+            result.validation_score * 0.3 +
+            1.0 * 0.1 +  # regression (no regressions by default)
+            1.0 * 0.15 + # quality (no issues by default)
+            1.0 * 0.15   # documentation (no checks by default)
+        )
         assert abs(result.overall_confidence - expected_overall) < 0.01
         # High confidence if overall >= 0.6
         if result.overall_confidence >= 0.6:
@@ -576,3 +592,433 @@ class TestConvenienceFunctions:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestRegressionDetector:
+    """Tests for RegressionDetector (High Priority #5)."""
+
+    def test_singleton_capture_pre_state(self):
+        """Test capturing pre-state before task execution."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            detector = RegressionDetector(workspace=tmpdir)
+            detector.capture_pre_state()
+            # Should not crash even if no tests exist
+            assert detector._pre_test_results is not None
+
+    def test_detect_regressions_no_pre_state(self):
+        """Test detect_regressions when no pre-state captured."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            detector = RegressionDetector(workspace=tmpdir)
+            regressions = detector.detect_regressions()
+            assert regressions == []  # No pre-state, empty result
+
+    def test_regression_result_model(self):
+        """Test RegressionResult model."""
+        result = RegressionResult(
+            check_id="reg_123",
+            check_name="Test Suite Regression",
+            check_type="test",
+            has_regression=True,
+            regression_details=["Tests passed before, failed after"],
+            pre_value={"passed": True},
+            post_value={"passed": False},
+        )
+        assert result.has_regression is True
+        assert len(result.regression_details) == 1
+        data = result.to_dict()
+        assert data["check_id"] == "reg_123"
+        assert data["has_regression"] is True
+
+    def test_regression_check_model(self):
+        """Test RegressionCheck model."""
+        check = RegressionCheck(
+            name="Test Check",
+            type="test",
+            pre_state={"tests": 5, "passed": 5},
+            post_state={"tests": 5, "passed": 3},
+        )
+        assert check.name == "Test Check"
+        assert check.type == "test"
+        assert check.pre_state["tests"] == 5
+
+
+class TestCodeQualityReviewer:
+    """Tests for CodeQualityReviewer (High Priority #6)."""
+
+    def test_quality_issue_model(self):
+        """Test QualityIssue model."""
+        issue = QualityIssue(
+            file_path="app/test.py",
+            line_number=10,
+            category="complexity",
+            severity="warning",
+            title="Function too complex",
+            description="Function has cyclomatic complexity 15",
+            suggestion="Refactor into smaller functions",
+            confidence=0.9,
+        )
+        assert issue.file_path == "app/test.py"
+        assert issue.line_number == 10
+        assert issue.category == "complexity"
+        assert issue.severity == "warning"
+
+    def test_quality_review_model(self):
+        """Test QualityReview model."""
+        review = QualityReview(
+            issues=[
+                QualityIssue(
+                    file_path="app/test.py",
+                    line_number=10,
+                    category="complexity",
+                    severity="warning",
+                    title="Complex function",
+                    description="Function is too complex",
+                ),
+                QualityIssue(
+                    file_path="app/main.py",
+                    line_number=5,
+                    category="style",
+                    severity="info",
+                    title="Missing docstring",
+                    description="Public function lacks docstring",
+                ),
+            ],
+            overall_score=0.8,
+            category_scores={"complexity": 0.7, "style": 0.9},
+            summary="2 issues found",
+        )
+        assert review.issue_count == 2
+        assert review.warning_count == 1
+        assert review.info_count == 1
+        assert review.critical_count == 0
+        assert review.error_count == 0
+
+        data = review.to_dict()
+        assert data["issue_count"] == 2
+        assert data["overall_score"] == 0.8
+        assert "complexity" in data["category_scores"]
+
+    def test_review_no_issues(self):
+        """Test QualityReview with no issues."""
+        review = QualityReview()
+        assert review.issue_count == 0
+        assert review.overall_score == 1.0
+        assert review.summary == ""
+
+    def test_code_quality_reviewer_instantiation(self):
+        """Test CodeQualityReviewer instantiation."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            reviewer = CodeQualityReviewer(workspace=tmpdir)
+            assert reviewer.workspace == Path(tmpdir).resolve()
+
+    def test_review_creates_empty_review_for_no_files(self):
+        """Test that review returns empty review for no files."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            reviewer = CodeQualityReviewer(workspace=tmpdir)
+            review = reviewer.review(changed_files=[])
+            assert isinstance(review, QualityReview)
+            assert review.issue_count == 0
+            assert review.overall_score == 1.0
+
+
+class TestDocumentationVerifier:
+    """Tests for DocumentationVerifier (High Priority #7)."""
+
+    def test_doc_check_model(self):
+        """Test DocCheck model."""
+        check = DocCheck(
+            name="README Check",
+            type="readme",
+            target_files=["README.md"],
+            check_function="check_readme",
+        )
+        assert check.name == "README Check"
+        assert check.type == "readme"
+        assert "README.md" in check.target_files
+
+    def test_doc_check_result_model(self):
+        """Test DocCheckResult model."""
+        result = DocCheckResult(
+            check_id="doc_123",
+            check_name="README Check",
+            check_type="readme",
+            passed=True,
+            issues=[],
+            suggestions=["Add badges"],
+            details="README.md exists",
+        )
+        assert result.passed is True
+        assert result.check_name == "README Check"
+        data = result.to_dict()
+        assert data["passed"] is True
+        assert data["check_type"] == "readme"
+
+    def test_doc_verifier_instantiation(self):
+        """Test DocumentationVerifier instantiation."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            verifier = DocumentationVerifier(workspace=tmpdir)
+            assert verifier.workspace == Path(tmpdir).resolve()
+
+    def test_check_readme_exists(self):
+        """Test README existence check."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            verifier = DocumentationVerifier(workspace=tmpdir)
+            result = verifier._check_readme()
+            assert isinstance(result, DocCheckResult)
+            assert result.check_type == "readme"
+            assert result.passed is False  # No README in empty dir
+
+    def test_check_readme_passes_when_exists(self):
+        """Test README check passes when file exists."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            Path(tmpdir, "README.md").write_text("# Test Project\n")
+            verifier = DocumentationVerifier(workspace=tmpdir)
+            result = verifier._check_readme()
+            assert result.passed is True
+            assert "README.md" in result.details
+
+    def test_check_inline_docs(self):
+        """Test inline documentation check."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create a Python file with and without docstrings
+            test_file = Path(tmpdir) / "test.py"
+            test_file.write_text("""
+def public_function():
+    return 42
+
+def _private_function():
+    return 1
+
+class PublicClass:
+    def method(self):
+        pass
+""")
+            verifier = DocumentationVerifier(workspace=tmpdir)
+            result = verifier._check_inline_docs(["test.py"])
+            assert isinstance(result, DocCheckResult)
+            assert result.check_type == "inline_docs"
+            # public_function and PublicClass.method missing docstrings
+
+    def test_check_type_hints(self):
+        """Test type hints check."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            test_file = Path(tmpdir) / "test.py"
+            test_file.write_text("""
+def no_return_hint():
+    return 42
+
+def has_return_hint() -> int:
+    return 42
+""")
+            verifier = DocumentationVerifier(workspace=tmpdir)
+            result = verifier._check_type_hints(["test.py"])
+            assert isinstance(result, DocCheckResult)
+            assert result.check_type == "type_hints"
+            # no_return_hint missing return type hint
+
+
+class TestImprovementLoop:
+    """Tests for Improvement Loop (High Priority #8)."""
+
+    def test_improvement_iteration_model(self):
+        """Test ImprovementIteration model."""
+        iteration = ImprovementIteration(
+            iteration=1,
+            evaluation_id="eval_123",
+            overall_confidence=0.65,
+            issues_found=5,
+            issues_fixed=3,
+            improvements_made=["Fixed complexity", "Added tests"],
+            duration_seconds=10.5,
+            met_threshold=True,
+        )
+        assert iteration.iteration == 1
+        assert iteration.issues_found == 5
+        assert iteration.issues_fixed == 3
+        assert len(iteration.improvements_made) == 2
+        assert iteration.met_threshold is True
+
+    def test_improvement_loop_result_model(self):
+        """Test ImprovementLoopResult model."""
+        loop_result = ImprovementLoopResult(
+            iterations=[
+                ImprovementIteration(
+                    iteration=1,
+                    evaluation_id="eval_1",
+                    overall_confidence=0.5,
+                    issues_found=5,
+                    issues_fixed=2,
+                    improvements_made=["Fix 1", "Fix 2"],
+                ),
+                ImprovementIteration(
+                    iteration=2,
+                    evaluation_id="eval_2",
+                    overall_confidence=0.75,
+                    issues_found=3,
+                    issues_fixed=1,
+                    improvements_made=["Fix 3"],
+                ),
+            ],
+            initial_confidence=0.5,
+            final_confidence=0.75,
+            total_issues_fixed=3,
+            total_improvements=3,
+            stopped_reason="threshold_met",
+            total_duration_seconds=25.0,
+            success=True,
+        )
+        assert len(loop_result.iterations) == 2
+        assert loop_result.initial_confidence == 0.5
+        assert loop_result.final_confidence == 0.75
+        assert loop_result.total_issues_fixed == 3
+        assert loop_result.stopped_reason == "threshold_met"
+        assert loop_result.success is True
+
+        data = loop_result.to_dict()
+        assert data["loop_id"].startswith("il_")
+        assert len(data["iterations"]) == 2
+        assert data["success"] is True
+
+
+class TestHighPriorityIntegration:
+    """Integration tests for High Priority capabilities."""
+
+    def test_pipeline_includes_high_priority_components(self):
+        """Test that pipeline has all high-priority components."""
+        pipeline = EvaluationPipeline(workspace=".")
+        assert pipeline.regression_detector is not None
+        assert pipeline.quality_reviewer is not None
+        assert pipeline.doc_verifier is not None
+
+    def test_evaluation_config_has_high_priority_flags(self):
+        """Test EvaluationConfig has high-priority capability flags."""
+        config = EvaluationConfig()
+        assert hasattr(config, "run_regression_detection")
+        assert hasattr(config, "run_code_quality_review")
+        assert hasattr(config, "run_documentation_verification")
+        assert config.run_regression_detection is True
+        assert config.run_code_quality_review is True
+        assert config.run_documentation_verification is True
+
+    def test_evaluation_result_has_high_priority_fields(self):
+        """Test EvaluationResult has high-priority result fields."""
+        result = EvaluationResult()
+        assert hasattr(result, "regression_results")
+        assert hasattr(result, "quality_review")
+        assert hasattr(result, "doc_check_results")
+        assert isinstance(result.regression_results, list)
+        assert result.quality_review is None
+        assert isinstance(result.doc_check_results, list)
+
+    def test_confidence_breakdown_includes_high_priority(self):
+        """Test confidence breakdown includes high-priority categories."""
+        pipeline = EvaluationPipeline(workspace=".")
+        result = EvaluationResult(config=EvaluationConfig())
+        config = EvaluationConfig()
+        result.config = config
+
+        result.requirement_verifications = [
+            RequirementVerification(
+                requirement_id="1",
+                requirement_description="Req 1",
+                status=VerificationStatus.SATISFIED,
+                confidence=0.8,
+            )
+        ]
+        result.validation_results = [
+            ValidationResult(check_id="1", check_name="test", check_type="test", status=ValidationStatus.PASSED, passed=True),
+        ]
+
+        pipeline._calculate_scores(result, config)
+
+        assert "requirement_verification" in result.confidence_breakdown
+        assert "functional_validation" in result.confidence_breakdown
+        assert "regression_detection" in result.confidence_breakdown
+        assert "code_quality" in result.confidence_breakdown
+        assert "documentation" in result.confidence_breakdown
+        assert "overall" in result.confidence_breakdown
+
+    def test_decision_considers_regressions(self):
+        """Test that decision considers regressions."""
+        pipeline = EvaluationPipeline(workspace=".")
+        result = EvaluationResult(config=EvaluationConfig())
+        config = EvaluationConfig()
+        result.config = config
+
+        # Add good scores
+        result.requirement_verifications = [
+            RequirementVerification(requirement_id="1", requirement_description="Req 1", status=VerificationStatus.SATISFIED, confidence=0.9),
+        ]
+        result.validation_results = [
+            ValidationResult(check_id="1", check_name="test", check_type="test", status=ValidationStatus.PASSED, passed=True),
+        ]
+
+        # Add a regression
+        result.regression_results = [
+            RegressionResult(
+                check_id="reg_1",
+                check_name="Test Suite",
+                check_type="test",
+                has_regression=True,
+                regression_details=["Tests failed after task"],
+            )
+        ]
+
+        pipeline._calculate_scores(result, config)
+        pipeline._make_decision(result, config)
+
+        assert result.requires_rework is True
+        assert any("Regressions detected" in r for r in result.rework_reasons)
+
+    def test_decision_considers_quality(self):
+        """Test that decision considers code quality."""
+        pipeline = EvaluationPipeline(workspace=".")
+        result = EvaluationResult(config=EvaluationConfig())
+        config = EvaluationConfig()
+        result.config = config
+
+        result.requirement_verifications = [
+            RequirementVerification(requirement_id="1", requirement_description="Req 1", status=VerificationStatus.SATISFIED, confidence=0.9),
+        ]
+        result.validation_results = [
+            ValidationResult(check_id="1", check_name="test", check_type="test", status=ValidationStatus.PASSED, passed=True),
+        ]
+        result.quality_review = QualityReview(
+            overall_score=0.4,  # Below threshold
+            category_scores={"complexity": 0.3},
+            summary="Too many issues",
+        )
+
+        pipeline._calculate_scores(result, config)
+        pipeline._make_decision(result, config)
+
+        assert result.requires_rework is True
+        assert any("Code quality score too low" in r for r in result.rework_reasons)
+
+    def test_decision_considers_documentation(self):
+        """Test that decision considers documentation."""
+        pipeline = EvaluationPipeline(workspace=".")
+        result = EvaluationResult(config=EvaluationConfig())
+        config = EvaluationConfig()
+        result.config = config
+
+        result.requirement_verifications = [
+            RequirementVerification(requirement_id="1", requirement_description="Req 1", status=VerificationStatus.SATISFIED, confidence=0.9),
+        ]
+        result.validation_results = [
+            ValidationResult(check_id="1", check_name="test", check_type="test", status=ValidationStatus.PASSED, passed=True),
+        ]
+        result.doc_check_results = [
+            DocCheckResult(
+                check_id="doc_1",
+                check_name="README",
+                check_type="readme",
+                passed=False,
+                issues=["No README found"],
+            )
+        ]
+
+        pipeline._calculate_scores(result, config)
+        pipeline._make_decision(result, config)
+
+        assert any("Documentation issues" in r for r in result.rework_reasons)

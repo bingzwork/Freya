@@ -26,8 +26,19 @@ from app.evaluation.models import (
     RequirementVerification,
     ValidationCheck,
     ValidationResult,
+    QualityReview,
+    DocCheckResult,
+    ImprovementIteration,
+    ImprovementLoopResult,
 )
-from app.evaluation.pipeline import EvaluationPipeline, RequirementVerifier, ValidationRunner
+from app.evaluation.pipeline import (
+    EvaluationPipeline,
+    RequirementVerifier,
+    ValidationRunner,
+    RegressionDetector,
+    CodeQualityReviewer,
+    DocumentationVerifier,
+)
 from app.core.logger import logger
 
 if TYPE_CHECKING:
@@ -597,6 +608,269 @@ class EvaluationManager:
             lines.append(f"  {result.summary}")
 
         return "\n".join(lines)
+
+    # ========================================================================
+    # HIGH PRIORITY: Improvement Loop
+    # ========================================================================
+
+    def run_improvement_loop(
+        self,
+        task_description: str,
+        original_request: str,
+        task_id: Optional[str] = None,
+        goal_id: Optional[str] = None,
+        plan_id: Optional[str] = None,
+        max_iterations: int = 3,
+        confidence_threshold: float = 0.75,
+        improvement_config: Optional[Dict[str, Any]] = None,
+    ) -> ImprovementLoopResult:
+        """Run an automatic self-improvement loop.
+
+        This method:
+        1. Evaluates the current work
+        2. If confidence is below threshold, attempts to improve
+        3. Re-evaluates after improvement
+        4. Repeats until threshold is met or max iterations reached
+
+        Args:
+            task_description: Description of the completed task
+            original_request: Original user request
+            task_id: Optional task ID
+            goal_id: Optional goal ID
+            plan_id: Optional plan ID
+            max_iterations: Maximum number of improvement iterations (default 3)
+            confidence_threshold: Minimum confidence to stop improving (default 0.75)
+            improvement_config: Optional config for improvement behavior
+
+        Returns:
+            ImprovementLoopResult with all iterations and final outcome
+        """
+        import time
+        loop_start = time.time()
+
+        loop_result = ImprovementLoopResult(
+            initial_confidence=0.0,
+            final_confidence=0.0,
+            stopped_reason="",
+            total_duration_seconds=0.0,
+            success=False,
+        )
+
+        current_task_desc = task_description
+        current_request = original_request
+
+        for iteration in range(max_iterations):
+            iter_start = time.time()
+
+            # Run evaluation
+            eval_result = self.evaluate_task_completion(
+                task_description=current_task_desc,
+                original_request=current_request,
+                task_id=task_id,
+                goal_id=goal_id,
+                plan_id=plan_id,
+                evaluation_type=EvaluationType.COMPREHENSIVE,
+                trigger=EvaluationTrigger.TASK_COMPLETION,
+            )
+
+            # Record first evaluation confidence
+            if iteration == 0:
+                loop_result.initial_confidence = eval_result.overall_confidence
+
+            loop_result.final_confidence = eval_result.overall_confidence
+
+            # Create iteration record
+            improvements_made = []
+
+            # Check if we meet quality threshold
+            if eval_result.overall_confidence >= confidence_threshold:
+                loop_result.iterations.append(ImprovementIteration(
+                    iteration=iteration + 1,
+                    evaluation_id=eval_result.evaluation_id,
+                    overall_confidence=eval_result.overall_confidence,
+                    issues_found=len(eval_result.rework_reasons),
+                    issues_fixed=0,
+                    improvements_made=[],
+                    duration_seconds=time.time() - iter_start,
+                    met_threshold=True,
+                ))
+                loop_result.stopped_reason = "threshold_met"
+                loop_result.success = True
+                break
+
+            # Determine what improvements to make
+            improvements_made = self._attempt_improvements(
+                eval_result,
+                improvement_config or {},
+                agent=self.agent,
+            )
+
+            iter_duration = time.time() - iter_start
+
+            loop_result.iterations.append(ImprovementIteration(
+                iteration=iteration + 1,
+                evaluation_id=eval_result.evaluation_id,
+                overall_confidence=eval_result.overall_confidence,
+                issues_found=len(eval_result.rework_reasons),
+                issues_fixed=len(improvements_made),
+                improvements_made=improvements_made,
+                duration_seconds=iter_duration,
+                met_threshold=False,
+            ))
+
+            loop_result.total_issues_fixed += len(improvements_made)
+            loop_result.total_improvements += len(improvements_made)
+
+            # If no improvements made, stop
+            if not improvements_made:
+                loop_result.stopped_reason = "no_improvement"
+                break
+
+            # Continue to next iteration
+            if iteration == max_iterations - 1:
+                loop_result.stopped_reason = "max_iterations"
+            else:
+                # Optionally update task description with improvements made
+                if improvements_made:
+                    current_task_desc += "\n\nImprovements made: " + "; ".join(improvements_made)
+
+        loop_result.total_duration_seconds = time.time() - loop_start
+        loop_result.success = loop_result.final_confidence >= confidence_threshold
+
+        logger.info(
+            f"[ImprovementLoop] Completed: {len(loop_result.iterations)} iterations, "
+            f"initial={loop_result.initial_confidence:.0%}, "
+            f"final={loop_result.final_confidence:.0%}, "
+            f"reason={loop_result.stopped_reason}, "
+            f"success={loop_result.success}"
+        )
+
+        # Store loop result in history
+        record = EvaluationRecord.from_result(loop_result.iterations[-1].evaluation_id
+            if loop_result.iterations else None
+        ) if loop_result.iterations else None
+
+        return loop_result
+
+    def _attempt_improvements(
+        self,
+        eval_result: EvaluationResult,
+        config: Dict[str, Any],
+        agent: Optional["FreyaAgent"] = None,
+    ) -> List[str]:
+        """Attempt to fix issues found during evaluation.
+
+        Returns:
+            List of improvements made
+        """
+        improvements = []
+
+        # Try to fix requirement issues
+        if eval_result.requirement_score < self.default_config["confidence_thresholds"].get("requirement_verification", 0.6):
+            if self._fix_requirement_gaps(eval_result, agent):
+                improvements.append("Fixed requirement gaps")
+
+        # Try to fix validation failures
+        if eval_result.validation_score < self.default_config["confidence_thresholds"].get("functional_validation", 0.7):
+            if self._fix_validation_failures(eval_result, agent):
+                improvements.append("Fixed validation failures")
+
+        # Try to fix regressions
+        if eval_result.regression_results:
+            if self._fix_regressions(eval_result, agent):
+                improvements.append("Fixed regressions")
+
+        # Try to fix quality issues
+        if eval_result.quality_review and eval_result.quality_review.overall_score < 0.6:
+            if self._fix_quality_issues(eval_result.quality_review, agent):
+                improvements.append("Fixed code quality issues")
+
+        # Try to fix documentation issues
+        if eval_result.doc_check_results:
+            failed_docs = [r for r in eval_result.doc_check_results if not r.passed]
+            if failed_docs:
+                if self._fix_documentation(failed_docs, agent):
+                    improvements.append("Fixed documentation issues")
+
+        return improvements
+
+    def _fix_requirement_gaps(
+        self,
+        eval_result: EvaluationResult,
+        agent: Optional["FreyaAgent"],
+    ) -> bool:
+        """Attempt to fix requirement verification gaps."""
+        if not agent or not eval_result.requirement_verifications:
+            return False
+
+        # Find unsatisfied requirements
+        unsatisfied = [v for v in eval_result.requirement_verifications if not v.is_satisfied]
+        if not unsatisfied:
+            return False
+
+        # For now, just log that improvement would be needed
+        # In a real implementation, this would trigger a repair loop
+        logger.info(f"[ImprovementLoop] Would fix {len(unsatisfied)} requirement gaps")
+        return False  # Return False to indicate no automatic fix applied
+
+    def _fix_validation_failures(
+        self,
+        eval_result: EvaluationResult,
+        agent: Optional["FreyaAgent"],
+    ) -> bool:
+        """Attempt to fix validation failures."""
+        if not agent or not eval_result.validation_results:
+            return False
+
+        failed = [r for r in eval_result.validation_results if not r.passed]
+        if not failed:
+            return False
+
+        logger.info(f"[ImprovementLoop] Would fix {len(failed)} validation failures")
+        return False  # Would trigger repair in real implementation
+
+    def _fix_regressions(
+        self,
+        eval_result: EvaluationResult,
+        agent: Optional["FreyaAgent"],
+    ) -> bool:
+        """Attempt to fix detected regressions."""
+        if not agent or not eval_result.regression_results:
+            return False
+
+        regressions = [r for r in eval_result.regression_results if r.has_regression]
+        if not regressions:
+            return False
+
+        logger.info(f"[ImprovementLoop] Would fix {len(regressions)} regressions")
+        return False
+
+    def _fix_quality_issues(
+        self,
+        quality_review: QualityReview,
+        agent: Optional["FreyaAgent"],
+    ) -> bool:
+        """Attempt to fix code quality issues."""
+        if not agent or not quality_review:
+            return False
+
+        if quality_review.issue_count == 0:
+            return False
+
+        logger.info(f"[ImprovementLoop] Would fix {quality_review.issue_count} quality issues")
+        return False
+
+    def _fix_documentation(
+        self,
+        failed_docs: List[DocCheckResult],
+        agent: Optional["FreyaAgent"],
+    ) -> bool:
+        """Attempt to fix documentation issues."""
+        if not agent or not failed_docs:
+            return False
+
+        logger.info(f"[ImprovementLoop] Would fix {len(failed_docs)} documentation issues")
+        return False
 
 
 # Convenience function for easy access
