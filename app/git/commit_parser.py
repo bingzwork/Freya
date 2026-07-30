@@ -32,7 +32,7 @@ class CommitType(Enum):
 @dataclass
 class CommitMessage:
     """Represents a parsed commit message."""
-    raw: str
+    raw: str = ""
     commit_hash: str = ""
     type: CommitType = CommitType.OTHER
     scope: Optional[str] = None
