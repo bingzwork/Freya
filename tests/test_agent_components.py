@@ -475,6 +475,29 @@ def test_run_engineering_task_includes_lesson_and_experience_blocks() -> None:
             seen_prompts.append(prompt)
             return ""
 
+        # Monkeypatch context sufficiency at source to always return proceed
+        import app.decision.manager as decision_manager_module
+        from app.decision.manager import DecisionResult, DecisionOption, DecisionType, DecisionCategory
+        def _fake_decide_context_sufficiency(*_args, **_kwargs):
+            return DecisionResult(
+                chosen_option=DecisionOption(
+                    name="proceed",
+                    action="proceed_with_execution",
+                    description="Context sufficient",
+                    decision_type=DecisionType.CONTEXT_SUFFICIENCY,
+                    category=DecisionCategory.INFORMATION,
+                ),
+                confidence=0.9,
+                risk_level="low",
+                rationale="Mocked sufficient context",
+                should_execute=True,
+                requires_approval=False,
+                alternatives_considered=[],
+                key_factors=[],
+            )
+        original_decide_context_sufficiency = decision_manager_module.decide_context_sufficiency
+        decision_manager_module.decide_context_sufficiency = _fake_decide_context_sufficiency
+
         agent.llm.ask = _fake_ask
         agent.build_context = lambda _task: ""  # type: ignore[assignment]
         agent.memory.context = lambda: ""  # type: ignore[assignment]
@@ -497,6 +520,7 @@ def test_run_engineering_task_includes_lesson_and_experience_blocks() -> None:
             for p in seen_prompts
         )
     finally:
+        decision_manager_module.decide_context_sufficiency = original_decide_context_sufficiency
         temp.cleanup()
 
 
@@ -585,4 +609,384 @@ def test_executor_logs_anti_pattern_hints_on_failed_tool_step() -> None:
     # Result shape unchanged: still returns action + error string.
     assert result["action"]["tool"] == "list_files"
     assert result["result"] == "boom"
+
+
+# --- Failure Recovery: Classification, Progressive Strategies, History & Analytics ---
+
+
+def test_failure_detector_classifies_import_error_as_compilation() -> None:
+    """ImportError should be classified as COMPILATION failure type."""
+    from app.failure_recovery import FailureDetector
+    from app.failure_recovery.detector import FailureType, FailureSeverity
+
+    detector = FailureDetector()
+    event = detector.detect(
+        error=ModuleNotFoundError("No module named 'requests'"),
+        component="executor",
+        operation="run_python",
+        task_description="Import requests",
+        attempt_number=1,
+        max_attempts=3,
+    )
+
+    assert event.failure_type == FailureType.COMPILATION
+    assert event.severity == FailureSeverity.MEDIUM
+    assert "No module named" in event.error_message
+
+
+def test_failure_detector_classifies_syntax_error_as_compilation() -> None:
+    """SyntaxError should be classified as COMPILATION failure type."""
+    from app.failure_recovery import FailureDetector
+    from app.failure_recovery.detector import FailureType
+
+    detector = FailureDetector()
+    event = detector.detect(
+        error=SyntaxError("invalid syntax"),
+        component="verifier",
+        operation="lint",
+        task_description="Fix syntax",
+        attempt_number=1,
+        max_attempts=3,
+    )
+
+    assert event.failure_type == FailureType.COMPILATION
+
+
+def test_failure_detector_assesses_recoverability_based_on_type_and_attempt() -> None:
+    """Recoverability should depend on failure type, severity, and attempt number."""
+    from app.failure_recovery import FailureDetector
+    from app.failure_recovery.detector import Recoverability
+
+    detector = FailureDetector()
+
+    # Clean COMPILATION failure on first attempt = AUTO_RECOVERABLE
+    event1 = detector.detect(
+        error=SyntaxError("invalid syntax"),
+        component="verifier",
+        operation="lint",
+        task_description="Fix syntax",
+        attempt_number=1,
+        max_attempts=3,
+    )
+    assert event1.recoverability == Recoverability.AUTO_RECOVERABLE
+
+    # Same failure on third attempt = MANUAL_RETRY
+    event3 = detector.detect(
+        error=SyntaxError("invalid syntax"),
+        component="verifier",
+        operation="lint",
+        task_description="Fix syntax",
+        attempt_number=3,
+        max_attempts=3,
+    )
+    assert event3.recoverability == Recoverability.MANUAL_RETRY
+
+    # PERMISSION failure always NEEDS_HUMAN
+    perm_event = detector.detect(
+        error=PermissionError("Access denied"),
+        component="executor",
+        operation="write_file",
+        task_description="Write file",
+        attempt_number=1,
+        max_attempts=3,
+    )
+    assert perm_event.recoverability == Recoverability.NEEDS_HUMAN
+
+
+def test_root_cause_analyzer_identifies_dependency_cause() -> None:
+    """RootCauseAnalyzer should identify DEPENDENCY cause for ModuleNotFoundError."""
+    from app.failure_recovery import FailureDetector, RootCauseAnalyzer
+    from app.failure_recovery.analyzer import CauseCategory
+
+    detector = FailureDetector()
+    analyzer = RootCauseAnalyzer()
+
+    event = detector.detect(
+        error=ModuleNotFoundError("No module named 'requests'"),
+        component="executor",
+        operation="run_python",
+        task_description="Import requests",
+        attempt_number=1,
+        max_attempts=3,
+    )
+
+    causes = analyzer.analyze(event)
+
+    assert len(causes) > 0
+    primary = causes[0]
+    assert primary.category == CauseCategory.DEPENDENCY
+    assert primary.confidence > 0.7
+    assert any("pip install" in fix for fix in primary.suggested_fixes)
+
+
+def test_recovery_orchestrator_single_recovery_attempt() -> None:
+    """RecoveryOrchestrator.recover should execute a single recovery attempt."""
+    from app.failure_recovery import (
+        FailureDetector, RootCauseAnalyzer, RecoveryOrchestrator, RecoveryStrategy
+    )
+
+    detector = FailureDetector()
+    analyzer = RootCauseAnalyzer()
+    orchestrator = RecoveryOrchestrator(
+        max_recovery_attempts=3,
+        verification_callback=lambda: type('obj', (object,), {'success': True})()
+    )
+
+    event = detector.detect(
+        error=ModuleNotFoundError("No module named 'requests'"),
+        component="executor",
+        operation="run_python",
+        task_description="Import requests",
+        attempt_number=1,
+        max_attempts=3,
+    )
+
+    causes = analyzer.analyze(event)
+    result = orchestrator.recover(event, causes, {"task": "Import requests"})
+
+    assert result is not None
+    assert result.strategy_used == RecoveryStrategy.INSTALL_DEPENDENCY
+    assert result.duration_seconds >= 0
+    assert len(result.lessons_learned) > 0
+
+
+def test_recovery_orchestrator_progressive_escalates_strategies() -> None:
+    """Progressive recovery should escalate through different strategies."""
+    from app.failure_recovery import (
+        FailureDetector, RootCauseAnalyzer, RecoveryOrchestrator, RecoveryStrategy
+    )
+
+    detector = FailureDetector()
+    analyzer = RootCauseAnalyzer()
+    orchestrator = RecoveryOrchestrator(
+        max_recovery_attempts=5,
+        verification_callback=lambda: type('obj', (object,), {'success': False})()  # Always fails
+    )
+
+    event = detector.detect(
+        error=ModuleNotFoundError("No module named 'requests'"),
+        component="executor",
+        operation="run_python",
+        task_description="Import requests",
+        attempt_number=1,
+        max_attempts=5,
+    )
+
+    causes = analyzer.analyze(event)
+    result = orchestrator.recover_progressive(event, causes, {"task": "Import requests"})
+
+    assert result.progressive is True
+    assert result.exhausted is True
+    assert len(result.attempts) == 5
+    strategies_used = [a.strategy_used for a in result.attempts]
+    # Should start with install_dependency, then escalate
+    assert strategies_used[0] == RecoveryStrategy.INSTALL_DEPENDENCY
+    # No consecutive duplicate strategies (except RETRY_SAME/RETRY_WITH_FIX)
+    for i in range(1, len(strategies_used)):
+        if strategies_used[i] not in (RecoveryStrategy.RETRY_SAME, RecoveryStrategy.RETRY_WITH_FIX):
+            assert strategies_used[i] != strategies_used[i-1]
+
+
+def test_recovery_orchestrator_filters_history_by_failure_type() -> None:
+    """get_recovery_history should support filtering by failure type."""
+    from app.failure_recovery import FailureDetector, RootCauseAnalyzer, RecoveryOrchestrator
+
+    detector = FailureDetector()
+    analyzer = RootCauseAnalyzer()
+    orchestrator = RecoveryOrchestrator(
+        max_recovery_attempts=2,
+        verification_callback=lambda: type('obj', (object,), {'success': True})()
+    )
+
+    # Compilation failure
+    event1 = detector.detect(
+        error=SyntaxError("invalid syntax"),
+        component="verifier",
+        operation="lint",
+        task_description="Fix syntax",
+        attempt_number=1,
+        max_attempts=2,
+    )
+    causes1 = analyzer.analyze(event1)
+    orchestrator.recover(event1, causes1, {"task": "Fix syntax"})
+
+    # Runtime error
+    event2 = detector.detect(
+        error=ValueError("invalid value"),
+        component="solver",
+        operation="transform",
+        task_description="Transform data",
+        attempt_number=1,
+        max_attempts=2,
+    )
+    causes2 = analyzer.analyze(event2)
+    orchestrator.recover(event2, causes2, {"task": "Transform data"})
+
+    # Filter by failure type
+    comp_results = orchestrator.get_recovery_history(failure_type="compilation")
+    runtime_results = orchestrator.get_recovery_history(failure_type="runtime_error")
+
+    assert len(comp_results) == 1
+    assert len(runtime_results) == 1
+    assert comp_results[0].attempts[0].failure_event.failure_type.value == "compilation"
+    assert runtime_results[0].attempts[0].failure_event.failure_type.value == "runtime_error"
+
+
+def test_recovery_orchestrator_filters_history_by_strategy() -> None:
+    """get_recovery_history should support filtering by strategy."""
+    from app.failure_recovery import (
+        FailureDetector, RootCauseAnalyzer, RecoveryOrchestrator, RecoveryStrategy
+    )
+
+    detector = FailureDetector()
+    analyzer = RootCauseAnalyzer()
+    orchestrator = RecoveryOrchestrator(
+        max_recovery_attempts=3,
+        verification_callback=lambda: type('obj', (object,), {'success': True})()
+    )
+
+    event = detector.detect(
+        error=ModuleNotFoundError("No module named 'requests'"),
+        component="executor",
+        operation="run_python",
+        task_description="Import requests",
+        attempt_number=1,
+        max_attempts=3,
+    )
+    causes = analyzer.analyze(event)
+    orchestrator.recover(event, causes, {"task": "Import requests"})
+
+    # Filter by strategy
+    install_results = orchestrator.get_recovery_history(strategy="install_dependency")
+    assert len(install_results) == 1
+    assert install_results[0].strategy_used == RecoveryStrategy.INSTALL_DEPENDENCY
+
+
+def test_recovery_orchestrator_filters_history_by_outcome() -> None:
+    """get_recovery_history should support filtering by outcome (success/failure/exhausted)."""
+    from app.failure_recovery import FailureDetector, RootCauseAnalyzer, RecoveryOrchestrator
+
+    # Successful recovery
+    detector1 = FailureDetector()
+    analyzer1 = RootCauseAnalyzer()
+    orch1 = RecoveryOrchestrator(
+        max_recovery_attempts=2,
+        verification_callback=lambda: type('obj', (object,), {'success': True})()
+    )
+    e1 = detector1.detect(error=SyntaxError("x"), component="v", operation="o", task_description="t", attempt_number=1, max_attempts=2)
+    orch1.recover(e1, analyzer1.analyze(e1), {"task": "t"})
+
+    # Failed recovery (one attempt fails)
+    detector2 = FailureDetector()
+    analyzer2 = RootCauseAnalyzer()
+    orch2 = RecoveryOrchestrator(
+        max_recovery_attempts=2,
+        verification_callback=lambda: type('obj', (object,), {'success': False})()
+    )
+    e2 = detector2.detect(error=SyntaxError("x"), component="v", operation="o", task_description="t", attempt_number=1, max_attempts=2)
+    orch2.recover(e2, analyzer2.analyze(e2), {"task": "t"})
+
+    # Combined history (using orch1's history)
+    success_results = orch1.get_recovery_history(outcome="success")
+    failure_results = orch1.get_recovery_history(outcome="failure")
+    exhausted_results = orch1.get_recovery_history(outcome="exhausted")
+
+    assert len(success_results) == 1
+    assert len(failure_results) == 0
+    assert len(exhausted_results) == 0
+
+
+def test_recovery_orchestrator_analytics_provides_summary() -> None:
+    """get_recovery_analytics should return comprehensive analytics."""
+    from app.failure_recovery import FailureDetector, RootCauseAnalyzer, RecoveryOrchestrator
+
+    detector = FailureDetector()
+    analyzer = RootCauseAnalyzer()
+    orchestrator = RecoveryOrchestrator(
+        max_recovery_attempts=3,
+        verification_callback=lambda: type('obj', (object,), {'success': True})()
+    )
+
+    # Run a couple of recoveries
+    for name in ["requests", "flask"]:
+        event = detector.detect(
+            error=ModuleNotFoundError(f"No module named '{name}'"),
+            component="executor",
+            operation="run_python",
+            task_description=f"Import {name}",
+            attempt_number=1,
+            max_attempts=3,
+        )
+        causes = analyzer.analyze(event)
+        orchestrator.recover(event, causes, {"task": f"Import {name}"})
+
+    analytics = orchestrator.get_recovery_analytics()
+
+    assert analytics["total_recoveries"] == 2
+    assert analytics["success_rate"] == 1.0
+    assert "compilation" in analytics["failures_by_category"]
+    assert analytics["failures_by_category"]["compilation"] == 2
+    assert "install_dependency" in analytics["strategies_used"]
+    assert analytics["strategies_used"]["install_dependency"] == 2
+    assert "install_dependency" in analytics["strategy_success_rates"]
+    assert analytics["strategy_success_rates"]["install_dependency"] == 1.0
+    assert analytics["avg_attempts_before_success"] == 1.0
+
+
+def test_recovery_orchestrator_export_history_to_json() -> None:
+    """export_recovery_history should produce valid JSON."""
+    from app.failure_recovery import FailureDetector, RootCauseAnalyzer, RecoveryOrchestrator
+    import json
+
+    detector = FailureDetector()
+    analyzer = RootCauseAnalyzer()
+    orchestrator = RecoveryOrchestrator(
+        max_recovery_attempts=2,
+        verification_callback=lambda: type('obj', (object,), {'success': True})()
+    )
+
+    event = detector.detect(
+        error=SyntaxError("invalid syntax"),
+        component="verifier",
+        operation="lint",
+        task_description="Fix syntax",
+        attempt_number=1,
+        max_attempts=2,
+    )
+    causes = analyzer.analyze(event)
+    orchestrator.recover(event, causes, {"task": "Fix syntax"})
+
+    json_str = orchestrator.export_recovery_history()
+    data = json.loads(json_str)
+
+    assert "exported_at" in data
+    assert data["total_recoveries"] == 1
+    assert len(data["history"]) == 1
+    assert data["history"][0]["success"] is True
+    assert data["history"][0]["strategy_used"] == "retry_with_fix"
+
+
+def test_query_recovery_history_alias_works() -> None:
+    """query_recovery_history should be an alias for get_recovery_history."""
+    from app.failure_recovery import FailureDetector, RootCauseAnalyzer, RecoveryOrchestrator
+
+    detector = FailureDetector()
+    analyzer = RootCauseAnalyzer()
+    orchestrator = RecoveryOrchestrator(
+        max_recovery_attempts=2,
+        verification_callback=lambda: type('obj', (object,), {'success': True})()
+    )
+
+    event = detector.detect(
+        error=SyntaxError("x"), component="v", operation="o", task_description="t",
+        attempt_number=1, max_attempts=2,
+    )
+    orchestrator.recover(event, analyzer.analyze(event), {"task": "t"})
+
+    # Both should return same results
+    r1 = orchestrator.get_recovery_history(limit=10)
+    r2 = orchestrator.query_recovery_history(limit=10)
+    assert len(r1) == len(r2)
+    # Check the attempt's failure event matches
+    assert r1[0].attempts[0].failure_event.event_id == r2[0].attempts[0].failure_event.event_id
 

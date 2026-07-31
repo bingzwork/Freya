@@ -1,370 +1,60 @@
-# 9. Long-Term Autonomy
+# Long-Term Autonomy
 
-Overall Status: 🟡 PARTIAL
-
-Completion: 45%
-
-Last Updated: 2026-07-27
-
----
+## Status
+🟡 **Partially Implemented** (≈ 60 % complete)
 
 ## Overview
+Long-Term Autonomy represents Freya’s ultimate objective: to operate continuously, set its own goals, execute tasks, monitor progress, recover from failures, and maintain projects without continuous user direction. Current foundations include persistent goal management, planning, and partial automation, but true autonomy requires closing several critical gaps.
 
-Long-Term Autonomy is Freya's ultimate objective.
-
-The current architecture provides the necessary foundation through planning, tool execution, memory, learning, and observation systems.
-
-However, Freya still operates primarily as a request-driven agent.
-
-To achieve true autonomy, Freya must become capable of creating, managing, prioritizing, executing, monitoring, and completing long-running goals without continuous user direction.
-
----
-
-# Capability Summary
-
+## Current State
 | Capability | Status | Completion |
-|------------|--------|-----------:|
-| Autonomous Task Execution | 🟢 MOSTLY COMPLETE | 90% |
-| Persistent Goal Management | ⚪ NOT IMPLEMENTED | 0% |
-| Goal Decomposition | ⚪ NOT IMPLEMENTED | 0% |
-| Background Scheduler | ⚪ NOT IMPLEMENTED | 0% |
-| Autonomous Decision Loop | ⚪ NOT IMPLEMENTED | 0% |
-| Continuous Monitoring | ⚪ NOT IMPLEMENTED | 0% |
-| Self-Initiated Tasks | ⚪ NOT IMPLEMENTED | 0% |
-| Autonomous Recovery | ⚪ NOT IMPLEMENTED | 0% |
-| Watchdog System | ⚪ NOT IMPLEMENTED | 0% |
-| Autonomous Project Maintenance | ⚪ NOT IMPLEMENTED | 0% |
-| Continuous Operation | ⚪ NOT IMPLEMENTED | 0% |
-
----
-
-## Autonomous Task Execution
-
-Status
-
-🟢 MOSTLY COMPLETE
-
-Completion
-
-90%
-
-Current State
-
-Freya can autonomously execute engineering tasks after receiving user approval.
-
-Implemented Features
-
-- Planning
-- Tool execution
-- Code modification
-- Verification
-- User approval workflow
-
-Missing
-
-- Self-initiated execution
-- Persistent task management
-
-Known Bugs
-
-None
-
-Technical Debt
-
-Execution is request-driven rather than goal-driven.
-
-Needs Improvement
-
-- Autonomous task continuation
-
----
-
-## Persistent Goal Management
-
-Status
-
-⚪ NOT IMPLEMENTED
-
-Completion
-
-0%
-
-Current State
-
-Freya cannot maintain goals across multiple sessions.
-
-Missing
-
-- Goal creation
-- Goal persistence
-- Goal tracking
-- Goal completion
-
----
-
-## Goal Decomposition
-
-Status
-
-⚪ NOT IMPLEMENTED
-
-Completion
-
-0%
-
-Current State
-
-Freya cannot autonomously break long-term objectives into milestones and subtasks.
-
-Missing
-
-- Milestone planning
-- Dependency tracking
-- Progress monitoring
-
----
-
-## Background Scheduler
-
-Status
-
-⚪ NOT IMPLEMENTED
-
-Completion
-
-0%
-
-Current State
-
-Freya cannot execute scheduled or recurring autonomous work.
-
-Missing
-
-- Task scheduler
-- Recurring jobs
-- Background execution
-
----
-
-## Autonomous Decision Loop
-
-Status
-
-⚪ NOT IMPLEMENTED
-
-Completion
-
-0%
-
-Current State
-
-Freya does not continuously observe, decide, act, verify, and learn without user prompts.
-
-Missing
-
-- Observe
-- Analyze
-- Decide
-- Execute
-- Verify
-- Learn
-- Repeat
-
----
-
-## Continuous Monitoring
-
-Status
-
-⚪ NOT IMPLEMENTED
-
-Completion
-
-0%
-
-Current State
-
-Freya cannot continuously monitor projects for changes requiring action.
-
-Missing
-
-- File monitoring
-- Repository monitoring
-- Health monitoring integration
-- Automatic triggers
-
----
-
-## Self-Initiated Tasks
-
-Status
-
-⚪ NOT IMPLEMENTED
-
-Completion
-
-0%
-
-Current State
-
-Freya cannot independently begin work based on detected opportunities.
-
-Missing
-
-- Opportunity detection
-- Task generation
-- Autonomous execution
-
----
-
-## Autonomous Recovery
-
-Status
-
-⚪ NOT IMPLEMENTED
-
-Completion
-
-0%
-
-Current State
-
-Freya cannot recover from failures without user intervention.
-
-Missing
-
-- Failure recovery
-- Retry policies
-- Recovery planning
-
----
-
-## Watchdog System
-
-Status
-
-⚪ NOT IMPLEMENTED
-
-Completion
-
-0%
-
-Current State
-
-No watchdog exists to supervise Freya during long-running autonomous execution.
-
-Missing
-
-- Runtime supervision
-- Failure detection
-- Automatic restart
-- Health enforcement
-
----
-
-## Autonomous Project Maintenance
-
-Status
-
-⚪ NOT IMPLEMENTED
-
-Completion
-
-0%
-
-Current State
-
-Freya cannot automatically maintain repositories over time.
-
-Missing
-
-- Dependency updates
-- Technical debt monitoring
-- Code quality maintenance
-- Automated maintenance planning
-
----
-
-## Continuous Operation
-
-Status
-
-⚪ NOT IMPLEMENTED
-
-Completion
-
-0%
-
-Current State
-
-Freya operates only while actively receiving user requests.
-
-Missing
-
-- Persistent runtime
-- Autonomous lifecycle
-- Long-running operation
-
----
-
-# Missing Capabilities
-
-| Capability | Priority | Status |
-|------------|----------|--------|
-| Persistent goal management | Critical | ⚪ NOT IMPLEMENTED |
-| Background scheduler | Critical | ⚪ NOT IMPLEMENTED |
-| Autonomous decision loop | Critical | ⚪ NOT IMPLEMENTED |
-| Self-initiated work | Critical | ⚪ NOT IMPLEMENTED |
-| Continuous monitoring | High | ⚪ NOT IMPLEMENTED |
-| Autonomous recovery | High | ⚪ NOT IMPLEMENTED |
-| Watchdog system | High | ⚪ NOT IMPLEMENTED |
-| Autonomous project maintenance | High | ⚪ NOT IMPLEMENTED |
-
----
-
-# Open Bugs
-
-None currently identified.
-
----
-
-# Technical Debt
-
-- Architecture remains request-driven.
-- No persistent goal management.
-- Existing learning, observation, and planning systems are not connected into an autonomous execution loop.
-
----
-
-# Needs Improvement
-
-- [ ] Implement persistent goals
-- [ ] Build milestone planning
-- [ ] Add background scheduler
-- [ ] Build autonomous decision loop
-- [ ] Add continuous project monitoring
-- [ ] Enable self-initiated work
-- [ ] Implement autonomous recovery
-- [ ] Build watchdog supervision
-- [ ] Support continuous operation
-- [ ] Integrate learning, observation, planning, and execution into a unified autonomous system
-
----
-
-# Section Summary
-
-Completed Capabilities: 0
-
-Mostly Complete: 1
-
-Partial: 0
-
-Foundation: 0
-
-Not Implemented: 10
-
-Overall Status
-
-🟡 PARTIAL
-
----
+|------------|--------|------------|
+| **Autonomous Task Execution** | 🟢 Mostly Complete | 90 % |
+| **Persistent Goal Management** | ✅ Complete | 100 % |
+| **Goal Decomposition** | ✅ Complete | 100 % |
+| **Goal‑Directed Behavior** | ✅ Complete | 100 % |
+| **Background Scheduler** | ⚪ Not Implemented | 0 % |
+| **Autonomous Decision Loop** | ⚪ Not Implemented | 0 % |
+| **Continuous Monitoring** | ⚪ Not Implemented | 0 % |
+| **Self‑Initiated Tasks** | ⚪ Not Implemented | 0 % |
+| **Autonomous Recovery** | ⚪ Not Implemented | 0 % |
+| **Watchdog System** | ⚪ Not Implemented | 0 % |
+| **Autonomous Project Maintenance** | ⚪ Not Implemented | 0 % |
+| **Continuous Operation** | ⚪ Not Implemented | 0 % |
+
+### Implemented Highlights
+- **Persistent Goal Management** – Goals persist across sessions, support priorities, milestones, dependencies, and multi‑session recovery.  
+- **Autonomous Task Execution** – After user approval, Freya can plan, resource, execute, verify, and complete tasks.  
+- **Goal Decomposition** – Breaks objectives into milestones and sub‑goals automatically.  
+- **Goal‑Directed Behavior** – Executes actions aligned with active goals without prompting.
+
+### Missing Capabilities (Critical for Full Autonomy)
+- **Background Scheduler** – Execute recurring or unattended tasks on a timeline.  
+- **Autonomous Decision Loop** – Continuously observe → analyze → decide → act → verify → learn.  
+- **Continuous Monitoring** – Detect project changes (file edits, health metrics) and trigger actions.  
+- **Self‑Initiated Work** – Detect opportunities and generate tasks autonomously.  
+- **Autonomous Recovery** – Recover from failures without manual intervention.  
+- **Watchdog System** – Supervise long‑running execution, enforce health checks, restart on failure.  
+- **Autonomous Project Maintenance** – Update dependencies, monitor technical debt, enforce quality.  
+- **Continuous Operation** – Run indefinitely, manage lifecycle, and survive restarts.
+
+## Planned Implementation Tasks
+
+| Priority | Objective | Description | Why It Matters | Dependencies | Success Criteria |
+|----------|-----------|-------------|----------------|--------------|------------------|
+| ⭐⭐⭐⭐⭐ **Critical** | Build Background Scheduler | Create a task scheduler that can run recurring or unattended jobs, persist scheduled tasks, and handle rescheduling on failure. | Enables Freya to work on long‑term projects without active user supervision. | Existing Task Executor, Goal Management | Scheduler can run a sample recurring task and report status correctly. |
+| ⭐⭐⭐⭐ **High** | Implement Autonomous Decision Loop | Wire together Observation, Analysis, Decision, Execution, Verification, and Learning into a closed feedback loop that runs continuously. | Provides the brain for true autonomy. | Unified Resource Manager, Self Observation, Decision Making, Autonomous Learning | Loop runs without external prompts and adapts behavior based on feedback. |
+| ⭐⭐⭐ **Medium** | Enable Self‑Initiated Work | Add opportunity detection (e.g., detected need for refactor, security patch) that automatically creates and starts tasks. | Allows Freya to act on emerging needs without prompting. | Background Scheduler, Autonomous Decision Loop | System can generate and start a task based on a detected pattern. |
+| ⭐⭐ **Low** | Deploy Watchdog System | Monitor execution health, restart failed tasks, enforce resource limits, and alert on anomalies. | Protects autonomous execution from hangs or crashes. | Background Scheduler, Autonomous Task Execution | Watchdog correctly recovers a simulated failed task. |
+| ⭐ **Medium (High‑Priority)** | Implement Autonomous Project Maintenance | Periodically scan repositories for outdated dependencies, code‑quality issues, and technical debt; schedule and apply fixes. | Keeps projects healthy over months/years. | Background Scheduler, Autonomous Learning | Maintenance tasks run automatically and improve code quality metrics. |
+| ⭐ **Future** | Continuous Operation Support | Manage persistent runtime, graceful shutdown, state checkpointing, and recovery across sessions. | Guarantees long‑term availability. | All above | System stays alive across restarts and updates without data loss. |
+
+## Integration Points
+- **Goal Management** – Supplies persistent goals and priorities to the scheduler and decision loop.  
+- **Resource Management** – Provides runtime resources for background jobs.  
+- **Self Observation** – Supplies health and risk data for decision making.  
+- **Learning System** – Consumes insights from completed autonomous cycles.  
+- **World Model** – Offers environment context (e.g., network status) for decision making.
+
+---  
+*This document serves as the single source of truth for Long‑Term Autonomy design and roadmap. It will be updated as implementation progresses.*

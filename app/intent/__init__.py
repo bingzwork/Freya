@@ -49,6 +49,24 @@ from app.intent.json_utils import (
     extract_json,
     ensure_json,
 )
+from app.intent.entity_extractor import (
+    EntityType,
+    ExtractedEntity,
+    SlotFillingResult,
+    EntityExtractor,
+    extract_entities,
+    fill_slots,
+    get_missing_slots_prompt,
+)
+from app.intent.multi_intent import (
+    SplitStrategy,
+    DetectedIntent,
+    MultiIntentResult,
+    MultiIntentDetector,
+    detect_multi_intent,
+    get_planning_intents,
+    get_direct_answer_intents,
+)
 
 __all__ = [
     # Intent classification
@@ -78,4 +96,20 @@ __all__ = [
     "validate_json",
     "extract_json",
     "ensure_json",
+    # Entity extraction
+    "EntityType",
+    "ExtractedEntity",
+    "SlotFillingResult",
+    "EntityExtractor",
+    "extract_entities",
+    "fill_slots",
+    "get_missing_slots_prompt",
+    # Multi-intent detection
+    "SplitStrategy",
+    "DetectedIntent",
+    "MultiIntentResult",
+    "MultiIntentDetector",
+    "detect_multi_intent",
+    "get_planning_intents",
+    "get_direct_answer_intents",
 ]

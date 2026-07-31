@@ -1,283 +1,73 @@
-## Software Engineering Knowledge
-
-### Overview
-
-Software Engineering Knowledge is a core knowledge domain within the Knowledge Base.
-
-It stores engineering concepts, best practices, reusable knowledge, and lessons learned that help Freya perform software engineering tasks more effectively.
-
-This knowledge is used by Planning, Reasoning, Tool Selection, Autonomous Software Engineering, Code Review, Debugging, and Self-Improvement.
-
-Unlike Project Knowledge, which is specific to a single repository, Software Engineering Knowledge is reusable across all software projects.
-
----
-
-### Knowledge Categories
-
-Freya continuously builds and organizes knowledge in areas including:
-
-- Programming languages
-- Software architecture
-- Design patterns
-- Algorithms and data structures
-- Debugging techniques
-- Software testing
-- Version control (Git)
-- API design
-- Database design
-- Security best practices
-- Performance optimization
-- Refactoring strategies
-- Code quality guidelines
-- Documentation standards
-- Build and deployment workflows
-- Dependency management
-- Development tools and frameworks
-- Engineering lessons learned
-- Common bug patterns
-- Reusable engineering solutions
-
----
-
-### Knowledge Sources
-
-Software Engineering Knowledge may originate from:
-
-- Existing project code
-- Project documentation
-- Engineering experience
-- Previous successful implementations
-- Approved external documentation
-- Internet research
-- Stronger AI models
-- User-provided knowledge
-- Self-discovered engineering lessons
-
----
-
-### Implementation Phases
-
-Phase 1 — Foundation ⭐⭐⭐⭐⭐
-Part 1.1 — Knowledge Domain Structure (1–2 hours)
-
-Objective
-
-Create the Software Engineering Knowledge domain.
-
-Implement
-
-Create the knowledge domain.
-Register it in the Knowledge Base.
-Define metadata.
-Support domain discovery.
-
-Success Criteria
-
-Freya recognizes Software Engineering Knowledge as a valid knowledge domain.
-Part 1.2 — Knowledge Categories (1–2 hours)
-
-Implement
-
-Add all engineering categories.
-Create category metadata.
-Support category lookup.
-
-Success Criteria
-
-Engineering knowledge is organized into categories.
-Part 1.3 — Knowledge Storage (1–2 hours)
-
-Implement
-
-Storage format
-CRUD operations
-Serialization
-Version support
-
-Success Criteria
-
-Engineering knowledge can be stored and retrieved.
-Part 1.4 — Knowledge Retrieval Integration (2–3 hours)
-
-Implement
-
-Semantic Search integration
-Context Retrieval integration
-Planning access
-Reasoning access
-
-Success Criteria
-
-Planning and Reasoning can retrieve engineering knowledge.
-Phase 2 — Knowledge Sources
-Part 2.1 — Project Code Extraction
-
-Learn from:
-
-source code
-project structure
-architecture
-Part 2.2 — Documentation Extraction
-
-Learn from:
-
-README
-docs
-specifications
-Part 2.3 — Experience Memory Import
-
-Learn from:
-
-previous tasks
-previous fixes
-previous successes
-Part 2.4 — Engineering Lesson Import
-
-Import:
-
-Engineering Lessons
-reusable solutions
-bug fixes
-Part 2.5 — Pattern Extraction
-
-Automatically detect:
-
-reusable code
-architecture
-design patterns
-Phase 3 — Knowledge Validation
-Part 3.1
-
-Confidence Scores
-
-Part 3.2
-
-Duplicate Detection
-
-Part 3.3
-
-Conflict Detection
-
-Part 3.4
-
-Knowledge Source Tracking
-
-Part 3.5
-
-Version History
-
-Phase 4 — Knowledge Ranking
-Part 4.1
-
-Relevance Ranking
-
-Part 4.2
-
-Context-aware Ranking
-
-Part 4.3
-
-Historical Success Ranking
-
-Part 4.4
-
-Recency Ranking
-
-Part 4.5
-
-Ranking Optimization
-
-Phase 5 — External Knowledge
-Part 5.1
-
-Official Documentation
-
-Part 5.2
-
-Framework Documentation
-
-Part 5.3
-
-API Documentation
-
-Part 5.4
-
-Internet Research
-
-Part 5.5
-
-Knowledge Validation Pipeline
-
-Phase 6 — Autonomous Knowledge Expansion
-Part 6.1
-
-Learn After Every Task
-
-Part 6.2
-
-Automatic Lesson Extraction
-
-Part 6.3
-
-Knowledge Refinement
-
-Part 6.4
-
-Knowledge Consolidation
-
-Part 6.5
-
-Knowledge Evolution
-
-Phase 7 — Engineering Expertise
-Part 7.1
-
-Framework Expertise
-
-Part 7.2
-
-Architecture Expertise
-
-Part 7.3
-
-Bug Pattern Library
-
-Part 7.4
-
-Reusable Solution Library
-
-Part 7.5
-
-Engineering Decision Support
-
-Part 7.6
-
-Organization Standards
-
----
-
-### Continuous Improvement
-
-Software Engineering Knowledge continuously improves through:
-
-- Knowledge Acquisition
-- Experience Memory
-- Engineering Lesson Storage
-- Knowledge Validation
-- Knowledge Consolidation
-- Autonomous Knowledge Expansion
-
-As Freya completes more engineering work, its engineering knowledge becomes more comprehensive, accurate, and reusable.
-
----
-
-### Future Expansion
-
-Future versions may include:
-
-- Framework-specific knowledge
-- Language-specific optimization techniques
-- Organization coding standards
-- Internal engineering guidelines
-- Automated best-practice extraction
-- Long-term engineering knowledge refinement
+# Software Engineering Knowledge
+
+## Status
+❌ **Not Implemented**
+
+## Overview
+Software Engineering Knowledge stores reusable engineering concepts, best practices, and lessons learned that help Freya perform software‑engineering tasks across any repository. It is distinct from project‑specific knowledge and is intended to be shared among all future work.
+
+## Current State
+- **Implementation:** None – only the design specification exists.  
+- **Priority:** ⭐⭐⭐⭐ **High**  
+- **Completion:** 0 %
+
+## Core Responsibilities (Planned)
+- **Knowledge Categories** – Maintain organized domains such as programming languages, design patterns, testing, security, CI/CD, and more.  
+- **Knowledge Sources** – Capture information from project code, documentation, engineering experience, external documentation, internet research, and self‑discovered lessons.  
+- **Category Management** – Add, lookup, and version categories; store metadata for each.  
+- **Retrieval Integration** – Enable Planning, Reasoning, and Autonomous Software Engineering agents to search and inject this knowledge.  
+- **Continuous Enrichment** – Acquire new sources continuously, validate, consolidate, and rank them.
+
+## Planned Workflow
+```
+1. Source Acquisition → 2. Category Classification → 3. Validation → 
+4. Consolidation → 5. Ranking → 6. Storage in Knowledge Base
+```
+
+### 1. Category Structure (Phase 1)
+- Define top‑level categories (e.g., *Programming Languages*, *Architecture*, *Testing*).  
+- Add sub‑categories as needed.  
+- Store category metadata (name, description, priority).
+
+### 2. Source Extraction (Phase 2)
+- **Project Code Extraction** – Parse source repositories for patterns, classes, and structures.  
+- **Documentation Extraction** – Read README, API docs, specs.  
+- **Experience Memory Import** – Pull previous task outcomes, fixes, and successes.  
+- **Lesson Import** – Store reusable solutions, bug‑fix patterns, and decision rationales.  
+- **Pattern Extraction** – Detect recurring architectural motifs or code snippets.
+
+### 3. Validation (Phase 3)
+- Assign confidence scores to each extracted item.  
+- Detect duplicate or conflicting entries.  
+- Track source provenance for each fact.  
+- Resolve conflicts by preferring official documentation or higher‑confidence sources.  
+- Record version history.
+
+### 4. Ranking (Phase 4)
+- Compute relevance using confidence, usage frequency, source authority, and recency.  
+- Adjust ranking based on historical success of similar knowledge.  
+- Prioritize high‑ranked items for injection into planning and execution pipelines.
+
+### 5. Storage (Phase 5‑6)
+- Persist knowledge items with full metadata (source, confidence, version, tags).  
+- Enable CRUD operations for downstream agents.  
+- Integrate with semantic search and context‑retrieval modules.
+
+## Planned Success Criteria
+- Freya can list all defined software‑engineering categories.  
+- Knowledge items are stored with complete provenance and confidence metadata.  
+- Planning agents can retrieve the highest‑ranked engineering knowledge for a given task.  
+- The knowledge base remains searchable and updatable without manual intervention.
+
+## Remaining Implementation Tasks
+| Priority | Objective | Description | Why It Matters | Dependencies | Success Criteria |
+|----------|-----------|-------------|----------------|--------------|------------------|
+| ⭐⭐⭐⭐⭐ **Critical** | Build Category Registry | Create schema for engineering categories and implement CRUD APIs. | Provides the organizational backbone for all software‑engineering knowledge. | Knowledge Base schema | Categories are searchable and can be listed programmatically. |
+| ⭐⭐⭐⭐ **High** | Implement Source Extraction Pipeline | Parse project code, documentation, and experience memory to extract engineering facts. | Populates the knowledge base with real content. | Category Registry | Extraction scripts produce structured items with source metadata. |
+| ⭐⭐⭐⭐ **High** | Add Validation & Confidence Scoring | Evaluate confidence, detect duplicates, resolve conflicts, and record provenance. | Ensures only trustworthy knowledge enters the store. | Extraction Pipeline | Confidence scores are computed and duplicate detection works. |
+| ⭐⭐⭐ **Medium** | Build Ranking Engine | Combine confidence, usage, source authority, and recency into a composite score. | Drives high‑quality retrieval for planning and execution. | Validation Engine | Ranking produces a clear top result that aligns with expected task goals. |
+| ⭐⭐ **Low** | Create Retrieval API | Expose functions for agents to query categories, search items, and retrieve ranked results. | Allows downstream components to consume knowledge easily. | Ranking Engine | API returns items with correct metadata and ranking order. |
+| ⭐ **Future** | UI Dashboard for Knowledge Management | Simple interface to view categories, search items, and manually adjust rankings or metadata. | Provides human oversight and manual curation capabilities. | Retrieval API | Dashboard displays items and allows edits that persist correctly. |
+
+---  
+*This document serves as the single source of truth for the Software Engineering Knowledge design and roadmap. It will be updated as implementation progresses.*

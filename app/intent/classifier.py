@@ -210,11 +210,23 @@ class IntentClassifier:
             "what model", "what mode", "which model", "which provider", "which llm",
             "is ollama", "is claude", "is gpt", "are you installed", "are you configured",
             "are you there",
+            # Follow-up keywords for system status context
+            "specific model", "which variant", "which version", "model variant",
+            "parameters", "param count", "param", "b model", "8b", "7b", "13b", "70b",
+            "is that", "is it the", "which one", "what version", "model version",
+            "provider", "llm", "ollama", "still using", "currently using", "running on",
+            "ai model", "ollama model", "what provider", "which provider",
+            # Version query keywords
+            "what is your version", "what's your version", "whats your version",
+            "your version", "model version", "which version",
+            # Model query keywords
+            "what is your model", "what's your model", "whats your model",
+            "your model", "what model", "which model", "current model",
         ],
         IntentType.TOOL_REQUEST: [
             "run command", "execute command", "run script", "execute script",
             "bash", "shell", "terminal", "command", "execute",
-            "run tests", "pytest", "lint", "format", "run", "script", "the tests", "run test",
+            "run tests", "run the tests", "pytest", "lint", "format",
         ],
         IntentType.GIT_OPERATION: [
             "git add", "git commit", "git push", "git pull", "git fetch",
@@ -243,10 +255,46 @@ class IntentClassifier:
         ],
         IntentType.SYSTEM_STATUS: [
             r"^\s*(are you|are we|can you|do you|is it|was it|have you)\s+(connected|running|loaded|installed|available|online|access|connected to|there)\s*(\w+\s*)*\?\s*$",
-            r"^\s*what\s+(model|mode|version|provider|llm)\s+.*\?\s*$",
+            r"^\s*what\s+(model|mode|version|provider|llm)\s*[.?]*\s*$",
             r"^\s*(is|are|do|does|can|was|were|have)\s+(ollama|claude|gpt|the model|the llm|a model|an llm|backend|the backend|server|the server|internet|network|online)\s+.*\?\s*$",
-            r"^\s*which\s+(model|version|provider|llm)\s+.*\?\s*$",
+            r"^\s*which\s+(model|version|provider|llm)\s*[.?]*\s*$",
             r".*(are you there|are you connected|are you running|are you online).*\?",
+            # Follow-up patterns for system status context
+            r"^\s*(what|which)\s+(specific|exact|particular)\s+(model|version|variant|provider|llm)\s*\?*\s*$",
+            r"^\s*(what|which)\s+(specific|exact|particular)\s+\w+\s+(model|version|variant)\s*\?*\s*$",
+            r"^\s*is\s+(that|it|the\s+model|the\s+llm)\s+(the\s+)?(8b|7b|13b|70b|32b|1b)(\s+version)?\s*\?*\s*$",
+            r"^\s*(how\s+many\s+)?(parameters?|params?)\s*\?*\s*$",
+            r"^\s*(how\s+many\s+)?(parameters?|params?)\s*(does\s+it\s+have|is\s+it)\s*\?*\s*$",
+            r"^\s*which\s+(variant|version|model)\s*\?*\s*$",
+            r"^\s*(what\s+)?version\s*\?*\s*$",
+            r"^\s*still\s+(using|running|on)\s+.*\?*\s*$",
+            r"^\s*(are|is)\s+you\s+(still\s+)?(using|running|on)\s+.*\?*\s*$",
+            r"^\s*current\s+(model|version|provider|llm)\s*\?*\s*$",
+            r"^\s*(whats?|what\s+is)\s+the\s+(model|version)\s*\?*\s*$",
+            r"^\s*what\s+(model|version|provider|llm)\s+(am\s+i|are\s+you|do\s+i|is\s+it)\s+(using|on)\s*\?*\s*$",
+            # Additional patterns for common queries
+            r"^\s*what\s+(ai\s+)?model\s+(are\s+you|am\s+i)\s+(using|on)\s*\?*\s*$",
+            r"^\s*(ollama|gemini|claude|gpt|openai)\s+model\s*\?*\s*$",
+            r"^\s*what\s+(model|llm)\s+from\s+(ollama|openai|anthropic|google)\s*\?*\s*$",
+            # Model identity queries - "what model are you", "which model are you"
+            r"^\s*(what|which)\s+(ai\s+)?model\s+(are\s+you|am\s+i)\??\s*$",
+            r"^\s*(what|which)\s+llm\s+(are\s+you|am\s+i)\??\s*$",
+            # Model status queries - catch "which model is loaded", "what model is loaded"
+            r"^\s*(what|which)\s+model\s+(is\s+|are\s+you\s+)?loaded\??\s*$",
+            r"^\s*(what|which)\s+model\s+(is\s+|are\s+you\s+)?running\??\s*$",
+            r"^\s*model\s+(loaded|running)\??\s*$",
+            r"^\s*(what|which)\s+model\??\s*$",
+            # Version queries - "what version are you", "what's your version"
+            r"^\s*(what|whats|what's)\s+(version|your version)\??\s*$",
+            r"^\s*(what|which)\s+version\s+(are\s+you|am\s+i)\s+(running|using|on)\s*\?*\s*$",
+            r"^\s*(what|which)\s+version\s+(are\s+you|am\s+i)\??\s*$",
+            r"^\s*(what|whats|what's)\s+your\s+version\??\s*$",
+            r"^\s*what\s+is\s+your\s+version\??\s*$",
+            r"^\s*what\s+is\s+your\s+version\??\s*$",  # duplicate for emphasis
+            # Specific patterns for "what is your version" and similar
+            r"^\s*what\s+is\s+your\s+(version|model|llm)\??\s*$",
+            r"^\s*(whats|what's)\s+is\s+your\s+(version|model|llm)\??\s*$",
+            r"^\s*what\s+is\s+the\s+(version|model|llm)\s+of\s+you\??\s*$",
         ],
         IntentType.FILE_OPERATION: [
             r"^\s*(read|open|view|show|display|write|save|create|edit|modify|delete|remove|rename|move|copy)\s+.*\.(py|txt|md|json|yaml|yml|\w+)\s*$",
@@ -270,11 +318,12 @@ class IntentClassifier:
             compiled[intent] = [re.compile(p, re.IGNORECASE) for p in patterns]
         return compiled
 
-    def classify(self, message: str) -> IntentClassification:
+    def classify(self, message: str, context: Optional[Dict[str, Any]] = None) -> IntentClassification:
         """Classify a user message into an intent category.
 
         Args:
             message: The user message to classify.
+            context: Optional context dictionary with keys like 'last_intent', 'last_user_message'.
 
         Returns:
             IntentClassification with the detected intent and confidence.
@@ -296,14 +345,52 @@ class IntentClassifier:
                 reason="Empty message",
             )
 
+        # Check for follow-up system status questions
+        if context and context.get('last_intent') == IntentType.SYSTEM_STATUS.value:
+            # Check if this looks like a follow-up question about the system status
+            follow_up_patterns = [
+                r"what specific",
+                r"which.*b\b",
+                r"how many (parameters|params)",
+                r"is that the",
+                r"which variant",
+                r"what version",
+                r"still (using|running|on)",
+            ]
+            for pattern in follow_up_patterns:
+                if re.search(pattern, message_lower, re.IGNORECASE):
+                    # Boost SYSTEM_STATUS score for follow-ups
+                    logger.info(f"[Intent] Follow-up detected, boosting SYSTEM_STATUS for: '{message}'")
+                    break
+
         # Score each intent type
         scores: Dict[IntentType, Tuple[float, List[str]]] = {}
         for intent in IntentType:
             score, keywords = self._score_intent(intent, message_lower)
             scores[intent] = (score, keywords)
 
+        # Apply follow-up boost after scoring
+        if context and context.get('last_intent') == IntentType.SYSTEM_STATUS.value:
+            # Check for follow-up indicators and boost SYSTEM_STATUS
+            follow_up_indicators = [
+                "what specific", "which", "how many", "is that", "which variant",
+                "what version", "still using", "still running", "still on",
+                "parameters", "params", "8b", "7b", "13b", "70b", "32b", "1b",
+            ]
+            if any(indicator in message_lower for indicator in follow_up_indicators):
+                current_score, current_keywords = scores[IntentType.SYSTEM_STATUS]
+                scores[IntentType.SYSTEM_STATUS] = (min(current_score + 0.4, 1.0), current_keywords + ["follow-up"])
+                logger.info(f"[Intent] Boosted SYSTEM_STATUS score for follow-up: '{message}'")
+
         # Find the best match
-        best_intent = max(scores.items(), key=lambda x: x[1][0])
+        # Prefer SYSTEM_STATUS over QUESTION on ties (secondary key: prefer higher priority intent)
+        def score_key(item):
+            intent_type, (score, keywords) = item
+            # Primary: score (higher wins)
+            # Secondary: routing priority (lower number = higher priority wins)
+            return (score, -intent_type.routing_priority)
+
+        best_intent = max(scores.items(), key=score_key)
         best_score, best_keywords = best_intent[1]
         best_intent_type = best_intent[0]
 
@@ -356,8 +443,10 @@ class IntentClassifier:
                 # CONVERSATIONAL_CONTROL gets the highest priority to short-circuit all other routing
                 if intent is IntentType.CONVERSATIONAL_CONTROL:
                     pattern_score = 0.99
-                elif intent in (IntentType.SYSTEM_STATUS, IntentType.CODE_TASK):
-                    pattern_score = 0.96
+                elif intent is IntentType.SYSTEM_STATUS:
+                    pattern_score = 0.98
+                elif intent is IntentType.CODE_TASK:
+                    pattern_score = 0.97
                 else:
                     pattern_score = 0.95
                 score = max(score, pattern_score)
@@ -381,7 +470,8 @@ class IntentClassifier:
             system_keywords = ["ollama", "claude", "gpt", "llm",
                 "version", "provider", "backend", "running", "installed", "configured",
                 "connected", "current model", "current version", "llm provider",
-                "backend status", "model version", "provider version"]
+                "backend status", "model version", "provider version",
+                "your version", "my version"]
             for kw in system_keywords:
                 if kw in message:
                     keywords.append(kw)
@@ -418,16 +508,17 @@ class IntentClassifier:
 classifier = IntentClassifier()
 
 
-def classify_intent(message: str) -> IntentClassification:
+def classify_intent(message: str, context: Optional[Dict[str, Any]] = None) -> IntentClassification:
     """Convenience function to classify a message.
 
     Args:
         message: The message to classify.
+        context: Optional context dictionary with keys like 'last_intent', 'last_user_message'.
 
     Returns:
         IntentClassification result.
     """
-    return classifier.classify(message)
+    return classifier.classify(message, context)
 
 
 def is_task(message: str) -> bool:

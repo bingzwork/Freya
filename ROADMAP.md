@@ -25,12 +25,12 @@ The codebase already contains mature foundation modules across planning, memory,
 | Area                            | Status                         |
 | ------------------------------- | ------------------------------ |
 | Natural Conversation            | Mostly Complete                |
-| Goal Management                 | Functional (Phases 1–8)         |
+| Goal Management                 | Complete (Phases 1–8)          |
 | Memory System                   | Core Modules Complete (85% Overall) |
 | Planning and Reasoning          | Phase 5 Complete (Adaptive Replanning wired) |
-| Decision Making                 | Partially Implemented (core components exist, integration needed) |
+| Decision Making                 | Complete (Phase 1–6 implemented + integrated) |
 | Failure Recovery                | Complete (Foundation + High Priority) |
-| World Model                     | Partial                        |
+| World Model                     | 🟢 Mostly Complete (~75%)      |
 | Autonomous Software Engineering | Core Complete                  |
 | Self Observation                | Complete (Integration Partial) |
 | Learning System                 | Mostly Complete                 |
@@ -42,8 +42,8 @@ The codebase already contains mature foundation modules across planning, memory,
 | Business Productivity           | Minimal                        |
 | Creative Media                  | Not Implemented                |
 | Human Oversight                 | Functional                     |
-| Long-Term Autonomy              | Partial                        |
-| Resource Management             | Complete (default MACHINE, TOOL, GPU resources)      |
+| Long-Term Autonomy              | 🟡 Partial (60%)               |
+| Resource Management             | 🟢 Mostly Complete (70%)       |
 | Multi Agent Coordination        | Not Implemented                |
 | Self Evaluation                 | ✅ COMPLETE | 100% |
 | Performance Optimization        | Partial                        |
@@ -367,21 +367,31 @@ Implement Freya's ability to objectively assess her own work quality before decl
 | 3 | **Functional Validation** | ✅ Complete | Auto-runs tests, build checks, execution verification via ValidationRunner |
 | 4 | **Confidence Scoring** | ✅ Complete | Measurable quality indicators + completion thresholds; deliver/rework/review decisions |
 
+## High Priority Capabilities Implemented (100%)
+
+| # | Objective | Status | Description |
+|---|-----------|--------|-------------|
+| 5 | **Regression Detection** | ✅ Complete | Pre/post state comparison, test suite re-run, file hash tracking, git integration |
+| 6 | **Code Quality Review** | ✅ Complete | Automated quality checks via DiagnosticEngine (simplicity, readability, architecture, complexity, duplication, testing, error handling) |
+| 7 | **Documentation Verification** | ✅ Complete | Docs match implementation, examples work, roadmaps current, inline docs present, type hints present |
+| 8 | **Improvement Loop** | ✅ Complete | Auto-refinement cycle: evaluate → detect weaknesses → improve → re-evaluate (threshold + retry limit) |
+
 ## Implementation Details
 
 **Module:** `app/evaluation/`
-- `models.py` — Data models (Requirement, RequirementVerification, ValidationCheck, ValidationResult, EvaluationConfig, EvaluationResult, ConfidenceLevel, etc.)
-- `pipeline.py` — EvaluationPipeline, RequirementVerifier, ValidationRunner
-- `manager.py` — EvaluationManager, EvaluationHistory, evaluate_before_delivery()
+- `models.py` — Data models (Requirement, RequirementVerification, ValidationCheck, ValidationResult, EvaluationConfig, EvaluationResult, ConfidenceLevel, RegressionCheck, RegressionResult, QualityIssue, QualityReview, DocCheck, DocCheckResult, ImprovementIteration, ImprovementLoopResult, etc.)
+- `pipeline.py` — EvaluationPipeline, RequirementVerifier, ValidationRunner, RegressionDetector, CodeQualityReviewer, DocumentationVerifier
+- `manager.py` — EvaluationManager, EvaluationHistory, evaluate_before_delivery(), run_improvement_loop()
 
 **Agent Integration (`app/agent/core_agent.py`):**
 - `EvaluationManager` initialized in `FreyaAgent.__init__`
 - Evaluation runs after `solve()` success
 - Evaluation runs after `run_active_goal()` completion
 - Evaluation runs after `run()` for engineering tasks
+- Improvement Loop runs after evaluation if confidence below threshold
 - Results logged with summary and rework/review warnings
 
-**Tests:** `tests/test_evaluation.py` — 31 tests, all passing
+**Tests:** `tests/test_evaluation.py` — 56 tests, all passing
 
 ---
 

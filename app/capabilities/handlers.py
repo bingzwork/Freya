@@ -466,7 +466,7 @@ class RuntimeCapabilityHandler:
                 r"what.*python",
                 r"which.*python",
             ],
-            keywords=["python", "version", "py"],
+            keywords=["python", "py"],
             intent_types=["system_status"],
         ))
 
@@ -539,9 +539,8 @@ class RuntimeCapabilityHandler:
             patterns=[
                 r"memory\s+usage",
                 r"how.*much.*memory",
-                r"ram",
             ],
-            keywords=["memory", "ram", "usage"],
+            keywords=["memory", "usage"],
             intent_types=["system_status"],
         ))
 
@@ -648,8 +647,13 @@ class OllamaCapabilityHandler:
                 r"current.*model",
                 r"which.*model",
                 r"model\s+name",
+                r"what\s+(model|version)\s*(are\s+you|am\s+i)\s*using",
+                r"what\s+version\s+are\s+you\s+using",
+                r"how many\s+parameters",
+                r"model\s+parameters",
+                r"parameter\s+count",
             ],
-            keywords=["model", "using", "current", "which", "what model"],
+            keywords=["model", "using", "current", "which", "what model", "version", "what version", "parameters", "parameter"],
             intent_types=["system_status"],
         ))
 

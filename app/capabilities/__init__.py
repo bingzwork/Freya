@@ -23,6 +23,21 @@ from app.capabilities.handlers import (
     GitCapabilityHandler,
     SystemCapabilityHandler,
 )
+from app.capabilities.plain_english import (
+    PlainEnglishFormatter,
+    get_plain_english_formatter,
+    plain_english,
+    clarify,
+    acknowledge_control,
+    low_confidence,
+    enforce_plain_english,
+    to_plain_english,
+    format_clarifying_question,
+    format_control_acknowledgement,
+    format_low_confidence_message,
+    detect_jargon,
+    detect_forbidden_fields,
+)
 
 __all__ = [
     "CapabilityRouter",
@@ -31,4 +46,18 @@ __all__ = [
     "OllamaCapabilityHandler",
     "GitCapabilityHandler",
     "SystemCapabilityHandler",
+    # Plain English enforcement
+    "PlainEnglishFormatter",
+    "get_plain_english_formatter",
+    "plain_english",
+    "clarify",
+    "acknowledge_control",
+    "low_confidence",
+    "enforce_plain_english",
+    "to_plain_english",
+    "format_clarifying_question",
+    "format_control_acknowledgement",
+    "format_low_confidence_message",
+    "detect_jargon",
+    "detect_forbidden_fields",
 ]

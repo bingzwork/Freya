@@ -2,7 +2,7 @@
 
 **Version:** v0.4.x
 
-**Last Updated:** 2026-07-30 (Self-Evaluation High Priority complete - 100%)
+**Last Updated:** 2026-07-31 (Knowledge Extraction 100%, Goal Management 100%, Resource Management 70%, Long-Term Autonomy 60%, Planning Phase 5 complete)
 
 **Purpose**
 
@@ -47,18 +47,22 @@ This document should always reflect the current state of the codebase.
 | Memory System | ✅ COMPLETE | 95% |
 | Decision Making | ✅ COMPLETE | 85% |
 | Failure Recovery | ✅ COMPLETE | 95% |
-| World Model | ⚪ NOT IMPLEMENTED | 0% |
+| World Model | 🟢 MOSTLY COMPLETE | 75% |
 | Autonomous Software Engineering | ✅ CORE COMPLETE | 90% |
 | Self Observation | ✅ COMPLETE | 85% |
 | Learning System | 🟢 MOSTLY COMPLETE | 85% |
 | Safe Self Improvement | 🟡 PARTIAL | 40% |
 | Task Scheduling | ✅ COMPLETE | 90% |
+| Software Engineering Knowledge | ⚪ NOT IMPLEMENTED | 0% |
 | Knowledge Acquisition & Knowledge Base | ✅ COMPLETE | 85% |
+| Knowledge Extraction | ✅ COMPLETE | 100% |
+| Knowledge Retrival | ⚪ NOT IMPLEMENTED | 0% |
+| Knowledge Validation | ⚪ NOT IMPLEMENTED | 0% |
 | Tool Ecosystem | ✅ COMPLETE | 90% |
 | Business & Productivity | 🟡 MINIMAL | 20% |
 | Creative Capabilities | ⚪ NOT IMPLEMENTED | 0% |
 | Human Oversight & Approval | 🟢 FUNCTIONAL | 85% |
-| Long-Term Autonomy | 🟡 PARTIAL | 55% |
+| Long-Term Autonomy | 🟡 PARTIAL | 60% |
 | Resource Management | 🟢 MOSTLY COMPLETE | 70% |
 | Multi Agent Coordination | ⚪ NOT IMPLEMENTED | 0% |
 | Self Evaluation | ✅ COMPLETE (Critical + High Priority) | 100% |
@@ -171,22 +175,68 @@ Status: 🟢 MOSTLY COMPLETE (85%)
 - More built-in executors for common failure types
 - Integration with additional subsystems (memory consolidation, goal management)
 
-Current capabilities include:
+---
 
-- Storage of reusable engineering knowledge
-- Project-specific engineering knowledge
-- Engineering lesson retrieval
-- Semantic search integration
-- Context retrieval integration
-- Code indexing integration
+### World Model
 
-Future enhancements include:
+Status: 🟢 MOSTLY COMPLETE (75%)
 
-- External engineering knowledge acquisition
-- Internet research
-- Knowledge validation
-- Knowledge consolidation
-- Autonomous knowledge expansion
+**Implemented Components:**
+
+| Capability | Status | Location |
+|------------|--------|----------|
+| Runtime Context (OS, Shell, Python, Env) | ✅ Complete | `app/intent/runtime_context.py` |
+| System Resource Monitoring (CPU, Mem, Disk, Net) | ✅ Complete | `app/monitoring/system_monitor.py` |
+| Process Monitoring | ✅ Complete | `app/monitoring/process_monitor.py` |
+| Git Awareness (Status, Branches, Remotes, Ops) | ✅ Complete | `app/git/git_manager.py` |
+| File & Symbol Indexing | ✅ Complete | `app/core/project_index.py`, `app/core/symbol_index.py` |
+| File Location & Lexical Search | ✅ Complete | `app/intelligence/file_locator.py`, `app/intelligence/lexical_search.py` |
+| Dependency Graph | ✅ Complete | `app/intelligence/dependency_graph.py` |
+| Tool Availability Registry | ✅ Complete | `app/core/tool_manager.py` |
+| Health Monitoring (Code Quality, Tests, Perf) | ✅ Complete | `app/health/health_monitor.py`, `app/health/health_metrics.py` |
+| Diagnostics (Static Analysis) | ✅ Complete | `app/diagnostics/` |
+| Metrics Collection (Time-Series) | ✅ Complete | `app/monitoring/metric_collector.py` |
+| Alert Management | ✅ Complete | `app/monitoring/alert_manager.py` |
+| Runtime Context Injection (LLM Prompts) | ✅ Complete | `RuntimeContext.get_system_prompt_suffix()` |
+| **Unified WorldModel Facade** | ✅ Complete | `app/world_model/model.py` |
+| **Environment Snapshot Dataclass** | ✅ Complete | `app/world_model/model.py` |
+| **Context-Aware Retrieval** | ✅ Complete | `app/world_model/retrieval.py` |
+| Cached Snapshots (TTL) | ✅ Complete | `app/world_model/model.py` |
+
+**Partially Implemented:**
+
+| Capability | Status | Gap |
+|------------|--------|-----|
+| Project Understanding | 🟡 Partial | File/symbol indexing works; missing: project metadata (name, framework, build system), important file identification, architecture detection |
+| Dependency Understanding | 🟡 Partial | Symbol index + dep graph exist; missing: package lockfile parsing (requirements.txt, pyproject.toml, package.json), installed vs missing, version conflicts |
+| Environment Monitoring | 🟡 Partial | System metrics collected; missing: file watching, tool version tracking, dependency change detection, service health checks |
+
+**Not Implemented:**
+
+| Capability | Description |
+|------------|-------------|
+| Dynamic File Watching | No `watchdog` integration for auto-refresh |
+| GPU/Hardware Detail | Basic CPU/mem only; no GPU detection, VRAM, compute capability |
+| Network/Internet Awareness | No connectivity checks, API endpoint health |
+| External Services Registry | No GitHub, Ollama, OpenAI, DB, MCP server detection |
+| Relevance Ranking | No scoring of environment facts by task relevance |
+
+**Integration Points (Existing):**
+- `FreyaAgent.run()` → `RuntimeContext` injected into LLM prompt
+- `FreyaAgent.build_context()` → `ProjectIndex`, `SymbolIndex`, `DependencyGraph`
+- `Executor` → `ToolManager` for tool availability
+- `HealthMonitor` → `SystemMetrics` for CPU/memory/disk
+- `DecisionManager` → Could use World Model for risk assessment (not yet wired)
+- `Planner` → Could use environment for tool selection (not yet wired)
+
+**Remaining Work (Priority Order):**
+1. ⭐⭐⭐⭐ Project metadata detection (pyproject.toml, package.json, etc.)
+2. ⭐⭐⭐⭐ Dependency lockfile parsing + installed vs missing analysis
+3. ⭐⭐⭐⭐ File system watching (`watchdog`) for auto-refresh
+4. ⭐⭐⭐ GPU/hardware detail detection
+5. ⭐⭐⭐ Network connectivity + service health checks
+6. ⭐⭐ External service registry
+7. ⭐ Relevance ranking/scoring
 
 ---
 
@@ -262,6 +312,69 @@ Status: ✅ COMPLETE (Critical + High Priority - 100%)
 - Logs summary, warnings for rework/review
 
 **Tests:** 56 tests in `tests/test_evaluation.py` — all passing
+
+---
+
+### Knowledge Extraction
+
+Status: ✅ COMPLETE (100%)
+
+**Implementation Date:** 2026-07-31
+
+**Core Components Implemented:**
+
+1. **Knowledge Extraction Pipeline** (`app/knowledge_extraction/pipeline.py`)
+   - End-to-end orchestration: Source Detection → Content Parsing → Information Extraction → Knowledge Structuring → Metadata Generation → Knowledge Objects
+   - Auto-detects source type from file extension or conversation ID
+   - Batch extraction support
+   - File-based extraction (`extract_from_file()`)
+   - Statistics tracking
+   - Extensible via `ExtractorRegistry`
+
+2. **Structured Knowledge Format** (`app/knowledge_extraction/models.py`)
+   - `KnowledgeObject` dataclass with 14 fields (id, title, summary, content, source, source_type, author, category, tags, confidence, language, related_entities, related_knowledge_ids, metadata)
+   - `SourceType` enum (LLM_RESPONSE, DOCUMENTATION, MARKDOWN, PDF, SOURCE_CODE, USER_INPUT, TOOL_OUTPUT, LOG, API_RESPONSE, UNKNOWN)
+   - `KnowledgeCategory` enum (FACT, EXPLANATION, PROCEDURE, ALGORITHM, BEST_PRACTICE, RECOMMENDATION, WORKFLOW, TROUBLESHOOTING, CONCEPT, DEFINITION, EXAMPLE, WARNING, REFERENCE, ARCHITECTURE, OTHER)
+   - Serialization/deserialization support
+
+3. **LLM Response Extractor** (`app/knowledge_extraction/llm_extractor.py`)
+   - Pattern-based extraction for 11 knowledge categories
+   - Code block extraction with language detection
+   - Structured section extraction (headers, bullet lists)
+   - Key-value pair extraction (definitions, parameters)
+   - Conversational filler removal (greetings, pleasantries)
+   - Indentation normalization for triple-quoted strings
+   - Confidence estimation per extraction
+
+4. **Documentation Extractor** (`app/knowledge_extraction/doc_extractor.py`)
+   - Markdown (.md, .markdown), RST, plain text support
+   - PDF support (pypdf/pdfplumber if available)
+   - Hierarchical section parsing with heading levels
+   - Code block extraction with parent section context
+   - Markdown table extraction
+   - Admonition extraction (GitHub-style > [!TYPE], Sphinx-style .. type::, custom ::: type :::)
+   - Category inference from heading keywords
+   - Technical tag extraction (python, javascript, api, database, docker, etc.)
+
+5. **Extractor Registry** (`app/knowledge_extraction/extractors.py`)
+   - Base `Extractor` abstract class
+   - `ExtractorRegistry` for dispatching
+   - Auto-registration of default extractors on import
+   - Runtime registration of custom extractors
+
+**Integration:**
+- Global instances: `pipeline` and `registry` available on import
+- Reusable by any capability (Knowledge Acquisition, Autonomous Learning, Memory, Planning, Software Engineering)
+- No tight coupling to specific capabilities
+- Clean separation between extraction and validation/storage
+
+**Tests:** 30 tests in `tests/test_knowledge_extraction.py` — all passing
+
+**Known Limitations:**
+- No source code extractor yet (planned)
+- PDF support optional (requires pypdf or pdfplumber)
+- Confidence is extraction estimate only (validation separate)
+- Basic deduplication (exact content match)
 
 ---
 

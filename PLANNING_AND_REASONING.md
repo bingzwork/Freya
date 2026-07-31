@@ -1,310 +1,245 @@
-# PLANNING_AND_REASONING.md
-
 # Planning & Reasoning
 
-- Status: 🟢 MOSTLY COMPLETE — 70% (Phase 1 complete: PlanManager integrated into FreyaAgent; Planner creates Plan objects; Executor consumes Plan objects. Phase 2 complete: TaskGraph wired into runtime. Phase 3 complete: Scheduler and ResourceAllocator wired into execution pipeline. Phase 4 complete: ProgressTracker integrated. Phase 5 complete: Adaptive replanning implemented.)
-- Priority: ⭐⭐⭐⭐⭐ Critical
-- Source of truth: codebase; legacy planner is foundation-only and `app/planner/` modules now wired into the runtime (ROADMAP Phase 2 — Planner Modernization).
+**Status:** 🟢 MOSTLY COMPLETE
+**Completion:** ~85%
+**Last Updated:** 2026-07-31
 
 ---
 
----
+## Quick Summary
 
-# Overview
-
-Planning & Reasoning is Freya's executive decision-making system.
-
-While Goal Management decides **what** Freya should accomplish, Planning & Reasoning determines **how** to accomplish it.
-
-Instead of immediately reacting to a request, Freya evaluates the situation, considers multiple approaches, selects the most effective strategy, and continuously adapts as new information becomes available.
-
-This capability is one of the foundations of autonomous software engineering.
-
----
-
-# Why Planning & Reasoning Matters
-
-Without Planning & Reasoning, Freya behaves like a task executor.
-
-User:
-
-> Implement Goal Management.
-
-Freya:
-
-- Starts writing code immediately.
-
-With Planning & Reasoning, Freya first determines:
-
-- What files are involved?
-- What already exists?
-- What architecture should be preserved?
-- Which implementation is simplest?
-- What risks exist?
-- What should be completed first?
-- What should wait until later?
-
-Only after answering these questions does execution begin.
-
-This greatly improves reliability, efficiency, and code quality.
+| Capability | Status | Completion | Key Files |
+|------------|--------|------------|-----------|
+| Structured Plan Generation | ✅ Complete | 100% | `app/planner/plan_manager.py`, `app/planner/planner.py` |
+| Plan Execution | ✅ Complete | 100% | `app/planner/executor.py` |
+| Memory Context in Plans | ✅ Complete | 100% | `app/planner/planner.py` |
+| Engineering Lessons in Plans | ✅ Complete | 100% | `app/planner/planner.py`, `app/planner/executor.py` |
+| PlanManager Integration | ✅ Complete | 100% | `app/planner/plan_manager.py` |
+| Task Graph (`TaskGraph`) | ✅ Complete | 100% | `app/planner/task_graph.py` |
+| Scheduler (ASAP, PRIORITY_FIRST, etc.) | ✅ Complete | 100% | `app/planner/scheduler.py` |
+| Resource Allocator | ✅ Complete | 100% | `app/planner/resource_allocator.py` |
+| Progress Tracker | ✅ Complete | 100% | `app/planner/progress_tracker.py` |
+| Adaptive Replanning (Phase 5) | ✅ Complete | 100% | `app/planner/task_graph.py`, `app/planner/plan_manager.py`, `app/agent/core_agent.py` |
+| Multiple Solution Evaluation | ❌ Not Implemented | 0% | — |
+| Risk/Difficulty Scoring on Plans | ❌ Not Implemented | 0% | — |
+| Human Plan Review/Modify/Reject | ❌ Not Implemented | 0% | — |
+| Reasoning Transparency (Rationale) | ❌ Not Implemented | 0% | — |
+| Planning Horizon Classification | ❌ Not Implemented | 0% | — |
+| Long-horizon / Downstream Forecasting | ❌ Not Implemented | 0% | — |
+| Plan Visualizer (Runtime Exposure) | 🟡 Partial | 50% | `app/planner/plan_visualizer.py` |
+| Task Decomposition (Auto) | 🟡 Partial | 60% | `app/planner/planner.py` |
 
 ---
 
-# Current Implementation Status
+## What Works Today (✅ Implemented)
 
-Status symbols: ✅ Implemented · 🟡 Partial / Foundation · ❌ Not Implemented · 🔮 Future
+### Structured Plan Generation (`Planner.create_plan()`)
+- Flat JSON plan (max 5 steps) via single LLM call
+- Task-specific engineering templates: Build, Debug/Fix, Refactor, Create/Implement, Review, Test, Optimize
+- Intent-aware handling returns `{"steps": []}` for non-engineering requests
 
-| Area                                  | Status | Notes |
-| ------------------------------------- | ------ | ----- |
-| Structured plan generation            | ✅      | `Planner.create_plan()` emits a flat JSON plan (max 5 steps) via a single LLM call with task-specific engineering templates (Build, Debug/Fix, Refactor, Create/Implement, Review, Test, Optimize) and intent-aware handling that returns `{"steps": []}` for non-engineering requests. |
-| Plan execution                        | ✅      | `Executor.execute_plan()` runs up to 8 steps; each step maps to a tool (`_map_step_to_tool`) with an LLM fallback (`_select_tool_with_llm`); mutating tools are permission-gated. |
-| Memory context in plans               | ✅      | `Planner.create_plan()` injects top-3 `memory.search(task, limit=3)` hits as `Relevant past experience:`. |
-| Engineering Lessons in plans          | ✅      | `Planner._build_lessons_context()` (SELF_LEARNING Priority 3) injects severity-filtered PATTERN lessons; `Executor._build_pre_execute_lessons_block()` and `_log_anti_pattern_hints()` (Priority 4) surface lessons in the LLM fallback tool-selection prompt and after failed steps. |
-| Experience Memory in run() prompt     | ✅      | `FreyaAgent.run()` reads matching `ExperienceMemory` entries into `Past Experiences:` for the post-execute LLM prompt. |
-| Iterative solve loop                  | ✅      | `FreyaAgent.solve()` repeatedly calls `planner.create_plan()` + `apply_and_verify()` until success or `max_iterations`. |
-| Repair with ANTI_PATTERN lessons      | ✅      | `FreyaAgent.repair()` surfaces matching ANTI_PATTERN lessons on retries. |
-| PlanManager integration (Phase 1)     | ✅      | `PlanManager` is the single source of truth for plans; `Planner.create_plan()` populates a `Plan` object with tasks; `Executor.execute_plan()` consumes the `Plan` object. Backward compatibility with dict plans maintained. |
-| Task decomposition (parent/child)     | 🟡      | Sequential dependencies now create parent/child `TaskNode` relationships in `TaskGraph`; `Planner.create_plan()` adds `step i+1 → step i` edges. Automatic subtask decomposition not yet implemented. |
-| Task graph (`TaskGraph`)              | ✅      | Module exists in `app/planner/task_graph.py` with unit tests; **now wired into the runtime** via `PlanManager` → `Plan._graph`, sequential dependencies created by `Planner.create_plan()`, validated on creation, and `Executor.execute_plan()` uses topological sort from TaskGraph. |
-| Scheduler                             | ✅     | `app/planner/scheduler.py` (ASAP, Priority, Longest-Duration, Deadline, Resource-Optimized) integrated into `Executor.execute_plan()`; tasks scheduled in dependency-correct topological order; ASAP and PRIORITY_FIRST strategies wired. |
-| Resource Allocator                    | ✅     | `app/planner/resource_allocator.py` integrated into `Executor`; default MACHINE and TOOL resources allocated per task; allocations released after execution. |
-| Progress Tracker                      | 🟡     | `app/planner/progress_tracker.py` + `ProgressSnapshot` exist; not producing runtime progress data. |
-| Plan Manager                          | ✅     | `app/planner/plan_manager.py` exposes `Plan` / `PlanConfig` / `PlanManager`; now used by `FreyaAgent`. |
-| Plan Visualizer                       | 🟡     | `app/planner/plan_visualizer.py` present; not exposed in the runtime. |
-| Multiple solution evaluation          | ❌      | Single LLM-generated plan; alternatives are not generated or compared. |
-| Difficulty / Risk scoring             | ❌      | No explicit difficulty, risk, or confidence scoring for plans; `app/risk/`, `app/confidence/` operate elsewhere in the pipeline, not on the plan itself. |
-| Adaptive replanning (formal)          | ✅     | `solve()` and `run_active_goal()` use `_replan_after_failure()` to update the existing `Plan`/`TaskGraph` on failure. `TaskGraph.get_affected_subgraph()` and `invalidate_subgraph()` identify failed task and dependents; replacement tasks added preserving COMPLETED tasks. Replan events emitted via `ProgressTracker`. |
-| Long-term / downstream forecasting    | ❌      | No multi-step forecasting or future-task awareness. |
-| Reasoning transparency (plan rationale) | ❌   | The chosen plan is logged as JSON only; the selection rationale is not surfaced in plain language. |
-| Human plan review / modify / reject   | ❌      | The user can approve/deny individual tool calls (`permission_prompt` in `Executor`), but cannot review, modify, reorder, or reject the plan itself. |
-| Planning horizon classification       | ❌      | All tasks use the same 5-step cap; no short/medium/long-horizon policy. |
+### Plan Execution (`Executor.execute_plan()`)
+- Runs up to 8 steps
+- Each step maps to a tool (`_map_step_to_tool`) with LLM fallback (`_select_tool_with_llm`)
+- Mutating tools permission-gated via `permission_prompt`
 
-Foundation modules in `app/planner/` (`task.py`, `task_graph.py`, `scheduler.py`, `resource_allocator.py`, `progress_tracker.py`, `plan_visualizer.py`, `plan_manager.py`) are covered by `tests/test_planner.py` and `tests/test_planner_agent.py`. The runtime path is now `FreyaAgent.run() → Planner.create_plan() → PlanManager → Plan → Executor.execute_plan() → tool.run()` — `PlanManager` is the single source of truth for plans.
+### Memory & Learning Integration
+- Top-3 `memory.search(task, limit=3)` hits injected as "Relevant past experience"
+- `Planner._build_lessons_context()` injects severity-filtered PATTERN lessons
+- `Executor._build_pre_execute_lessons_block()` + `_log_anti_pattern_hints()` surface lessons in LLM fallback and after failed steps
+- `FreyaAgent.run()` reads matching `ExperienceMemory` into "Past Experiences" for post-execute prompt
+- `FreyaAgent.repair()` surfaces matching ANTI_PATTERN lessons on retries
 
----
+### Iterative Solve Loop (`FreyaAgent.solve()`)
+- Repeatedly calls `planner.create_plan()` + `apply_and_verify()` until success or `max_iterations`
 
-# Objectives
+### PlanManager (Phase 1)
+- Single source of truth for plans
+- `Planner.create_plan()` populates `Plan` object with tasks
+- `Executor.execute_plan()` consumes `Plan` object
+- Backward compatibility with dict plans maintained
 
-Freya should always be able to answer:
-
-- What is the objective?
-- What information is missing?
-- What is the simplest solution?
-- What are the available approaches?
-- Which approach has the lowest risk?
-- What should happen first?
-- What should happen next?
-- What should happen after that?
-- What could go wrong?
-- How can I recover if it fails?
-
----
-
-# Design Principles
-
-Planning & Reasoning should be:
-
-- Logical
-- Efficient
-- Explainable
-- Adaptive
-- Minimal
-- Context-aware
-- Safe
-
-Planning should avoid unnecessary complexity. The preferred solution is usually the simplest one that satisfies the requirements.
-
----
-
-# Planning Workflow (Target)
-
-Every engineering task should follow this reasoning cycle.
-
-Understand → Gather Context → Analyze Constraints → Generate Possible Solutions → Compare Solutions → Select Best Approach → Create Execution Plan → Execute → Observe Results → Replan if Necessary
-
-Only "Create Execution Plan → Execute → Observe Results" are wired today; everything before plan creation and after execution is the open work listed in the implementation table above.
-
----
-
-# Implementation Priority
-
-A practical build order that matches `ROADMAP.md` Phase 2 ("Planner Modernization") and unblocks the higher-order phases. Each row must be promoted from ✗ to ✓ before dependent work can start.
-
-## 1. Critical — Wire `PlanManager` into `FreyaAgent` ⭐⭐⭐⭐⭐ **✅ COMPLETE**
-
-**Description.** Replace the ad-hoc `Planner.create_plan()` JSON dict with `app.planner.plan_manager.PlanManager` as the source of truth for plans. `Planner.create_plan()` becomes the LLM call that populates a `Plan`, and `Executor.execute_plan()` consumes it.
-
-**Why now.** Every later step (TaskGraph, Scheduler, Resource Allocator, Progress Tracker, replanning) is impossible until plans are first-class objects with an ID, config, and lifecycle.
-
-**Dependencies.** None — `PlanManager`, `Plan`, `PlanConfig` already exist and are unit-tested.
-
-**Expected outcome.** A `Plan` is created, retained, and consumed end-to-end by the agent; the legacy code path can remain as the default LLM populator.
-
----
-
-## 2. Critical — Wire `TaskGraph` into the runtime ⭐⭐⭐⭐⭐ **✅ COMPLETE**
-
-**Description.** After plan generation, build a `TaskGraph` for the steps with `DependencyEdge` instances and parent/child `TaskNode` relationships. Reject cyclic plans.
-
-**Why now.** This is the foundation for decomposition, declarative planning, and replanning without losing completed work.
-
-**Dependencies.** Priority 1 (`PlanManager`).
-
-**Expected outcome.** Plans are represented as DAGs; downstream components (Scheduler, Resource Allocator) can operate on graph topology.
-
-**Implementation completed (2026-07-30):**
-- `Planner.create_plan()` creates sequential dependencies between steps (task i+1 depends on task i)
-- `PlanManager.add_dependency()` validates against cycles via `CycleDetectedError` propagation
-- `Plan` class exposes `validate_graph()` and `get_task_graph()` methods
+### Task Graph (Phase 2) — `app/planner/task_graph.py`
+- `TaskGraph` with `TaskNode` and `DependencyEdge`
+- Sequential dependencies: `Planner.create_plan()` adds `step i+1 → step i` edges
+- Cycle detection via `CycleDetectedError`
+- `Plan.validate_graph()` and `Plan.get_task_graph()` methods
 - `Executor.execute_plan()` uses `TaskGraph.topological_sort()` for execution order
-- Preserves completed tasks for future replanning
 
----
+### Scheduler (Phase 3) — `app/planner/scheduler.py`
+- Strategies: ASAP, PRIORITY_FIRST, Longest-Duration-First, Deadline-Aware, Resource-Optimized
+- Integrated into `Executor.execute_plan()`
+- Tasks scheduled in dependency-correct topological order
+- ASAP and PRIORITY_FIRST strategies wired and functional
 
-## 3. High — Wire `Scheduler` and `ResourceAllocator` ⭐⭐⭐⭐ **✅ COMPLETE**
+### Resource Allocator (Phase 3) — `app/planner/resource_allocator.py`
+- Default MACHINE and TOOL resources initialized in `Executor.__init__`
+- Tasks allocate required resources before execution, release after
+- Linear step loop replaced with scheduler-driven execution respecting `ScheduleItem` order
 
-**Description.** Use `Scheduler` (start with `ASAP` and `PRIORITY_FIRST`) and `ResourceAllocator` (default machine + tool resources) at execution time, honouring `Task.dependencies`.
+### Progress Tracker (Phase 4) — `app/planner/progress_tracker.py`
+- `ProgressSnapshot` emitted after each task transition (`PENDING → READY → IN_PROGRESS → COMPLETED/FAILED`)
+- Export methods for diagnostics (`export_for_diagnostics`), monitoring (`export_for_monitoring`), backlog (`export_for_backlog`)
+- `PlanManager` exposes `get_progress_for_diagnostics()`, `get_progress_for_monitoring()`, `get_progress_for_backlog()`, `get_all_active_progress()`
+- `FreyaAgent` stores last execution progress in `last_execution_progress` with `get_last_execution_progress()`
 
-**Why now.** Step ordering and resource contention are the first pain points once `solve()` runs on multi-step tasks.
-
-**Dependencies.** Prioritities 1 and 2.
-
-**Expected outcome.** Steps run in dependency-correct order with explicit resource reservations, replacing the current linear step loop.
-
-**Implementation completed (2026-07-30):**
-- `Executor.execute_plan()` now uses `Scheduler` to generate execution schedule from `TaskGraph`
-- `ASAP` and `PRIORITY_FIRST` scheduling strategies wired and functional
-- `ResourceAllocator` initialized with default `MACHINE` and `TOOL` resources in `Executor.__init__`
-- Tasks allocate required resources before execution and release them after
-- Linear step execution loop replaced with scheduler-driven execution respecting `ScheduleItem` order
-- Backward compatibility maintained for dict-based plans
-- All 153 existing tests pass
-
----
-
-## 4. High — `ProgressTracker` integration ⭐⭐⭐⭐ **✅ COMPLETE (2026-07-30)**
-
-**Description.** Emit `ProgressSnapshot` objects after each task transitions (`PENDING → READY → IN_PROGRESS → COMPLETED / FAILED`) and expose them via the agent response and the diagnostics/monitoring layer.
-
-**Why now.** Phases 4 (Self-Improvement) and 8 (Long-Term Autonomy) need structured progress data to drive backlog generation and runtime dashboards.
-
-**Dependencies.** Priorities 1–3.
-
-**Expected outcome.** Every engineering run produces a chronological progress trail consumable by `app/diagnostics/`, `app/monitoring/`, and `app/backlog/`.
-
-**Implementation completed (2026-07-30):**
-- `Executor.execute_plan()` calls `plan._tracker.on_task_status_changed()` for all task state transitions (`PENDING → READY → IN_PROGRESS → COMPLETED / FAILED`)
-- `ProgressTracker.on_task_status_changed()` emits `ProgressSnapshot` objects with full progress state
-- `ProgressTracker` provides export methods for diagnostics (`export_for_diagnostics`), monitoring (`export_for_monitoring`), and backlog (`export_for_backlog`)
-- `PlanManager` exposes `get_progress_for_diagnostics()`, `get_progress_for_monitoring()`, `get_progress_for_backlog()`, and `get_all_active_progress()` for integration with observability layers
-- `FreyaAgent` stores last execution progress in `last_execution_progress` attribute and exposes it via `get_last_execution_progress()` method
-- `Plan._tracker` field default fixed from `False` to `None` (correct `Optional[ProgressTracker]` type)
-- All 370+ relevant tests pass
-
----
-
-## 5. High — Adaptive replanning ⭐⭐⭐⭐
-
-**Description.** Promote the implicit `solve()/repair()` loop to an explicit replan cycle that updates the existing `Plan`/`TaskGraph` on failure instead of restarting from scratch. Preserve completed tasks.
-
-**Why now.** The current loop re-plans from zero each iteration, which is wasteful and unstable on multi-step work.
-
-**Dependencies.** Priorities 1–4.
-
-**Expected outcome.** Failures invalidate only the affected subgraph; completed `Task`s remain `COMPLETED`; the agent surfaces replan events through `ProgressTracker`.
-
-**Implementation completed (2026-07-30):**
-- `TaskGraph.get_affected_subgraph(failed_task_id)` identifies failed task plus all transitive dependents via BFS
-- `TaskGraph.invalidate_subgraph(task_ids)` marks affected tasks `FAILED` and clears their execution state
-- `TaskGraph.add_tasks_with_dependencies(tasks, parent_task_ids)` adds replacement tasks with proper dependency edges
-- `Plan.get_completed_task_ids()` preserves COMPLETED tasks across replans
-- `Plan.invalidate_from_failure(failed_task_id)` wraps TaskGraph invalidation and marks failed task
-- `Plan.add_replacement_tasks(new_tasks, parent_task_ids)` adds replacement tasks to plan and graph
-- `Plan.replan_after_failure(failed_task_id, context)` orchestrates full adaptive replan cycle
-- `Executor.execute_plan_partial(plan, ..., incomplete_only=True)` runs only non-COMPLETED tasks
-- `FreyaAgent._replan_after_failure()` generates replacement tasks via LLM, preserves COMPLETED, emits `ProgressTracker` replanning events with `replanning=True` flag
+### Adaptive Replanning (Phase 5)
+- `TaskGraph.get_affected_subgraph(failed_task_id)` — identifies failed task + all transitive dependents via BFS
+- `TaskGraph.invalidate_subgraph(task_ids)` — marks affected tasks FAILED, clears execution state
+- `TaskGraph.add_tasks_with_dependencies(tasks, parent_task_ids)` — adds replacement tasks with proper edges
+- `Plan.get_completed_task_ids()` — preserves COMPLETED tasks across replans
+- `Plan.invalidate_from_failure(failed_task_id)` — wraps TaskGraph invalidation
+- `Plan.add_replacement_tasks(new_tasks, parent_task_ids)` — adds replacement tasks to plan and graph
+- `Plan.replan_after_failure(failed_task_id, context)` — orchestrates full adaptive replan cycle
+- `Executor.execute_plan_partial(plan, ..., incomplete_only=True)` — runs only non-COMPLETED tasks
+- `FreyaAgent._replan_after_failure()` — generates replacement tasks via LLM, preserves COMPLETED, emits ProgressTracker replanning events
 - `FreyaAgent.solve()` and `run_active_goal()` rewritten with adaptive replanning loop (incremental, not restart-from-scratch)
-- All 208 tests pass
 
 ---
 
-## 6. High — Risk and difficulty scoring on plans ⭐⭐⭐⭐
+## What's Missing (❌ Not Implemented)
 
-**Description.** Combine `app/risk/` (architectural impact, regression risk, dependency churn) and a lightweight difficulty estimate (file count, test surface, blast radius) into a per-plan risk + difficulty score. High-risk plans require explicit human approval before execution.
-
-**Why now.** `app/risk/` and `app/confidence/` already exist; connecting them to the planner closes Phase 1 (Risk Analysis → Execution Decisions) and Phase 4 (Safe Self-Improvement gates).
-
-**Dependencies.** Priorities 1–3.
-
-**Expected outcome.** Every `Plan` carries a `risk_score` and `difficulty`; the agent flags high-risk plans before invoking mutating tools.
-
----
-
-## 7. Medium — Human plan review flow ⭐⭐⭐
-
-**Description.** Extend the existing `permission_prompt` UI to render the plan, allow reorder/edit/delete of individual `Task`s, and call `confirm` before `Executor.execute_plan()` runs.
-
-**Why now.** `HUMAN_OVERSIGHT.md` requires review/reject paths for high-risk actions; plans are the highest-leverage review surface.
-
-**Dependencies.** Priorities 1, 2, and 6.
-
-**Expected outcome.** Before execution, the user can review the plan text, edit steps, request an alternative, or reject outright.
+| Capability | Needed For |
+|------------|------------|
+| **Multiple Solution Evaluation** | Comparing alternative plans (minimal-diff vs refactor) |
+| **Risk/Difficulty Scoring on Plans** | High-risk plan gating, human approval triggers |
+| **Human Plan Review Flow** | User can review, edit, reorder, or reject plan before execution |
+| **Reasoning Transparency** | Plain-English rationale for each step and plan selection |
+| **Planning Horizon Classification** | Short/medium/long-horizon policies instead of fixed 5-step cap |
+| **Long-horizon / Downstream Forecasting** | Anticipating cross-cutting changes 2-3 steps ahead |
 
 ---
 
-## 8. Medium — Multi-solution evaluation ⭐⭐⭐
+## Partially Implemented (🟡 Partial)
 
-**Description.** For non-trivial tasks, have the planner emit 2–3 candidate `Plan` variants (e.g., minimal-diff vs. refactor; SQLite vs. JSON) and the risk/difficulty scorer picks one or surfaces them to the user.
-
-**Why now.** Cheap once `Plan` objects, scoring, and the human review flow from Priorities 1, 6, and 7 exist.
-
-**Dependencies.** Priorities 1, 2, 6, and 7.
-
-**Expected outcome.** Decisions between competing approaches are explicit and auditable in `ProgressTracker` and logs.
+| Capability | Current State | Missing |
+|------------|---------------|---------|
+| **Plan Visualizer** | `app/planner/plan_visualizer.py` exists | Not exposed in runtime/diagnostics |
+| **Auto Task Decomposition** | Sequential deps created; basic parent/child | No automatic subtask breakdown for complex steps |
 
 ---
 
-## 9. Medium — Reasoning transparency ⭐⭐⭐
+## Remaining Implementation Tasks
 
-**Description.** Add a `rationale` field to each `Task` (and to the `Plan`) capturing *why* this step was chosen (smallest diff, lowest risk, matches existing pattern). Use the new `app/confidence/` calibration to express certainty.
+### ⭐⭐⭐⭐ Critical (Major Capabilities)
 
-**Why now.** `app/confidence/` exists and is conceptually paired with planning but unused there today.
+| Task | Objective | Why It Matters | Dependencies | Success Criteria |
+|------|-----------|----------------|--------------|------------------|
+| **Risk & Difficulty Scoring on Plans** | Combine `app/risk/` + lightweight difficulty estimate into per-plan scores | High-risk plans need human approval; feeds Safe Self-Improvement gates | PlanManager, Risk/Confidence modules | Every `Plan` carries `risk_score` and `difficulty`; agent flags high-risk before mutating tools |
+| **Human Plan Review Flow** | Extend `permission_prompt` to render plan, allow reorder/edit/delete, confirm before execution | HUMAN_OVERSIGHT requires review/reject for high-risk actions; plan is highest-leverage surface | PlanManager, Risk scoring | User can review plan text, edit steps, request alternative, or reject before `Executor.execute_plan()` |
+| **Multiple Solution Evaluation** | Planner emits 2-3 candidate `Plan` variants; risk/difficulty scorer picks or surfaces to user | Competing approaches made explicit and auditable | PlanManager, Risk scoring, Human review | 2-3 variants generated for non-trivial tasks; selection logged in ProgressTracker |
 
-**Dependencies.** Priorities 1 and 6.
+### ⭐⭐⭐ High (Important Improvements)
 
-**Expected outcome.** The plan can be explained in plain English without re-deriving the LLM prompt.
+| Task | Objective | Why It Matters | Dependencies | Success Criteria |
+|------|-----------|----------------|--------------|------------------|
+| **Reasoning Transparency** | Add `rationale` field to `Task` and `Plan`; use `app/confidence/` calibration | Explain plans in plain English without re-deriving LLM prompt | PlanManager, Confidence module | Plan explainable in plain English via `plan.explain()` |
+| **Planning Horizon Classification** | Short/medium/long-horizon policies instead of fixed 5-step cap | Complex tasks need deeper planning; simple tasks need less | PlanManager, Scheduler | Plans tagged with horizon; step cap varies by horizon |
+
+### ⭐⭐ Medium (Nice to Have)
+
+| Task | Objective | Why It Matters | Dependencies | Success Criteria |
+|------|-----------|----------------|--------------|------------------|
+| **Plan Visualizer Runtime Exposure** | Wire `plan_visualizer.py` into diagnostics/monitoring | Visual plan introspection for debugging | PlanManager, ProgressTracker | `Plan.to_mermaid()` / `to_dot()` exposed via `PlanManager` |
+| **Auto Task Decomposition** | Break complex steps into subtasks automatically | Reduces manual planning burden | Planner, TaskGraph | Steps > threshold auto-decompose into child TaskNodes |
+
+### ⭐ Low (Future)
+
+| Task | Objective | Why It Matters | Dependencies |
+|------|-----------|----------------|--------------|
+| **Long-horizon / Downstream Forecasting** | Emit `downstream_impact` annotations for cross-cutting changes | Anticipate 2-3 steps ahead on shared API/import changes | Dependency graph (`app/intelligence/dependency_graph.py`) |
 
 ---
 
-## 10. Low — Long-horizon / downstream forecasting 🔮
+## Architecture
 
-**Description.** When the planner knows a step changes shared APIs or modifies imports, emit a `downstream_impact` annotation pointing at next steps the agent will likely need to revisit.
-
-**Why now.** Useful but speculative; requires a stable symbol-index / dependency-graph integration (`app/intelligence/dependency_graph.py`).
-
-**Dependencies.** Priorities 1–6.
-
-**Expected outcome.** Plans anticipate two or three steps ahead on cross-cutting changes.
+```
+FreyaAgent.run()
+    │
+    ├─► Planner.create_plan()          # LLM generates plan steps
+    │       │
+    │       └─► PlanManager → Plan     # Plan object with TaskGraph
+    │
+    ├─► TaskGraph                      # DAG with dependencies
+    │       │
+    │       ├─► Scheduler              # ASAP / PRIORITY_FIRST / etc.
+    │       │
+    │       └─► ResourceAllocator      # MACHINE / TOOL / GPU
+    │
+    └─► Executor.execute_plan()        # Schedule-driven execution
+            │
+            ├─► ProgressTracker        # ProgressSnapshot per transition
+            │
+            └─► On failure → _replan_after_failure()
+                    │
+                    ├─► TaskGraph.get_affected_subgraph()
+                    ├─► TaskGraph.invalidate_subgraph()
+                    ├─► Plan.add_replacement_tasks()
+                    └─► Executor.execute_plan_partial(incomplete_only=True)
+```
 
 ---
 
-# Why Each Priority Sits Where It Does
+## Integration Points
 
-- **Critical** items unblock all later work and do not depend on other capabilities.
-- **High** items depend on Critical and feed separately into ROADMAP phases 4 (Safe Self-Improvement), 8 (Long-Term Autonomy), and 9 (Performance).
-- **Medium** items improve quality (review, multi-solution, transparency) without changing what the agent can do.
-- **Low** items are speculative and should only start once a stable, observable runtime plan pipeline is live.
+| Consumer | Uses Planning Data For |
+|----------|------------------------|
+| `Executor.execute_plan()` | Task execution order, resource allocation |
+| `Scheduler` | Strategy selection, dependency-aware ordering |
+| `ResourceAllocator` | Per-task resource reservation |
+| `ProgressTracker` | Progress snapshots, diagnostics, monitoring, backlog |
+| `DecisionManager` | Risk assessment (planned — not yet wired) |
+| `WorldModel` | Environment snapshot, plan context |
+| `GoalManager` | Goal-driven plan generation (`run_goal` / `run_goal_loop`) |
+| `MemorySystem` | Experience recording, lesson retrieval |
+| `Diagnostics/Monitoring/Backlog` | Progress data export |
 
 ---
 
-# Final Vision
+## Files
 
-Planning & Reasoning gives Freya the ability to think before acting.
+| File | Purpose | Status |
+|------|---------|--------|
+| `app/planner/plan_manager.py` | Plan, PlanConfig, PlanManager | ✅ Complete |
+| `app/planner/planner.py` | Planner.create_plan() with templates | ✅ Complete |
+| `app/planner/executor.py` | Executor.execute_plan() / _partial() | ✅ Complete |
+| `app/planner/task_graph.py` | TaskGraph, TaskNode, DependencyEdge | ✅ Complete |
+| `app/planner/scheduler.py` | Scheduler strategies (ASAP, PRIORITY_FIRST, etc.) | ✅ Complete |
+| `app/planner/resource_allocator.py` | ResourceAllocator (MACHINE/TOOL/GPU) | ✅ Complete |
+| `app/planner/progress_tracker.py` | ProgressTracker, ProgressSnapshot | ✅ Complete |
+| `app/planner/plan_visualizer.py` | Mermaid/DOT export | 🟡 Partial (not wired) |
+| `app/agent/core_agent.py` | FreyaAgent.solve(), run_goal(), _replan_after_failure() | ✅ Complete |
+| `tests/test_planner.py` | Unit tests for planner modules | ✅ Complete |
+| `tests/test_planner_agent.py` | Integration tests | ✅ Complete |
 
-Rather than immediately executing requests, Freya evaluates objectives, compares possible solutions, estimates risk, plans several steps ahead, and adapts when circumstances change.
+---
 
-Combined with Goal Management, this capability forms Freya's executive function — coordinating intelligent decision-making across planning, execution, learning, and long-term autonomous software engineering.
+## Success Criteria (Definition of Done)
 
-When the Implementation Priorities above are complete, the runtime path becomes:
+| Criterion | Target | Status |
+|-----------|--------|--------|
+| Structured plan generation with templates | ✅ | Complete |
+| Plan execution with tool mapping | ✅ | Complete |
+| Memory context injection | ✅ | Complete |
+| Engineering lessons integration | ✅ | Complete |
+| PlanManager as single source of truth | ✅ | Complete |
+| TaskGraph with dependencies | ✅ | Complete |
+| Scheduler strategies (ASAP, PRIORITY_FIRST) | ✅ | Complete |
+| Resource Allocator integration | ✅ | Complete |
+| ProgressTracker with exports | ✅ | Complete |
+| Adaptive replanning (preserves COMPLETED) | ✅ | Complete |
+| Risk/difficulty scoring on plans | ❌ | Not Started |
+| Human plan review flow | ❌ | Not Started |
+| Multi-solution evaluation | ❌ | Not Started |
+| Reasoning transparency (rationale) | ❌ | Not Started |
+| Planning horizon classification | ❌ | Not Started |
 
-`FreyaAgent.run() → Planner (LLM) → PlanManager → TaskGraph → Scheduler + ResourceAllocator → Executor.execute_plan() → ProgressTracker → diagnostics/monitoring/backlog/safety gates`
+---
+
+## Related Documentation
+
+- [GOAL_MANAGEMENT.md](GOAL_MANAGEMENT.md) — Goal-driven planning (`run_goal` / `run_goal_loop`)
+- [TASK_SCHEDULING.md](TASK_SCHEDULING.md) — Scheduler strategies and resource allocation
+- [RESOURCE_MANAGEMENT.md](RESOURCE_MANAGEMENT.md) — Resource allocator details
+- [ROADMAP.md](ROADMAP.md) — Phase 2 Planner Modernization
+- [DECISION_MAKING.md](DECISION_MAKING.md) — Risk analysis integration

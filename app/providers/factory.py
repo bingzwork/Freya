@@ -217,7 +217,7 @@ class ProviderFactory:
 
         return ProviderConfig(
             provider_name=provider_name,
-            model=effective_model or "",
+            model=effective_model if effective_model else "",
             base_url=effective_base_url,
             timeout=effective_timeout,
             extra=extra,

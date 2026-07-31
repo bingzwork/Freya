@@ -46,7 +46,7 @@ class OllamaProvider(BaseLLMProvider):
         if config is None:
             config = ProviderConfig(
                 provider_name="ollama",
-                model="qwen2.5-coder:14b",
+                model="qwen3:8b",
                 base_url="http://localhost:11434",
                 timeout=120.0,
             )
@@ -58,6 +58,11 @@ class OllamaProvider(BaseLLMProvider):
     def base_url(self) -> str:
         """Get the base URL of the Ollama server."""
         return self.config.base_url or "http://localhost:11434"
+
+    @property
+    def model(self) -> str:
+        """Get the model name, with default fallback."""
+        return self.config.model or "qwen3:8b"
 
     def ask(
         self,

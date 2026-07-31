@@ -181,8 +181,9 @@ class CommitParser:
 
     def _parse_header(self, msg: CommitMessage, header: str) -> None:
         """Parse the header line."""
-        # Pattern: type(scope): subject or type: subject or just subject
-        pattern = r"^((?:\w+)(?:\([^)]+\))?:\s*)?(.+?)(?:\s*#\d+)*$"
+        # Pattern: type(scope)!: subject or type(scope): subject or type!: subject
+        # Allow ! after type or after scope for breaking changes
+        pattern = r"^((?:[\w!]+)(?:\([^)]+\))?!?:\s*)?(.+?)(?:\s*#\d+)*$"
         match = re.match(pattern, header.strip())
 
         if not match:
@@ -196,8 +197,9 @@ class CommitParser:
 
         # Parse type and scope
         if type_part:
-            # Check for type(scope):
-            type_match = re.match(r"^(\w+)(?:\(([^)]+)\))?:", type_part)
+            # Check for type(scope)!: or type!: or type(scope):
+            # Pattern: type, optional scope, optional !, followed by :
+            type_match = re.match(r"^(\w+)(?:\(([^)]+)\)?)?!?:", type_part)
             if type_match:
                 type_str = type_match.group(1).lower()
                 scope = type_match.group(2)
@@ -210,7 +212,7 @@ class CommitParser:
 
                 msg.scope = scope
 
-                # Check for breaking change
+                # Check for breaking change: type is "breaking" or ! present
                 if type_str == "breaking" or "!" in type_part:
                     msg.breaking = True
 
