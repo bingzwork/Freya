@@ -693,3 +693,23 @@ class NoOpCalibrator(Calibrator):
 
 # Import for type hints
 from enum import Enum
+
+
+# Global calibration manager instance
+_default_calibration_manager: Optional[CalibrationManager] = None
+
+
+def get_calibration_manager(
+    method: str = "isotonic",
+    storage_path: Optional[str] = None,
+    min_samples: int = 20,
+) -> CalibrationManager:
+    """Get or create the global calibration manager."""
+    global _default_calibration_manager
+    if _default_calibration_manager is None:
+        _default_calibration_manager = CalibrationManager(
+            method=method,
+            storage_path=Path(storage_path) if storage_path else None,
+            min_samples=min_samples,
+        )
+    return _default_calibration_manager
