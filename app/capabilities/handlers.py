@@ -784,6 +784,12 @@ SystemCapabilityHandler.register(router)
 # Conversational Control Handler
 # =============================================================================
 
+def _get_conversation_control():
+    """Get the global conversation control handler."""
+    from app.conversational_control import get_conversation_control_handler
+    return get_conversation_control_handler()
+
+
 class ConversationalControlHandler:
     """Handles meta-commands (stop / cancel / undo / redo / status).
 
@@ -807,11 +813,7 @@ class ConversationalControlHandler:
         router.register(Capability(
             name="control_stop",
             description="Interrupt the current operation",
-            handler=lambda ctx: CapabilityResult(
-                success=True,
-                data={"control_command": "stop"},
-                message="Stopped. What's next?",
-            ),
+            handler=lambda ctx: _handle_control_stop(ctx),
             patterns=[
                 r"^\s*stop\s*[!.]?\s*$",
                 r"^\s*halt\s*[!.]?\s*$",
@@ -824,11 +826,7 @@ class ConversationalControlHandler:
         router.register(Capability(
             name="control_cancel",
             description="Cancel a pending action",
-            handler=lambda ctx: CapabilityResult(
-                success=True,
-                data={"control_command": "cancel"},
-                message="Cancelled.",
-            ),
+            handler=lambda ctx: _handle_control_cancel(ctx),
             patterns=[
                 r"^\s*cancel\s*[!.]?\s*$",
                 r"^\s*nevermind\s*[!.]?\s*$",
@@ -839,13 +837,31 @@ class ConversationalControlHandler:
         ))
 
         router.register(Capability(
+            name="control_pause",
+            description="Pause the current operation",
+            handler=lambda ctx: _handle_control_pause(ctx),
+            patterns=[
+                r"^\s*pause\s*[!.]?\s*$",
+            ],
+            keywords=["pause"],
+            intent_types=["conversational_control"],
+        ))
+
+        router.register(Capability(
+            name="control_resume",
+            description="Resume a paused operation",
+            handler=lambda ctx: _handle_control_resume(ctx),
+            patterns=[
+                r"^\s*resume\s*[!.]?\s*$",
+            ],
+            keywords=["resume"],
+            intent_types=["conversational_control"],
+        ))
+
+        router.register(Capability(
             name="control_undo",
             description="Undo the most recent mutation in the current session",
-            handler=lambda ctx: CapabilityResult(
-                success=True,
-                data={"control_command": "undo"},
-                message="Nothing to undo in this session.",
-            ),
+            handler=lambda ctx: _handle_control_undo(ctx),
             patterns=[
                 r"^\s*undo\s*[!.]?\s*$",
                 r"^\s*revert\s*[!.]?\s*$",
@@ -857,11 +873,7 @@ class ConversationalControlHandler:
         router.register(Capability(
             name="control_redo",
             description="Redo the most recently undone mutation",
-            handler=lambda ctx: CapabilityResult(
-                success=True,
-                data={"control_command": "redo"},
-                message="Nothing to redo.",
-            ),
+            handler=lambda ctx: _handle_control_redo(ctx),
             patterns=[
                 r"^\s*redo\s*[!.]?\s*$",
             ],
@@ -872,11 +884,7 @@ class ConversationalControlHandler:
         router.register(Capability(
             name="control_status",
             description="Report the current plan and last completed action",
-            handler=lambda ctx: CapabilityResult(
-                success=True,
-                data={"control_command": "status"},
-                message="Idle. Waiting for next request.",
-            ),
+            handler=lambda ctx: _handle_control_status(ctx),
             patterns=[
                 r"^\s*status\s*[!.]?\s*$",
                 r"^\s*what\s+are\s+you\s+doing\s*\?\s*$",
@@ -886,6 +894,126 @@ class ConversationalControlHandler:
             keywords=["status", "what are you doing", "current plan", "current step"],
             intent_types=["conversational_control"],
         ))
+
+
+def _handle_control_stop(ctx: Dict[str, Any]) -> CapabilityResult:
+    """Handle stop/halt/wait command."""
+    control = _get_conversation_control()
+    if control:
+        result = control.handle_stop(ctx)
+        return CapabilityResult(
+            success=True,
+            data=result,
+            message=result.get("message", "Stopped. What's next?"),
+        )
+    # Fallback if control not initialized
+    return CapabilityResult(
+        success=True,
+        data={"control_command": "stop"},
+        message="Stopped. What's next?",
+    )
+
+
+def _handle_control_cancel(ctx: Dict[str, Any]) -> CapabilityResult:
+    """Handle cancel/nevermind/abort command."""
+    control = _get_conversation_control()
+    if control:
+        result = control.handle_cancel(ctx)
+        return CapabilityResult(
+            success=True,
+            data=result,
+            message=result.get("message", "Cancelled."),
+        )
+    return CapabilityResult(
+        success=True,
+        data={"control_command": "cancel"},
+        message="Cancelled.",
+    )
+
+
+def _handle_control_pause(ctx: Dict[str, Any]) -> CapabilityResult:
+    """Handle pause command."""
+    control = _get_conversation_control()
+    if control:
+        result = control.handle_pause(ctx)
+        return CapabilityResult(
+            success=True,
+            data=result,
+            message=result.get("message", "Paused. Say 'resume' to continue."),
+        )
+    return CapabilityResult(
+        success=True,
+        data={"control_command": "pause"},
+        message="Paused. Say 'resume' to continue.",
+    )
+
+
+def _handle_control_resume(ctx: Dict[str, Any]) -> CapabilityResult:
+    """Handle resume command."""
+    control = _get_conversation_control()
+    if control:
+        result = control.handle_resume(ctx)
+        return CapabilityResult(
+            success=True,
+            data=result,
+            message=result.get("message", "Resuming..."),
+        )
+    return CapabilityResult(
+        success=True,
+        data={"control_command": "resume"},
+        message="Nothing to resume. Not currently paused.",
+    )
+
+
+def _handle_control_undo(ctx: Dict[str, Any]) -> CapabilityResult:
+    """Handle undo command."""
+    control = _get_conversation_control()
+    if control:
+        result = control.handle_undo(ctx)
+        return CapabilityResult(
+            success=True,
+            data=result,
+            message=result.get("message", "Done. I've undone the last action."),
+        )
+    return CapabilityResult(
+        success=True,
+        data={"control_command": "undo"},
+        message="Nothing to undo in this session.",
+    )
+
+
+def _handle_control_redo(ctx: Dict[str, Any]) -> CapabilityResult:
+    """Handle redo command."""
+    control = _get_conversation_control()
+    if control:
+        result = control.handle_redo(ctx)
+        return CapabilityResult(
+            success=True,
+            data=result,
+            message=result.get("message", "Done. I've reapplied the action."),
+        )
+    return CapabilityResult(
+        success=True,
+        data={"control_command": "redo"},
+        message="Nothing to redo.",
+    )
+
+
+def _handle_control_status(ctx: Dict[str, Any]) -> CapabilityResult:
+    """Handle status/what are you doing command."""
+    control = _get_conversation_control()
+    if control:
+        result = control.handle_status(ctx)
+        return CapabilityResult(
+            success=True,
+            data=result,
+            message=result.get("message", "I'm ready to help. What would you like me to do?"),
+        )
+    return CapabilityResult(
+        success=True,
+        data={"control_command": "status"},
+        message="Idle. Waiting for next request.",
+    )
 
 
 # Register the conversational control handler with the global router

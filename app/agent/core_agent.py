@@ -33,6 +33,7 @@ from app.memory.semantic_memory import SemanticMemory, create_semantic_memory
 from app.memory.task_memory import TaskMemory, create_task_memory
 from app.memory.unified_retrieval import create_unified_retrieval
 from app.memory.working_memory import WorkingMemory, get_working_memory
+from app.conversational_control import ConversationControlHandler, create_conversation_control_handler
 
 # Phase C: Memory Optimization
 from app.memory.consolidation import ConsolidationEngine, create_consolidation_engine, ConsolidationTrigger
@@ -366,7 +367,22 @@ class FreyaAgent:
         self.retriever = EnhancedRetriever(self.symbol_index)
         logger.info(f"Indexed {len(self.project_index.files)} files.")
         logger.info(f"Indexed {len(self.symbol_index.symbols)} Python files.")
+
+        # Initialize centralized conversational control handler
+        self.conversation_control = create_conversation_control_handler(
+            plan_manager=self.plan_manager,
+            executor=self.executor,
+            conversation_memory=self.conversation._memory if hasattr(self.conversation, '_memory') else None,
+        )
+        # Register execution callback for interruption
+        self.conversation_control.register_execution_callback(self._request_execution_stop)
+
         logger.info("Freya Agent initialized")
+
+    def _request_execution_stop(self) -> None:
+        """Callback to request execution stop from conversation control."""
+        # This will be checked by the executor via conversation_control.check_stop_requested()
+        logger.info("[FreyaAgent] Execution stop requested via conversation control")
 
     def build_context(self, task):
         matches = self.file_locator.locate(task)
@@ -495,8 +511,18 @@ Answer the user's request directly."""
         allowed_tools = set(Executor.READ_ONLY_TOOLS)
         if allow_mutations:
             allowed_tools.update(Executor.MUTATING_TOOLS)
+
+        # Start conversation control tracking for this execution
+        self.conversation_control.start_execution(plan)
+        # Pass conversation control to executor for stop/pause checking
+        self.executor.set_conversation_control(self.conversation_control)
+
         # Execute using the Plan object (Executor now accepts Plan or dict)
         results = self.executor.execute_plan(plan, allowed_tools)
+
+        # Finish conversation control tracking
+        success = True  # Assume success unless exception was raised
+        self.conversation_control.finish_execution(success)
 
         # Capture progress tracking data from the plan's ProgressTracker
         if isinstance(plan, Plan):

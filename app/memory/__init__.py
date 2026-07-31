@@ -1,4 +1,4 @@
-from app.memory.conversation_memory import ConversationMemory, ConversationTurn
+from app.memory.conversation_memory import ConversationMemory, ConversationTurn, ConversationSummary
 from app.memory.engineering_lessons import EngineeringLessonStorage
 from app.memory.episodic_memory import EpisodicMemory, EpisodicEvent, EventType, create_episodic_memory
 from app.memory.experience_memory import ExperienceMemory
@@ -67,6 +67,7 @@ from app.memory.retrieval_ranking import (
 __all__ = [
     "ConversationMemory",
     "ConversationTurn",
+    "ConversationSummary",
     "ProjectMemory",
     "ExperienceMemory",
     "EngineeringLessonStorage",

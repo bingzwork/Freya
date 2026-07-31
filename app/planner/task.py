@@ -272,6 +272,15 @@ class Task:
         self.metadata["cancel_reason"] = reason
         self._update_timestamp()
 
+    def mark_pending(self) -> None:
+        """Mark the task as pending (reset from ready/in_progress)."""
+        self.status = TaskStatus.PENDING
+        self.start_time = None
+        self.end_time = None
+        self.actual_duration = None
+        self.progress_percent = 0.0
+        self._update_timestamp()
+
     @property
     def is_complete(self) -> bool:
         """Check if the task is complete."""

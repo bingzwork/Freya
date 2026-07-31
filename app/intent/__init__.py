@@ -14,14 +14,17 @@ Intent Types:
 - CODE_TASK: Code-specific tasks (refactor, fix, implement)
 - SYSTEM_STATUS: Questions about system state (connected, version, etc.)
 - TOOL_REQUEST: Direct tool requests (run command, use tool)
+- GIT_OPERATION: Git-specific operations
 
-Only TASK, FILE_OPERATION, CODE_TASK, and TOOL_REQUEST should enter the
+Only TASK, FILE_OPERATION, CODE_TASK, TOOL_REQUEST, and GIT_OPERATION should enter the
 planning and execution pipeline. Others should be answered directly via LLM.
 """
 
 from app.intent.classifier import (
     ACCEPT_CONFIDENCE_THRESHOLD,
     LOW_CONFIDENCE_THRESHOLD,
+    ENGINEERING_AMBIGUOUS_THRESHOLD,
+    ENGINEERING_CONFIDENT_THRESHOLD,
     IntentClassifier,
     IntentType,
     IntentClassification,
@@ -29,6 +32,8 @@ from app.intent.classifier import (
     is_task,
     should_answer_directly,
     should_clarify,
+    should_clarify_engineering,
+    is_engineering_uncertain,
     should_include_runtime_context,
     is_control_intent,
     is_low_confidence,
@@ -72,6 +77,8 @@ __all__ = [
     # Intent classification
     "ACCEPT_CONFIDENCE_THRESHOLD",
     "LOW_CONFIDENCE_THRESHOLD",
+    "ENGINEERING_AMBIGUOUS_THRESHOLD",
+    "ENGINEERING_CONFIDENT_THRESHOLD",
     "IntentClassifier",
     "IntentType",
     "IntentClassification",
@@ -79,6 +86,8 @@ __all__ = [
     "is_task",
     "should_answer_directly",
     "should_clarify",
+    "should_clarify_engineering",
+    "is_engineering_uncertain",
     "should_include_runtime_context",
     "is_control_intent",
     "is_low_confidence",

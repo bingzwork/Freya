@@ -10,6 +10,7 @@ from app.planner.plan_manager import Plan, PlanConfig, Task, TaskPriority, TaskC
 from app.planner.task_graph import CycleDetectedError
 from app.planner.scheduler import Scheduler, SchedulingStrategy
 from app.planner.resource_allocator import ResourceAllocator, Resource, ResourceType
+from app.conversational_control import ConversationControlHandler
 
 
 # File extensions recognized when extracting a path from a planning step.
@@ -175,11 +176,16 @@ class Executor:
         self.llm = llm
         self.tools = tools
         self.engineering_lessons = engineering_lessons
+        self.conversation_control: Optional[ConversationControlHandler] = None
 
         # Initialize scheduler and resource allocator
         self._scheduler = None
         self._allocator = ResourceAllocator()
         self._initialize_default_resources()
+
+    def set_conversation_control(self, control: ConversationControlHandler) -> None:
+        """Set the conversation control handler for stop/pause checking."""
+        self.conversation_control = control
 
     def _initialize_default_resources(self) -> None:
         """Initialize default machine and tool resources for task execution."""
@@ -518,6 +524,16 @@ Return ONLY this JSON, no markdown, no extra text:
             if not task:
                 continue
 
+            # Check for stop/pause via conversation control BEFORE task
+            if self.conversation_control:
+                if not self.conversation_control.before_task(task):
+                    logger.info("[Executor] Stop requested via conversation control, halting execution")
+                    # Mark remaining tasks as pending
+                    if isinstance(plan, Plan) and hasattr(plan, '_tracker') and plan._tracker:
+                        task.mark_pending()
+                        plan._tracker.on_task_status_changed(task, transition="READY → PENDING")
+                    break
+
             # Check if resources are available
             if not self._check_resources_for_task(task):
                 logger.warning(f"[Executor] Resources not available for task {task.id}, skipping")
@@ -558,6 +574,7 @@ Return ONLY this JSON, no markdown, no extra text:
 
                 # Release resources after execution
                 self._release_for_task(task)
+                success = True
             except Exception as e:
                 logger.error(f"[Executor] Error executing task {task.id}: {e}")
                 results.append({
@@ -572,6 +589,13 @@ Return ONLY this JSON, no markdown, no extra text:
                     plan._tracker.on_task_status_changed(task, transition="IN_PROGRESS → FAILED")
 
                 self._release_for_task(task)
+                success = False
+
+            # Check for stop/pause via conversation control AFTER task
+            if self.conversation_control:
+                if not self.conversation_control.after_task(task, success):
+                    logger.info("[Executor] Stop requested via conversation control after task")
+                    break
 
         logger.info("[Executor]")
         logger.info("Finished")

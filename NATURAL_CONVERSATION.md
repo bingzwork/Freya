@@ -6,7 +6,7 @@
 ## Overview
 Freya’s conversation pipeline is fully functional for routing, intent classification, and direct answering. Only a few control‑flow enhancements remain.
 
-## Core Principles
+## User Communication Principles
 - **Plain English** – Use everyday words; hide all internal terms.
 - **Conversational tone** – Keep replies short, friendly, and goal‑focused.
 - **Hide implementation details** – Never expose routing, confidence scores, or handlers unless asked.

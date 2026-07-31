@@ -17,6 +17,11 @@ from app.core.logger import logger
 ACCEPT_CONFIDENCE_THRESHOLD = 0.70
 LOW_CONFIDENCE_THRESHOLD = 0.40
 
+# Engineering intent ambiguity thresholds - lower thresholds for engineering tasks
+# to prevent accidental planner execution
+ENGINEERING_AMBIGUOUS_THRESHOLD = 0.60  # Lower than ACCEPT for engineering intents
+ENGINEERING_CONFIDENT_THRESHOLD = 0.75  # Higher threshold for confident engineering execution
+
 
 class IntentType(Enum):
     """Intent types for user messages."""
@@ -119,6 +124,9 @@ class IntentClassification:
     should_plan: bool = field(default=False)
     should_answer_directly: bool = field(default=False)
     should_include_runtime_context: bool = field(default=False)
+    # Additional context for ambiguity detection
+    original_message: str = field(default="", repr=False)
+    context: Dict[str, Any] = field(default_factory=dict, repr=False)
 
     def __post_init__(self):
         self.should_plan = self.intent.requires_planning
@@ -136,6 +144,37 @@ class IntentClassification:
         return LOW_CONFIDENCE_THRESHOLD <= self.confidence < ACCEPT_CONFIDENCE_THRESHOLD
 
     @property
+    def is_engineering_ambiguous(self) -> bool:
+        """Check if an engineering intent has ambiguous confidence.
+
+        Engineering intents need higher confidence to proceed to planning
+        to prevent accidental execution of unclear engineering tasks.
+        """
+        if not self.intent.is_engineering:
+            return False
+        return self.confidence < ENGINEERING_CONFIDENT_THRESHOLD
+
+    @property
+    def is_engineering_uncertain(self) -> bool:
+        """Check if an engineering intent is in the uncertain zone.
+
+        This is the zone where we should ask clarifying questions rather
+        than either executing or falling back to chat.
+        """
+        if not self.intent.is_engineering:
+            return False
+        return ENGINEERING_AMBIGUOUS_THRESHOLD <= self.confidence < ENGINEERING_CONFIDENT_THRESHOLD
+
+    @property
+    def should_clarify_engineering(self) -> bool:
+        """Whether to ask for clarification for an engineering intent.
+
+        Returns True for engineering intents that are uncertain but not
+        so low-confidence that they should fall back to general chat.
+        """
+        return self.is_engineering_uncertain
+
+    @property
     def is_control(self) -> bool:
         """Conversational control intent — short-circuit all other routing."""
         return self.intent.is_conversational_control
@@ -149,6 +188,12 @@ class IntentClassification:
             "should_plan": self.should_plan,
             "should_answer_directly": self.should_answer_directly,
             "should_include_runtime_context": self.should_include_runtime_context,
+            "is_low_confidence": self.is_low_confidence,
+            "is_ambiguous": self.is_ambiguous,
+            "is_engineering_ambiguous": self.is_engineering_ambiguous,
+            "is_engineering_uncertain": self.is_engineering_uncertain,
+            "should_clarify_engineering": self.should_clarify_engineering,
+            "is_control": self.is_control,
         }
 
     def __repr__(self) -> str:
@@ -421,6 +466,8 @@ class IntentClassifier:
             confidence=best_score,
             reason=reason,
             keywords=best_keywords,
+            original_message=message,
+            context=context or {},
         )
 
     def _score_intent(self, intent: IntentType, message: str) -> Tuple[float, List[str]]:
@@ -461,6 +508,20 @@ class IntentClassifier:
                 # Don't cap below pattern match scores
                 score = min(score + keyword_score, 1.0)
 
+        # Boost engineering intent base scores to make ambiguity zone reachable
+        # Without this, keyword-only matches for engineering intents are too low
+        if intent in (IntentType.TASK, IntentType.FILE_OPERATION, IntentType.CODE_TASK, IntentType.TOOL_REQUEST, IntentType.GIT_OPERATION):
+            # Don't boost if message contains question-type keywords
+            # that indicate a query rather than a task
+            question_keywords_in_message = any(kw in message for kw in [
+                "explain", "tell me", "describe", "what is", "what are", "how to", "how do",
+                "why is", "why are", "can you", "could you", "would you", "what means",
+                "who is", "when is", "where is", "which is"
+            ])
+            if not question_keywords_in_message and score > 0 and score < 0.6:
+                # Boost base score for engineering intents that have keywords but no pattern match
+                score = min(score * 2.0, 0.60)
+
         # Special case: ends with ? is likely a question
         if intent == IntentType.QUESTION and message.strip().endswith("?"):
             score = max(score, 0.85)
@@ -477,7 +538,63 @@ class IntentClassifier:
                     keywords.append(kw)
                     score = min(score + 0.08, 1.0)
 
+        # Engineering intent ambiguity detection
+        # Reduce confidence for vague/ambiguous engineering requests
+        if intent in (IntentType.TASK, IntentType.FILE_OPERATION, IntentType.CODE_TASK, IntentType.TOOL_REQUEST, IntentType.GIT_OPERATION):
+            score = self._adjust_engineering_confidence(intent, message, score, keywords)
+
         return (score, keywords)
+
+    def _adjust_engineering_confidence(self, intent: IntentType, message: str, base_score: float, keywords: List[str]) -> float:
+        """Adjust confidence for engineering intents based on request clarity.
+
+        This reduces confidence for vague engineering requests that lack
+        specific details (file paths, code, error messages, etc.).
+        """
+        adjusted_score = base_score
+
+        # Check for specific indicators that make an engineering request clear
+        has_file_path = bool(re.search(r'\b\w+\.(py|js|ts|jsx|tsx|java|cpp|cc|c|h|rs|go|rb|php|cs|kt|swift|scala|r|m|pl|sh|bash|zsh|fish|ps1|bat|cmd|dockerfile|makefile|cmake|gradle|xml|json|yaml|yml|toml|ini|cfg|conf|md|txt|html|css|scss|sass|less|vue|svelte)\b', message))
+        has_code_block = '```' in message
+        has_colon_action = ':' in message and len(message.split(':', 1)[-1].strip()) >= 10
+        has_error_traceback = bool(re.search(r'(traceback|error|exception|fail):', message, re.IGNORECASE))
+        has_specific_action = bool(re.search(r'\b(fix|debug|review|explain|optimize|refactor|implement|create|build|test|delete|clean|modify|change|edit|upgrade|add|remove)\b.*\b(to|for|by)\b', message, re.IGNORECASE))
+
+        # Git operations typically don't need additional context
+        if intent == IntentType.GIT_OPERATION:
+            return adjusted_score
+
+        # Tool requests like "run pytest" are typically self-contained
+        if intent == IntentType.TOOL_REQUEST:
+            if any(kw in message for kw in ["pytest", "test", "lint", "format", "build", "run"]):
+                return adjusted_score
+
+        # FILE_OPERATION needs a target file for most actions
+        if intent == IntentType.FILE_OPERATION:
+            if not has_file_path and not has_colon_action:
+                # Vague file operation - reduce confidence to engineering ambiguous zone
+                adjusted_score = min(adjusted_score, 0.65)
+
+        # CODE_TASK needs code, file path, or traceback
+        elif intent == IntentType.CODE_TASK:
+            if not has_file_path and not has_code_block and not has_error_traceback and not has_specific_action:
+                # Vague code task - reduce confidence to engineering ambiguous zone
+                adjusted_score = min(adjusted_score, 0.60)
+
+        # General TASK needs specific action + context
+        elif intent == IntentType.TASK:
+            fix_debug_keywords = ['fix', 'debug', 'review', 'explain', 'optimize', 'refactor', 'analyze', 'update', 'upgrade', 'modify', 'change', 'edit']
+            if any(kw in message for kw in fix_debug_keywords):
+                # These need code, file, or error context with SPECIFIC ACTION
+                if not has_code_block and not has_error_traceback and not has_colon_action and not has_specific_action and not has_file_path:
+                    # Vague fix/debug/review request - reduce confidence to engineering ambiguous zone
+                    adjusted_score = min(adjusted_score, 0.55)
+            else:
+                # Other TASK intents without specific context
+                if not has_file_path and not has_colon_action and not has_specific_action:
+                    adjusted_score = min(adjusted_score, 0.60)
+
+        return adjusted_score
 
     def is_task(self, message: str) -> bool:
         """Check if a message should trigger the planning pipeline.
@@ -562,9 +679,14 @@ def should_include_runtime_context(message: str) -> bool:
 
 
 def should_clarify(classification: IntentClassification) -> bool:
-    """Return True when the confidence is in the mid-band and a paraphrased
-    clarifying question should be asked instead of acting on the intent."""
-    return classification.is_ambiguous
+    """Return True when a clarifying question should be asked instead of acting on the intent.
+
+    This includes:
+    - General ambiguous confidence (mid-band)
+    - Engineering-specific uncertain confidence (engineering intents with
+      insufficient clarity for planning)
+    """
+    return classification.is_ambiguous or classification.should_clarify_engineering
 
 
 def is_low_confidence(classification: IntentClassification) -> bool:
@@ -579,3 +701,20 @@ def is_low_confidence(classification: IntentClassification) -> bool:
 def is_control_intent(classification: IntentClassification) -> bool:
     """Return True when the classification is a conversational control command."""
     return classification.is_control
+
+
+def is_engineering_uncertain(classification: IntentClassification) -> bool:
+    """Return True when an engineering intent has uncertain confidence.
+
+    These should trigger clarification rather than execution or fallback to chat.
+    """
+    return classification.is_engineering_uncertain
+
+
+def should_clarify_engineering(classification: IntentClassification) -> bool:
+    """Return True when an engineering intent should trigger clarification.
+
+    This is specifically for engineering intents that are uncertain but not
+    low-confidence enough to fall back to general chat.
+    """
+    return classification.should_clarify_engineering
