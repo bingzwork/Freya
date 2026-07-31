@@ -1,8 +1,7 @@
 # Freya Roadmap
 
 **Source of Truth:** Current Implementation
-**Version:** v0.4.x
-**Status:** Active Development
+**Last Updated:** 2026-07-31 (Memory System: Consolidation-LongTermMemory interface fixed)
 
 ---
 

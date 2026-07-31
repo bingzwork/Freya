@@ -270,7 +270,7 @@ Phase D: Polish (Low)
 | `working_memory` | Not yet tested | ⚠️ Needs tests |
 | `unified_retrieval` | Not yet tested | ⚠️ Needs tests |
 | `task_memory` | Not yet tested | ⚠️ Needs tests |
-| `long_term_memory` | Not yet tested | ⚠️ Needs tests |
+| `long_term_memory` | Not yet tested | ⚠️ Needs tests (interface compatibility with ConsolidationEngine fixed) |
 | `episodic_memory` | Not yet tested | ⚠️ Needs tests |
 | `semantic_memory` | Not yet tested | ⚠️ Needs tests |
 

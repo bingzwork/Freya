@@ -449,6 +449,32 @@ class LongTermMemory:
             self._save()
             return imported
 
+    def get_all(self) -> List[LongTermEntry]:
+        """Get all entries as a list.
+
+        Returns:
+            List of all LongTermEntry objects
+        """
+        with self._lock:
+            return list(self._entries.values())
+
+    def set_entry(self, entry: LongTermEntry) -> LongTermEntry:
+        """Set a LongTermEntry directly (for promotion from other memory systems).
+
+        Args:
+            entry: The LongTermEntry to store
+
+        Returns:
+            The stored LongTermEntry
+        """
+        with self._lock:
+            composite_key = self._make_key(entry.category, entry.key)
+            entry.entry_id = composite_key  # Ensure entry_id matches composite key
+            self._entries[composite_key] = entry
+            self._enforce_limit()
+            self._save()
+            return entry
+
     def __len__(self) -> int:
         return len(self._entries)
 

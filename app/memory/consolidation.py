@@ -565,7 +565,7 @@ class ConsolidationEngine:
         )
 
         try:
-            self.long_term_memory.set(ltm_entry)
+            self.long_term_memory.set_entry(ltm_entry)
             return True
         except Exception:
             return False
@@ -679,7 +679,7 @@ class ConsolidationEngine:
         )
 
         try:
-            self.long_term_memory.set(ltm_entry)
+            self.long_term_memory.set_entry(ltm_entry)
             return True
         except Exception:
             return False

@@ -2,7 +2,7 @@
 
 **Version:** v0.4.x
 
-**Last Updated:** 2026-07-31 (Software Engineering Knowledge 100%, Knowledge Retrieval 100%, Knowledge Extraction 100%, Goal Management 100%, Resource Management 70%, Long-Term Autonomy 60%, Planning Phase 5 complete)
+**Last Updated:** 2026-07-31 (Natural Conversation 100%, Software Engineering Knowledge 100%, Knowledge Retrieval 100%, Knowledge Extraction 100%, Goal Management 100%, Resource Management 70%, Long-Term Autonomy 60%, Planning Phase 5 complete, Memory System Consolidation interface fixed)
 
 **Purpose**
 
@@ -41,7 +41,7 @@ This document should always reflect the current state of the codebase.
 
 | Pillar | Status | Completion |
 |---------|--------|------------|
-| Natural Conversation & Intent Understanding | 🟢 MOSTLY COMPLETE | 90% |
+| Natural Conversation & Intent Understanding | ✅ COMPLETE | 100% |
 | Goal Management | ✅ COMPLETE | 100% |
 | Planning and Reasoning | 🟢 MOSTLY COMPLETE | 80% |
 | Memory System | ✅ COMPLETE | 95% |
@@ -74,14 +74,14 @@ This document should always reflect the current state of the codebase.
 
 Overall Completion
 
-~87%
+~88%
 
 Current Capability Summary
 
 | Status | Count |
 |--------|------:|
-| ✅ Complete | 50 |
-| 🟢 Mostly Complete | 3 |
+| ✅ Complete | 51 |
+| 🟢 Mostly Complete | 2 |
 | 🟡 Partial | 7 |
 | 🔵 Foundation | Multiple unwired subsystems |
 | ⚪ Not Implemented | Multiple capabilities |
@@ -102,6 +102,67 @@ The following work provides the highest impact because the implementation alread
 - Build the closed-loop self-improvement pipeline.
 - Add external knowledge acquisition.
 - Add additional LLM providers.
+
+---
+### Natural Conversation & Intent Understanding
+
+Status: ✅ COMPLETE (100%)
+
+**Implementation Date:** 2026-07-31
+
+**Core Components Implemented:**
+
+1. **Intent Classification** (`app/intent/classifier.py`)
+   - 8 intent types: CONVERSATIONAL_CONTROL, CHAT, QUESTION, TASK, FILE_OPERATION, CODE_TASK, SYSTEM_STATUS, TOOL_REQUEST, GIT_OPERATION
+   - Confidence scoring with ACCEPT=0.70, LOW=0.40 thresholds
+   - Keyword + pattern matching with follow-up context boosts
+   - Engineering-specific ambiguity thresholds (uncertain 0.60-0.75)
+
+2. **Better Ambiguity Detection** (`app/intent/classifier.py`)
+   - Engineering intents require higher confidence (ENGINEERING_CONFIDENT_THRESHOLD=0.75) to proceed to planning
+   - Confidence adjustment for vague requests lacking file paths, code blocks, or tracebacks
+   - Triggers clarifying questions for uncertain engineering intents (0.60-0.75 range) rather than fallback to chat
+   - Properties: `is_engineering_ambiguous`, `is_engineering_uncertain`, `should_clarify_engineering`
+
+3. **Conversational Control** (`app/conversational_control.py`)
+   - Centralized `ConversationControlHandler` for all meta-commands
+   - Commands: stop, halt, wait, cancel, nevermind, abort, pause, resume, undo, redo, status
+   - Planner integration: `start_execution`, `before_task`, `after_task`, `finish_execution`, `check_stop_requested`, `wait_if_paused`
+   - Thread-safe with RLock, stop/pause/resume events
+   - Cross-session persistence of undo/redo stacks (max 50 entries)
+
+4. **Multi-Step Undo/Redo** (`app/conversational_control.py`)
+   - Persistent undo/redo stacks with cross-session restoration
+   - Restores planner state (task statuses, completed tasks, current task)
+   - Restores conversation history (removes/re-adds assistant + user turn pairs)
+   - Automatic persistence to `data/memory/conversation_control.json`
+
+5. **Long-Term Conversation Summarization** (`app/memory/conversation_memory.py`)
+   - Auto-summarizes at 40-turn threshold
+   - Preserves: key topics, decisions, facts, active goals, unfinished tasks, user preferences
+   - Extracts via keyword patterns and regex from conversation text
+   - Injects summaries into LLM prompts via `get_history_with_summaries()`
+   - Cross-session persistence to `data/memory/conversation_summaries.json`
+   - Maximum 10 summaries retained
+
+6. **Conversation Memory** (`app/memory/conversation_memory.py`)
+   - Rolling window: minimum 20 turns, maximum 50 turns, 16000 characters
+   - Entity extraction for reference resolution (files, functions, classes, variables, errors, code)
+   - Reference resolution for "it", "that file", "the previous function", etc.
+   - Disk persistence with atomic writes
+
+7. **Plaing English Response System** (`app/capabilities/handlers.py` + `app/formatter.py`)
+   - Translates 115+ technical terms to everyday language
+   - Masks all internal field names as `[internal]`
+   - Conversational tone, brevity, user-goal framing
+
+**Integration Points:**
+- `FreyaAgent` initializes `ConversationControlHandler` and registers executor callback
+- `Executor` checks stop/pause before and after each task
+- `IntentClassifier.classify()` returns `IntentClassification` with engineering ambiguity properties
+- `ConversationMemory` auto-summarizes and injects context
+
+**Tests:** 165 conversation-related tests passing (`tests/test_conversation.py`, `tests/test_intent_classifier.py`, `tests/test_conversation_memory.py`)
 
 ---
 ### Decision Making
