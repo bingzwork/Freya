@@ -2,7 +2,7 @@
 
 **Version:** v0.4.x
 
-**Last Updated:** 2026-07-31 (Natural Conversation 100%, Software Engineering Knowledge 100%, Knowledge Retrieval 100%, Knowledge Extraction 100%, Goal Management 100%, Resource Management 70%, Long-Term Autonomy 60%, Planning Phase 5 complete, Memory System Consolidation interface fixed)
+**Last Updated:** 2026-08-01 (Natural Conversation 100%, Software Engineering Knowledge 100%, Knowledge Retrieval 100%, Knowledge Extraction 100%, Goal Management 100%, Resource Management 70%, Long-Term Autonomy 60%, Planning Phase 5 complete, Memory System Consolidation interface fixed, Multiple Solution Evaluation + Risk/Difficulty Scoring + Human Plan Review implemented)
 
 **Purpose**
 
@@ -163,6 +163,110 @@ Status: ✅ COMPLETE (100%)
 - `ConversationMemory` auto-summarizes and injects context
 
 **Tests:** 165 conversation-related tests passing (`tests/test_conversation.py`, `tests/test_intent_classifier.py`, `tests/test_conversation_memory.py`)
+
+---
+### Planning & Reasoning
+
+Status: 🟢 MOSTLY COMPLETE (80%)
+
+**Core Components Implemented:**
+
+1. **Structured Plan Generation** (`app/planner/planner.py`, `app/agent/planner.py`)
+   - `Planner.create_plan()` → flat JSON plan (max 5 steps) via single LLM call
+   - Task-specific engineering templates: Build, Debug/Fix, Refactor, Create/Implement, Review, Test, Optimize
+   - Intent-aware handling returns `{"steps": []}` for non-engineering requests
+
+2. **Plan Execution** (`app/planner/executor.py`)
+   - `Executor.execute_plan()` runs up to 8 steps
+   - Each step maps to a tool (`_map_step_to_tool`) with LLM fallback (`_select_tool_with_llm`)
+   - Mutating tools permission-gated via `permission_prompt`
+
+3. **Memory & Learning Integration**
+   - Top-3 `memory.search(task, limit=3)` hits injected as "Relevant past experience"
+   - `Planner._build_lessons_context()` injects severity-filtered PATTERN lessons
+   - `Executor._build_pre_execute_lessons_block()` + `_log_anti_pattern_hints()` surface lessons in LLM fallback and after failed steps
+   - `FreyaAgent.run()` reads matching `ExperienceMemory` into "Past Experiences" for post-execute prompt
+   - `FreyaAgent.repair()` surfaces matching ANTI_PATTERN lessons on retries
+
+4. **Iterative Solve Loop** (`app/agent/core_agent.py`)
+   - `FreyaAgent.solve()` repeatedly calls `planner.create_plan()` + `apply_and_verify()` until success or `max_iterations`
+
+5. **PlanManager (Phase 1)** (`app/planner/plan_manager.py`)
+   - Single source of truth for plans
+   - `Planner.create_plan()` populates `Plan` object with tasks
+   - `Executor.execute_plan()` consumes `Plan` object
+   - Backward compatibility with dict plans maintained
+
+6. **Task Graph (Phase 2)** (`app/planner/task_graph.py`)
+   - `TaskGraph` with `TaskNode` and `DependencyEdge`
+   - Sequential dependencies: `Planner.create_plan()` adds `step i+1 → step i` edges
+   - Cycle detection via `CycleDetectedError`
+   - `Plan.validate_graph()` and `Plan.get_task_graph()` methods
+   - `Executor.execute_plan()` uses `TaskGraph.topological_sort()` for execution order
+
+7. **Scheduler (Phase 3)** (`app/planner/scheduler.py`)
+   - Strategies: ASAP, PRIORITY_FIRST, Longest-Duration-First, Deadline-Aware, Resource-Optimized
+   - Integrated into `Executor.execute_plan()`
+   - Tasks scheduled in dependency-correct topological order
+   - ASAP and PRIORITY_FIRST strategies wired and functional
+
+8. **Resource Allocator (Phase 3)** (`app/planner/resource_allocator.py`)
+   - Default MACHINE and TOOL resources initialized in `Executor.__init__`
+   - Tasks allocate required resources before execution, release after
+   - Linear step loop replaced with scheduler-driven execution respecting `ScheduleItem` order
+
+9. **Progress Tracker (Phase 4)** (`app/planner/progress_tracker.py`)
+   - `ProgressSnapshot` emitted after each task transition (`PENDING → READY → IN_PROGRESS → COMPLETED/FAILED`)
+   - Export methods for diagnostics (`export_for_diagnostics`), monitoring (`export_for_monitoring`), backlog (`export_for_backlog`)
+   - `PlanManager` exposes `get_progress_for_diagnostics()`, `get_progress_for_monitoring()`, `get_progress_for_backlog()`, `get_all_active_progress()`
+   - `FreyaAgent` stores last execution progress in `last_execution_progress` with `get_last_execution_progress()`
+
+10. **Adaptive Replanning (Phase 5)** (`app/planner/task_graph.py`, `app/planner/plan_manager.py`, `app/agent/core_agent.py`)
+    - `TaskGraph.get_affected_subgraph(failed_task_id)` — identifies failed task + all transitive dependents via BFS
+    - `TaskGraph.invalidate_subgraph(task_ids)` — marks affected tasks FAILED, clears execution state
+    - `TaskGraph.add_tasks_with_dependencies(tasks, parent_task_ids)` — adds replacement tasks with proper edges
+    - `Plan.get_completed_task_ids()` — preserves COMPLETED tasks across replans
+    - `Plan.invalidate_from_failure(failed_task_id)` — wraps TaskGraph invalidation
+    - `Plan.add_replacement_tasks(new_tasks, parent_task_ids)` — adds replacement tasks to plan and graph
+    - `Plan.replan_after_failure(failed_task_id, context)` — orchestrates full adaptive replan cycle
+    - `Executor.execute_plan_partial(plan, ..., incomplete_only=True)` — runs only non-COMPLETED tasks
+    - `FreyaAgent._replan_after_failure()` — generates replacement tasks via LLM, preserves COMPLETED, emits ProgressTracker replanning events
+    - `FreyaAgent.solve()` and `run_active_goal()` rewritten with adaptive replanning loop (incremental, not restart-from-scratch)
+
+11. **Multiple Solution Evaluation** (`app/agent/planner.py`)
+    - Generating multiple candidate plans when beneficial (e.g., complex tasks)
+    - Scoring each plan based on risk and difficulty
+    - Automatically selecting the best plan
+    - Logging the reason for selection
+
+12. **Risk/Difficulty Scoring on Plans** (`app/agent/planner.py`)
+    - Each plan includes a risk score (0.0 to 1.0) based on task characteristics
+    - Each plan includes a difficulty score (0.0 to 1.0) based on number of steps and estimated hours
+    - Scores are computed using simple heuristics
+
+13. **Human Plan Review/Modify/Reject** (`app/agent/core_agent.py`)
+    - Integrated into `FreyaAgent.run()` method
+    - Presents plan to user for review before execution
+    - Allows user to:
+      - ✅ Approve/reject plans
+      - ✏️ Edit step titles and descriptions
+      - ⏪ Reorder plan steps
+      - ❌ Remove specific steps
+      - 🔄 Regenerate entirely new plans
+      - 🔍 View detailed step information
+    - Integrated with conversation control system for state management
+    - Preserves plan state and supports undo/redo functionality
+
+**Partially Implemented:**
+- **Plan Visualizer** — `app/planner/plan_visualizer.py` exists but not exposed in runtime/diagnostics
+- **Auto Task Decomposition** — Sequential deps created; basic parent/child but no automatic subtask breakdown for complex steps
+
+**Missing:**
+- **Reasoning Transparency** — Plain-English rationale for each step and plan selection
+- **Planning Horizon Classification** — Short/medium/long-horizon policies instead of fixed 5-step cap
+- **Long-horizon / Downstream Forecasting** — Anticipating cross-cutting changes 2-3 steps ahead
+
+**Tests:** `tests/test_planner.py`, `tests/test_planner_agent.py` — all passing
 
 ---
 ### Decision Making

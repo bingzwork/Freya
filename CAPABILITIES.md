@@ -2,7 +2,7 @@
 
 > **Master Capability Map** — Single source of truth for every implemented, partially implemented, and planned capability across all pillars.
 >
-> **Version:** v0.4.x | **Last Updated:** 2026-07-31 | **Overall Completion:** ~88%
+> **Version:** v0.4.x | **Last Updated:** 2026-08-01 | **Overall Completion:** ~88%
 
 ---
 
@@ -162,7 +162,7 @@
 
 ### 4. Planning & Reasoning
 
-**Status:** 🟢 MOSTLY COMPLETE (80%) **Priority:** ⭐⭐⭐⭐⭐ Critical **Last Updated:** 2026-07-30
+**Status:** 🟢 MOSTLY COMPLETE (80%) **Priority:** ⭐⭐⭐⭐⭐ Critical **Last Updated:** 2026-08-01
 
 | Capability | Status | Completion | Notes |
 |------------|--------|-----------|-------|
@@ -179,10 +179,10 @@
 | Resource Allocator (Phase 3) | ✅ Complete | 100% | Default MACHINE/TOOL/GPU resources; allocate per task, release after |
 | Progress Tracker (Phase 4) | ✅ Complete | 100% | `ProgressSnapshot` on every PENDING→READY→IN_PROGRESS→COMPLETED/FAILED; exports for diagnostics/monitoring/backlog |
 | Adaptive Replanning (Phase 5) | ✅ Complete | 100% | `_replan_after_failure()` uses `TaskGraph.get_affected_subgraph()` + `invalidate_subgraph()` + replacement tasks preserving COMPLETED; `execute_plan_partial()` runs only incomplete; integrated in `solve()` and `run_active_goal()` |
-| Multiple Solution Evaluation | ❌ Not Implemented | 0% | Single LLM plan; no alternative generation/comparison |
-| Difficulty / Risk Scoring | ❌ Not Implemented | 0% | Risk/confidence modules exist elsewhere, not on plans |
+| Multiple Solution Evaluation | 🟢 Mostly Complete | 80% | `Planner.create_plan()` generates 2 candidate plans, scores by risk/difficulty, selects best (`app/agent/planner.py`) |
+| Difficulty / Risk Scoring | 🟢 Mostly Complete | 80% | `_assess_plan_risk_and_difficulty()` computes risk (task category + tool implications) and difficulty (task count + hours); stored on `Plan.risk_score` / `Plan.difficulty` |
 | Reasoning Transparency | ❌ Not Implemented | 0% | Plan rationale not surfaced in plain language |
-| Human Plan Review | ❌ Not Implemented | 0% | Tool-level approval exists; plan-level review/reject/reorder not implemented |
+| Human Plan Review | 🟢 Mostly Complete | 95% | `FreyaAgent._review_plan_with_user()` with approve/reject/edit/reorder/remove/regenerate/details; integrated into `run()` pipeline (`app/agent/core_agent.py:1487-1986`) |
 | Planning Horizon Classification | ❌ Not Implemented | 0% | All tasks use 5-step cap |
 
 **Test Coverage:** `tests/test_planner.py`, `tests/test_planner_agent.py` — all passing
