@@ -2,7 +2,7 @@
 
 > **Master Capability Map** — Single source of truth for every implemented, partially implemented, and planned capability across all pillars.
 >
-> **Version:** v0.4.x | **Last Updated:** 2026-07-31 | **Overall Completion:** ~87%
+> **Version:** v0.4.x | **Last Updated:** 2026-07-31 | **Overall Completion:** ~88%
 
 ---
 
@@ -26,7 +26,7 @@
 
 | # | Pillar | Status | Completion | Key Files |
 |---|--------|--------|------------|-----------|
-| 1 | [Natural Conversation & Intent Understanding](#1-natural-conversation--intent-understanding) | 🟢 Mostly Complete | 90% | `app/intent/`, `app/capabilities/handlers.py`, `app/agent/core_agent.py` |
+| 1 | [Natural Conversation & Intent Understanding](#1-natural-conversation--intent-understanding) | ✅ Complete | 100% | `app/intent/`, `app/capabilities/handlers.py`, `app/agent/core_agent.py`, `app/conversational_control.py`, `app/memory/conversation_memory.py` |
 | 2 | [Goal Management](#2-goal-management) | ✅ Complete | 100% | `app/memory/goals.py`, `app/agent/core_agent.py` |
 | 3 | [Memory System](#3-memory-system) | ✅ Core Complete | 85% | `app/memory/`, `app/vector_db/`, `app/intelligence/knowledge_base.py` |
 | 4 | [Planning & Reasoning](#4-planning--reasoning) | 🟢 Mostly Complete | 80% | `app/planner/`, `app/agent/core_agent.py`, `app/verification/repair_loop.py` |
@@ -66,7 +66,7 @@
 
 ### 1. Natural Conversation & Intent Understanding
 
-**Status:** 🟢 MOSTLY COMPLETE (90%) **Priority:** ⭐⭐⭐⭐⭐ Critical **Last Updated:** 2026-07-28
+**Status:** ✅ COMPLETE (100%) **Priority:** ⭐⭐⭐⭐⭐ Critical **Last Updated:** 2026-07-31
 
 | Capability | Status | Completion | Notes |
 |------------|--------|-----------|-------|
@@ -75,17 +75,24 @@
 | Runtime Context | ✅ Complete | 100% | OS, shell, Python, env, workspace injected into prompts (`app/intent/runtime_context.py`) |
 | Conversation History | ✅ Complete | 100% | Multi-turn, disk persistence, LLM prompt injection (`app/memory/conversation_memory.py`) |
 | Direct Answer Routing | ✅ Complete | 100% | Greetings, knowledge Qs, system status → no LLM call |
-| Conversational Control | 🟡 Partial | 90% | stop/cancel/undo/redo/status centralized in `ConversationalControlHandler`; in-flight planner cancel not yet hooked |
+| Conversational Control | ✅ Complete | 100% | stop/cancel/pause/resume/undo/redo/status centralized in `ConversationalControlHandler` with planner interrupt integration (`app/conversational_control.py`) |
 | Greeting Handling | ✅ Complete | 100% | Direct response, no LLM |
 | Knowledge Question Handling | ✅ Complete | 100% | Answers from context/memory without planning |
 | System Status Detection | ✅ Complete | 100% | Runtime info (Python version, disk, etc.) |
 | Engineering Task Detection | ✅ Complete | 100% | Routes to planner for code/file/git tasks |
+| Statistical Intent Classification | ✅ Complete | 100% | Keyword/pattern confidence scoring, follow-up context boosts |
+| Entity Extraction & Slot Filling | ✅ Complete | 100% | Regex + keyword extraction for paths, URLs, functions, errors, code; LLM fallback |
+| Multi‑Intent Detection | ✅ Complete | 100% | Splits compound requests (conjunction, semicolon, sentence, keyword) and orders them |
+| User Preference Learning | ✅ Complete | 100% | Captures preferences from conversation, persists cross-session |
+| Plain English Response System | ✅ Complete | 100% | Translates 115+ technical terms; masks internal fields |
+| **Multi-Step Undo/Redo (Cross-Session)** | ✅ Complete | 100% | Persistent stacks (50 entries), restores planner state + conversation history (`app/conversational_control.py`) |
+| **Better Ambiguity Detection (Engineering)** | ✅ Complete | 100% | Engineering-specific thresholds (uncertain 0.60-0.75), confidence adjustment for vague requests, clarification triggers |
+| **Long-Term Conversation Summarization** | ✅ Complete | 100% | Auto-summarizes at 40 turns, preserves topics/decisions/facts/goals/tasks/preferences, injects into prompts (`app/memory/conversation_memory.py`) |
+| **Identity System (Permanent Identity)** | ✅ Complete | 100% | Immutable `FreyaIdentity` injected into every system prompt; enforces name="Freya", creator="Don Alvin Jalop", owner="Don Alvin Jalop"; reports runtime model (`app/identity.py`) |
+| **Arrow-Key Terminal Approval UI** | ✅ Complete | 100% | Inline terminal menu with Up/Down/Enter/ESC navigation; cross-platform (Windows/Unix); no external dialog libraries; backward-compatible `PermissionMenu` API (`app/ui/permission_menu.py`) |
 
 **Missing / Future:**
-- Statistical intent classification
-- Entity extraction & slot filling
-- Multi-intent detection
-- User preference learning
+- Voice-style & Accessibility Enhancements (SSML, screen-reader cues, adjustable verbosity)
 
 ---
 
@@ -719,8 +726,8 @@ Diagnostics → Risk Analysis → Improvement Backlog → Planning → Patch Gen
 
 | Status | Count |
 |--------|------:|
-| ✅ Complete | 50 |
-| 🟢 Mostly Complete | 3 |
+| ✅ Complete | 51 |
+| 🟢 Mostly Complete | 2 |
 | 🟡 Partial | 7 |
 | 🔵 Foundation | Multiple (unwired subsystems) |
 | ⚪ Not Implemented | Multiple capabilities |

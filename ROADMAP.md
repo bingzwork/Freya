@@ -1,7 +1,7 @@
 # Freya Roadmap
 
 **Source of Truth:** Current Implementation
-**Last Updated:** 2026-07-31 (Memory System: Consolidation-LongTermMemory interface fixed)
+**Last Updated:** 2026-07-31 (Identity System + Arrow-Key Terminal Approval UI complete)
 
 ---
 
@@ -23,7 +23,7 @@ The codebase already contains mature foundation modules across planning, memory,
 
 | Area                            | Status                         |
 | ------------------------------- | ------------------------------ |
-| Natural Conversation            | Mostly Complete                |
+| Natural Conversation            | **Complete** (with Identity System & Arrow-Key UI) |
 | Goal Management                 | Complete (Phases 1–8)          |
 | Memory System                   | Core Modules Complete (85% Overall) |
 | Planning and Reasoning          | Phase 5 Complete (Adaptive Replanning wired) |
@@ -36,7 +36,7 @@ The codebase already contains mature foundation modules across planning, memory,
 | Safe Self Improvement           | Partial                        |
 | Task Scheduling                 | Complete (ASAP, PRIORITY_FIRST)                       |
 | Knowledge Base                  | Complete (Project Scope)       |
-| Software Engineering Knowledge  | Not Implemented                |
+| Software Engineering Knowledge  | **Complete** (100%)            |
 | Tool Ecosystem                  | Complete                       |
 | Business Productivity           | Minimal                        |
 | Creative Media                  | Not Implemented                |
