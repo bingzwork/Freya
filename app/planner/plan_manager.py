@@ -15,7 +15,8 @@ from app.planner.task import Task, TaskStatus, TaskPriority, TaskCategory, Plann
 from app.planner.task_graph import TaskGraph, CycleDetectedError
 from app.planner.scheduler import Scheduler, Schedule, SchedulingStrategy
 from app.planner.resource_allocator import ResourceAllocator, Resource, ResourceType
-from app.planner.progress_tracker import ProgressTracker
+from app.planner.progress_tracker import ProgressTracker, ProgressSnapshot
+from app.planner.plan_visualizer import PlanVisualizer, VisualizationOptions
 
 
 @dataclass
@@ -1070,3 +1071,87 @@ class PlanManager:
             "monitoring": self._active_plan._tracker.export_for_monitoring(),
             "backlog": self._active_plan._tracker.export_for_backlog(),
         }
+
+    # Plan Visualization methods
+
+    def visualize_plan_graph(self, plan_id: str, options: Optional[VisualizationOptions] = None) -> Optional[str]:
+        """Generate a text-based visualization of the task dependency graph for a plan."""
+        plan = self._plans.get(plan_id)
+        if not plan or not plan._graph:
+            return None
+        visualizer = PlanVisualizer(options)
+        return visualizer.visualize_graph(plan._graph)
+
+    def visualize_plan_schedule(self, plan_id: str, options: Optional[VisualizationOptions] = None) -> Optional[str]:
+        """Generate a Gantt chart visualization of the schedule for a plan."""
+        plan = self._plans.get(plan_id)
+        if not plan:
+            return None
+        schedule = self.get_schedule(plan_id)
+        if not schedule:
+            return None
+        visualizer = PlanVisualizer(options)
+        tasks_dict = {task.id: task for task in plan.tasks}
+        return visualizer.visualize_schedule(schedule, tasks_dict)
+
+    def visualize_plan_progress(self, plan_id: str, options: Optional[VisualizationOptions] = None) -> Optional[str]:
+        """Generate a progress visualization for a plan."""
+        plan = self._plans.get(plan_id)
+        if not plan:
+            return None
+        visualizer = PlanVisualizer(options)
+        return visualizer.visualize_progress(plan._tracker)
+
+    def visualize_plan_burndown(self, plan_id: str, options: Optional[VisualizationOptions] = None) -> Optional[str]:
+        """Generate a burndown chart visualization for a plan."""
+        plan = self._plans.get(plan_id)
+        if not plan:
+            return None
+        visualizer = PlanVisualizer(options)
+        return visualizer.visualize_burndown(plan._tracker)
+
+    def generate_plan_mermaid_graph(self, plan_id: str, options: Optional[VisualizationOptions] = None) -> Optional[str]:
+        """Generate a Mermaid.js compatible graph visualization for a plan."""
+        plan = self._plans.get(plan_id)
+        if not plan or not plan._graph:
+            return None
+        visualizer = PlanVisualizer(options)
+        return visualizer.generate_mermaid_graph(plan._graph)
+
+    def generate_plan_mermaid_gantt(self, plan_id: str, options: Optional[VisualizationOptions] = None) -> Optional[str]:
+        """Generate a Mermaid.js compatible Gantt chart for a plan."""
+        plan = self._plans.get(plan_id)
+        if not plan:
+            return None
+        schedule = self.get_schedule(plan_id)
+        if not schedule:
+            return None
+        visualizer = PlanVisualizer(options)
+        tasks_dict = {task.id: task for task in plan.tasks}
+        return visualizer.generate_mermaid_gantt(schedule, tasks_dict)
+
+    def get_plan_json(self, plan_id: str) -> Optional[Dict[str, Any]]:
+        """Get JSON representation of a plan's task graph."""
+        plan = self._plans.get(plan_id)
+        if not plan or not plan._graph:
+            return None
+        visualizer = PlanVisualizer()
+        return visualizer.generate_json(plan._graph)
+
+    def get_schedule_json(self, plan_id: str) -> Optional[Dict[str, Any]]:
+        """Get JSON representation of a plan's schedule."""
+        plan = self._plans.get(plan_id)
+        if not plan:
+            return None
+        schedule = self.get_schedule(plan_id)
+        if not schedule:
+            return None
+        visualizer = PlanVisualizer()
+        return visualizer.generate_schedule_json(schedule)
+
+    def get_plan_explanation(self, plan_id: str) -> Optional[str]:
+        """Get a plain-English explanation of the plan."""
+        plan = self._plans.get(plan_id)
+        if not plan:
+            return None
+        return plan.explain()

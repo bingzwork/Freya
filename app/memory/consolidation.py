@@ -25,6 +25,7 @@ from app.memory.experience_memory import ExperienceMemory, ExperienceEntry
 from app.memory.engineering_lessons import EngineeringLessonStorage, EngineeringLesson
 from app.memory.long_term_memory import LongTermMemory, LongTermEntry
 from app.memory.project_memory import ProjectMemory
+from app.memory.forgetting import ArchivalStorage
 
 
 class ConsolidationTrigger(Enum):
@@ -95,6 +96,9 @@ class ConsolidationStats:
     # Project Memory stats
     project_entries_scanned: int = 0
     project_entries_archived: int = 0
+
+    # Archive file tracking
+    archived_files: List[str] = field(default_factory=list)
 
     # Duplicate detection
     duplicates_detected: int = 0
@@ -291,6 +295,7 @@ class ConsolidationEngine:
         project_memory: Optional[ProjectMemory] = None,
         config: Optional[ConsolidationConfig] = None,
         storage_path: str = "data/memory/consolidation_state.json",
+        archive_dir: str = "data/memory/archive",
     ):
         """Initialize the consolidation engine.
 
@@ -301,6 +306,7 @@ class ConsolidationEngine:
             project_memory: ProjectMemory instance (source for archival)
             config: ConsolidationConfig (uses defaults if None)
             storage_path: Path to persist consolidation state
+            archive_dir: Directory for archived entries
         """
         self.experience_memory = experience_memory
         self.engineering_lessons = engineering_lessons
@@ -319,6 +325,7 @@ class ConsolidationEngine:
         # Components
         self.scorer = ImportanceScorer(self.config)
         self.duplicate_detector = DuplicateDetector(self.config.duplicate_similarity_threshold)
+        self.archive = ArchivalStorage(archive_dir)
 
         # Load state
         self._load_state()
@@ -451,7 +458,7 @@ class ConsolidationEngine:
             return 0
 
         now = datetime.now(timezone.utc)
-        all_entries = self.experience_memory.get_all()
+        all_entries = self.experience_memory.all()
 
         # Score all entries
         scored_entries = []
@@ -576,7 +583,7 @@ class ConsolidationEngine:
             return 0
 
         now = datetime.now(timezone.utc)
-        all_lessons = self.engineering_lessons.get_all()
+        all_lessons = self.engineering_lessons.all()
 
         # Score all lessons
         scored_lessons = []
@@ -695,17 +702,14 @@ class ConsolidationEngine:
             return 0
 
     def _archive_project_entries(self, stats: ConsolidationStats) -> int:
-        """Archive old project memory entries (mark for archival, not delete).
-
-        Note: ProjectMemory uses vector DB and JSON. We'll add an 'archived' tag
-        to old entries rather than deleting them, to preserve search capability.
-        """
+        """Archive old project memory entries to compressed archive files."""
         if not self.project_memory:
             return 0
 
         now = datetime.now(timezone.utc)
         cutoff_date = now - timedelta(days=self.config.archive_after_days)
         archived = 0
+        to_archive = []
 
         try:
             entries = self.project_memory.search("", limit=10000)
@@ -713,58 +717,93 @@ class ConsolidationEngine:
                 try:
                     entry_time = datetime.fromisoformat(entry.get("timestamp", "").replace('Z', '+00:00'))
                     if entry_time < cutoff_date:
-                        # Mark as archived by adding tag (would need ProjectMemory support)
-                        # For now, we just count
+                        # Add archive metadata
+                        entry_dict = dict(entry)
+                        entry_dict["_archived_at"] = now.isoformat()
+                        entry_dict["_memory_type"] = "project"
+                        to_archive.append(entry_dict)
                         archived += 1
                 except Exception:
                     continue
+
+            # Actually archive to file
+            if to_archive:
+                archive_path = self.archive.archive_entries("project", to_archive)
+                if archive_path:
+                    stats.archived_files.append(archive_path)
+
         except Exception as e:
             stats.errors.append(f"Project archival failed: {e}")
 
         return archived
 
     def _archive_old_experiences(self, stats: ConsolidationStats) -> int:
-        """Archive old, low-access experiences."""
+        """Archive old, low-access experiences to compressed archive files."""
         if not self.experience_memory:
             return 0
 
         now = datetime.now(timezone.utc)
         cutoff_date = now - timedelta(days=self.config.archive_after_days)
         archived = 0
+        to_archive = []
 
         try:
-            all_entries = self.experience_memory.get_all()
+            all_entries = self.experience_memory.all()
             for entry in all_entries:
                 try:
                     entry_time = datetime.fromisoformat(entry.timestamp.replace('Z', '+00:00'))
                     if entry_time < cutoff_date and entry.access_count < 2:
-                        # Could move to archive file or just mark
+                        # Convert to dict for archival
+                        entry_dict = entry.to_dict()
+                        entry_dict["_archived_at"] = now.isoformat()
+                        entry_dict["_memory_type"] = "experience"
+                        to_archive.append(entry_dict)
                         archived += 1
                 except Exception:
                     continue
+
+            # Actually archive to file
+            if to_archive:
+                archive_path = self.archive.archive_entries("experience", to_archive)
+                if archive_path:
+                    stats.archived_files.append(archive_path)
+
         except Exception as e:
             stats.errors.append(f"Experience archival failed: {e}")
 
         return archived
 
     def _archive_old_lessons(self, stats: ConsolidationStats) -> int:
-        """Archive old, low-access lessons."""
+        """Archive old, low-access lessons to compressed archive files."""
         if not self.engineering_lessons:
             return 0
 
         now = datetime.now(timezone.utc)
         cutoff_date = now - timedelta(days=self.config.archive_after_days)
         archived = 0
+        to_archive = []
 
         try:
-            all_lessons = self.engineering_lessons.get_all()
+            all_lessons = self.engineering_lessons.all()
             for lesson in all_lessons:
                 try:
                     entry_time = datetime.fromisoformat(lesson.timestamp.replace('Z', '+00:00'))
                     if entry_time < cutoff_date and lesson.access_count < 2:
+                        # Convert to dict for archival
+                        entry_dict = lesson.to_dict()
+                        entry_dict["_archived_at"] = now.isoformat()
+                        entry_dict["_memory_type"] = "lesson"
+                        to_archive.append(entry_dict)
                         archived += 1
                 except Exception:
                     continue
+
+            # Actually archive to file
+            if to_archive:
+                archive_path = self.archive.archive_entries("lesson", to_archive)
+                if archive_path:
+                    stats.archived_files.append(archive_path)
+
         except Exception as e:
             stats.errors.append(f"Lesson archival failed: {e}")
 
@@ -806,6 +845,7 @@ def create_consolidation_engine(
     project_memory: Optional[ProjectMemory] = None,
     config: Optional[ConsolidationConfig] = None,
     storage_path: str = "data/memory/consolidation_state.json",
+    archive_dir: str = "data/memory/archive",
 ) -> ConsolidationEngine:
     """Factory function to create ConsolidationEngine with sensible defaults."""
     return ConsolidationEngine(
@@ -815,4 +855,5 @@ def create_consolidation_engine(
         project_memory=project_memory,
         config=config,
         storage_path=storage_path,
+        archive_dir=archive_dir,
     )

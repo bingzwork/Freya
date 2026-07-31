@@ -1,0 +1,1 @@
+# Freya AI - Core Package

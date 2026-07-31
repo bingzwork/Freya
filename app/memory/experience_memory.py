@@ -31,6 +31,10 @@ class ExperienceEntry:
     metadata: Dict[str, Any] = field(default_factory=dict)
     timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     sequence: int = 0  # Monotonically increasing sequence number for ordering
+    # Fields needed by ConsolidationEngine
+    access_count: int = 0
+    code_snippet: Optional[str] = None
+    source: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert entry to dictionary for serialization."""
@@ -165,6 +169,8 @@ class ExperienceMemory:
         outcome: str = "neutral",
         confidence: float = 0.0,
         metadata: Optional[Dict[str, Any]] = None,
+        code_snippet: Optional[str] = None,
+        source: Optional[str] = None,
     ) -> ExperienceEntry:
         """Store a new experience entry.
 
@@ -176,6 +182,8 @@ class ExperienceMemory:
             outcome: Outcome classification ("positive", "negative", "neutral")
             confidence: Confidence level (0.0 to 1.0)
             metadata: Additional metadata to store with the experience
+            code_snippet: Optional code snippet related to the experience
+            source: Optional source identifier (e.g., "consolidation", "user", "agent")
 
         Returns:
             The created ExperienceEntry
@@ -192,6 +200,8 @@ class ExperienceMemory:
                 confidence=max(0.0, min(1.0, confidence)),
                 metadata=metadata or {},
                 sequence=self._sequence_counter,
+                code_snippet=code_snippet,
+                source=source,
             )
 
             # Add to storage

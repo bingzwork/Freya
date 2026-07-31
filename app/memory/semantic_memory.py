@@ -273,7 +273,7 @@ class SemanticMemory:
                     category_str = str(category)
 
                 entry = SemanticEntry(
-                    entry_id=self._generate_entry_id(),
+                    entry_id=composite_key,  # Use composite key as entry ID for consistent lookup
                     category=category_str,
                     title=title,
                     content=content,

@@ -55,6 +55,10 @@ class EngineeringLesson:
     timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     sequence: int = 0
+    # Fields needed by ConsolidationEngine
+    confidence: float = 0.0
+    access_count: int = 0
+    code_example: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert lesson to dictionary for serialization."""
@@ -213,6 +217,8 @@ class EngineeringLessonStorage:
         related_ids: Optional[List[str]] = None,
         context: Optional[Dict[str, Any]] = None,
         rationale: str = "",
+        confidence: float = 0.0,
+        code_example: Optional[str] = None,
     ) -> EngineeringLesson:
         """Store a new engineering lesson.
 
@@ -227,6 +233,8 @@ class EngineeringLessonStorage:
             related_ids: IDs of related lessons
             context: Context in which this lesson applies
             rationale: Why this lesson exists
+            confidence: Confidence level (0.0 to 1.0)
+            code_example: Optional single code example (for consolidation engine)
 
         Returns:
             The created EngineeringLesson
@@ -254,6 +262,8 @@ class EngineeringLessonStorage:
                 timestamp=now,
                 updated_at=now,
                 sequence=self._sequence_counter,
+                confidence=max(0.0, min(1.0, confidence)),
+                code_example=code_example,
             )
 
             # Add to storage

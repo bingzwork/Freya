@@ -481,6 +481,11 @@ class LongTermMemory:
     def is_empty(self) -> bool:
         return len(self._entries) == 0
 
+    def count(self) -> int:
+        """Get the total number of entries."""
+        with self._lock:
+            return len(self._entries)
+
 
 def create_long_term_memory(
     workspace: Optional[str] = None,

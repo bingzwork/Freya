@@ -40,6 +40,7 @@ from app.memory.consolidation import ConsolidationEngine, create_consolidation_e
 from app.memory.forgetting import ForgettingEngine, create_forgetting_engine
 from app.memory.cross_references import CrossMemoryReferences, create_cross_memory_references
 from app.memory.retrieval_ranking import RankingEngine, create_ranking_engine, RankedUnifiedRetrieval
+from app.memory.validation import KnowledgeValidator, create_knowledge_validator, ValidationSourceType
 from app.verification.repair_loop import RepairLoop
 from app.verification.runner import VerificationRunner
 from app.rag import SimpleRetriever
@@ -294,6 +295,15 @@ class FreyaAgent:
 
         # Cross-Memory References - traceability between memory types
         self.cross_references = create_cross_memory_references()
+
+        # Knowledge Validation - validates knowledge before storage
+        self.knowledge_validator = create_knowledge_validator(
+            cross_refs=self.cross_references,
+            semantic_memory=self.semantic_memory,
+            experience_memory=self.experience_memory,
+            engineering_lessons=self.engineering_lessons,
+            long_term_memory=self.long_term_memory,
+        )
 
         # Ranking Engine - advanced relevance ranking for unified retrieval
         self.ranking_engine = create_ranking_engine(
@@ -595,6 +605,22 @@ Tool results:
             logger.warning(f"[Self-Evaluation] Rework recommended: {eval_result.rework_reasons}")
         if eval_result.requires_human_review:
             logger.warning(f"[Self-Evaluation] Human review recommended (confidence: {eval_result.overall_confidence:.0%})")
+
+        # Trigger memory consolidation and forgetting after task completion
+        # Record that a task was completed (could trigger consolidation)
+        self.consolidation_engine.record_new_entries(1)
+        if self.consolidation_engine.should_run():
+            logger.info("[Memory] Running consolidation...")
+            self.consolidation_engine.run_consolidation()
+
+        # Run forgetting engine periodically (TTL-based cleanup)
+        import time
+        if not hasattr(self, '_last_forgetting_run'):
+            self._last_forgetting_run = 0
+        if time.time() - self._last_forgetting_run > 3600:  # Once per hour
+            logger.info("[Memory] Running forgetting engine...")
+            self.forgetting_engine.run_forgetting()
+            self._last_forgetting_run = time.time()
 
         return answer
 
