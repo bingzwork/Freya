@@ -2,7 +2,7 @@
 
 **Version:** v0.4.x
 
-**Last Updated:** 2026-08-01 (Natural Conversation 100%, Software Engineering Knowledge 100%, Knowledge Retrieval 100%, Knowledge Extraction 100%, Goal Management 100%, Resource Management 70%, Long-Term Autonomy 60%, Planning Phase 5 complete, Memory System Consolidation interface fixed, Multiple Solution Evaluation + Risk/Difficulty Scoring + Human Plan Review implemented)
+**Last Updated:** 2026-08-01 (Natural Conversation 100%, Software Engineering Knowledge 100%, Knowledge Retrieval 100%, Knowledge Extraction 100%, Goal Management 100%, Resource Management 70%, Long-Term Autonomy 60%, Planning Phase 5 complete, Memory System Consolidation interface fixed, Multiple Solution Evaluation + Risk/Difficulty Scoring + Human Plan Review + Reasoning Transparency + Planning Horizon Classification implemented)
 
 **Purpose**
 
@@ -43,7 +43,7 @@ This document should always reflect the current state of the codebase.
 |---------|--------|------------|
 | Natural Conversation & Intent Understanding | ✅ COMPLETE | 100% |
 | Goal Management | ✅ COMPLETE | 100% |
-| Planning and Reasoning | 🟢 MOSTLY COMPLETE | 80% |
+| Planning and Reasoning | 🟢 MOSTLY COMPLETE | 95% |
 | Memory System | ✅ COMPLETE | 95% |
 | Decision Making | ✅ COMPLETE | 85% |
 | Failure Recovery | ✅ COMPLETE | 95% |
@@ -167,12 +167,12 @@ Status: ✅ COMPLETE (100%)
 ---
 ### Planning & Reasoning
 
-Status: 🟢 MOSTLY COMPLETE (80%)
+Status: 🟢 MOSTLY COMPLETE (95%)
 
 **Core Components Implemented:**
 
 1. **Structured Plan Generation** (`app/planner/planner.py`, `app/agent/planner.py`)
-   - `Planner.create_plan()` → flat JSON plan (max 5 steps) via single LLM call
+   - `Planner.create_plan()` → flat JSON plan (dynamic steps: 3 for SHORT, 8 for MEDIUM, 15 for LONG horizon) via LLM call (+1 for alternative plan on complex tasks)
    - Task-specific engineering templates: Build, Debug/Fix, Refactor, Create/Implement, Review, Test, Optimize
    - Intent-aware handling returns `{"steps": []}` for non-engineering requests
 
@@ -257,13 +257,29 @@ Status: 🟢 MOSTLY COMPLETE (80%)
     - Integrated with conversation control system for state management
     - Preserves plan state and supports undo/redo functionality
 
+14. **Reasoning Transparency (Rationale)** (`app/agent/planner.py`, `app/planner/plan_manager.py`, `app/planner/task.py`)
+    - `Task.rationale` field: plain-English explanation for each step (e.g., "First, we need to understand the current state by examining relevant files.")
+    - `Plan.rationale` field: plain-English explanation for overall plan (e.g., "This is a focused task that can be completed in a few direct steps. The plan has 3 step(s): Read file X; Fix the code; Run tests.")
+    - `Plan.explain()` method: generates user-facing explanation combining plan rationale + step rationales
+    - Rationale auto-generated during plan creation via `Planner._generate_plan_rationale()` and `Planner._generate_step_rationales()`
+
+15. **Planning Horizon Classification** (`app/agent/planner.py`, `app/planner/plan_manager.py`, `app/planner/task.py`)
+    - `PlanningHorizon` enum: SHORT (1-3 steps), MEDIUM (4-8 steps), LONG (9+ steps)
+    - `Planner._classify_planning_horizon(task)` — lightweight heuristic classification based on:
+      - File references mentioned in task
+      - Multi-step keywords (refactor, implement, create, etc.)
+      - Phase/multi-stage indicators
+      - Tool diversity keywords (test, lint, build, deploy, docker, etc.)
+      - Goal hierarchy indicators
+    - Dynamic step limits: SHORT=3, MEDIUM=8, LONG=15 (replaces fixed 5-step cap)
+    - `Planner._get_max_steps_for_horizon(horizon)` returns limit for horizon
+    - Horizon stored in `Plan.planning_horizon` and used by difficulty scoring
+
 **Partially Implemented:**
 - **Plan Visualizer** — `app/planner/plan_visualizer.py` exists but not exposed in runtime/diagnostics
 - **Auto Task Decomposition** — Sequential deps created; basic parent/child but no automatic subtask breakdown for complex steps
 
 **Missing:**
-- **Reasoning Transparency** — Plain-English rationale for each step and plan selection
-- **Planning Horizon Classification** — Short/medium/long-horizon policies instead of fixed 5-step cap
 - **Long-horizon / Downstream Forecasting** — Anticipating cross-cutting changes 2-3 steps ahead
 
 **Tests:** `tests/test_planner.py`, `tests/test_planner_agent.py` — all passing

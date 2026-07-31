@@ -2,7 +2,7 @@
 
 > **Master Capability Map** — Single source of truth for every implemented, partially implemented, and planned capability across all pillars.
 >
-> **Version:** v0.4.x | **Last Updated:** 2026-08-01 | **Overall Completion:** ~88%
+> **Version:** v0.4.x | **Last Updated:** 2026-08-01 | **Overall Completion:** ~90%
 
 ---
 
@@ -29,7 +29,7 @@
 | 1 | [Natural Conversation & Intent Understanding](#1-natural-conversation--intent-understanding) | ✅ Complete | 100% | `app/intent/`, `app/capabilities/handlers.py`, `app/agent/core_agent.py`, `app/conversational_control.py`, `app/memory/conversation_memory.py` |
 | 2 | [Goal Management](#2-goal-management) | ✅ Complete | 100% | `app/memory/goals.py`, `app/agent/core_agent.py` |
 | 3 | [Memory System](#3-memory-system) | ✅ Core Complete | 85% | `app/memory/`, `app/vector_db/`, `app/intelligence/knowledge_base.py` |
-| 4 | [Planning & Reasoning](#4-planning--reasoning) | 🟢 Mostly Complete | 80% | `app/planner/`, `app/agent/core_agent.py`, `app/verification/repair_loop.py` |
+| 4 | [Planning & Reasoning](#4-planning--reasoning) | 🟢 Mostly Complete | 95% | `app/planner/`, `app/agent/core_agent.py`, `app/verification/repair_loop.py` |
 | 5 | [Decision Making](#5-decision-making) | ✅ Complete | 85% | `app/decision/`, `app/confidence/`, `app/risk/`, `app/agent/core_agent.py` |
 | 6 | [Failure Recovery](#6-failure-recovery) | ✅ Complete | 95% | `app/failure_recovery/`, `app/verification/repair_loop.py`, `app/agent/core_agent.py` |
 | 7 | [World Model](#7-world-model) | 🟢 Mostly Complete | 75% | `app/world_model/`, `app/monitoring/`, `app/git/`, `app/core/`, `app/health/` |
@@ -162,11 +162,11 @@
 
 ### 4. Planning & Reasoning
 
-**Status:** 🟢 MOSTLY COMPLETE (80%) **Priority:** ⭐⭐⭐⭐⭐ Critical **Last Updated:** 2026-08-01
+**Status:** 🟢 MOSTLY COMPLETE (95%) **Priority:** ⭐⭐⭐⭐⭐ Critical **Last Updated:** 2026-08-01
 
 | Capability | Status | Completion | Notes |
 |------------|--------|-----------|-------|
-| Structured Plan Generation | ✅ Complete | 100% | `Planner.create_plan()` → flat JSON plan (max 5 steps), task-specific templates (Build, Debug, Refactor, Create, Review, Test, Optimize), intent-aware non-engineering returns `{"steps":[]}` |
+| Structured Plan Generation | ✅ Complete | 100% | `Planner.create_plan()` → flat JSON plan (dynamic steps: 3 for SHORT, 8 for MEDIUM, 15 for LONG horizon), task-specific templates (Build, Debug, Refactor, Create, Review, Test, Optimize), intent-aware non-engineering returns `{"steps":[]}` |
 | Plan Execution | ✅ Complete | 100% | `Executor.execute_plan()` up to 8 steps, tool mapping + LLM fallback (`_select_tool_with_llm`), mutating tools permission-gated |
 | Memory Context in Plans | ✅ Complete | 100% | Top-3 `memory.search(task, limit=3)` hits injected as `Relevant past experience:` |
 | Engineering Lessons in Plans | ✅ Complete | 100% | `Planner._build_lessons_context()` injects severity-filtered PATTERN lessons |
@@ -181,9 +181,9 @@
 | Adaptive Replanning (Phase 5) | ✅ Complete | 100% | `_replan_after_failure()` uses `TaskGraph.get_affected_subgraph()` + `invalidate_subgraph()` + replacement tasks preserving COMPLETED; `execute_plan_partial()` runs only incomplete; integrated in `solve()` and `run_active_goal()` |
 | Multiple Solution Evaluation | 🟢 Mostly Complete | 80% | `Planner.create_plan()` generates 2 candidate plans, scores by risk/difficulty, selects best (`app/agent/planner.py`) |
 | Difficulty / Risk Scoring | 🟢 Mostly Complete | 80% | `_assess_plan_risk_and_difficulty()` computes risk (task category + tool implications) and difficulty (task count + hours); stored on `Plan.risk_score` / `Plan.difficulty` |
-| Reasoning Transparency | ❌ Not Implemented | 0% | Plan rationale not surfaced in plain language |
+| Reasoning Transparency | ✅ Complete | 100% | `Task.rationale` + `Plan.rationale` + `Plan.explain()` — plain-English explanations auto-generated during planning (`app/agent/planner.py`, `app/planner/task.py`, `app/planner/plan_manager.py`) |
 | Human Plan Review | 🟢 Mostly Complete | 95% | `FreyaAgent._review_plan_with_user()` with approve/reject/edit/reorder/remove/regenerate/details; integrated into `run()` pipeline (`app/agent/core_agent.py:1487-1986`) |
-| Planning Horizon Classification | ❌ Not Implemented | 0% | All tasks use 5-step cap |
+| Planning Horizon Classification | ✅ Complete | 100% | `PlanningHorizon` enum (SHORT/MEDIUM/LONG); `_classify_planning_horizon()` heuristic; dynamic step limits (3/8/15); stored on `Plan.planning_horizon` |
 
 **Test Coverage:** `tests/test_planner.py`, `tests/test_planner_agent.py` — all passing
 

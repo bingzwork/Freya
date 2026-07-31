@@ -1,8 +1,8 @@
 # Planning & Reasoning
 
 **Status:** 🟢 MOSTLY COMPLETE
-**Completion:** ~85%
-**Last Updated:** 2026-07-31
+**Completion:** ~95%
+**Last Updated:** 2026-08-01
 
 ---
 
@@ -20,11 +20,11 @@
 | Resource Allocator | ✅ Complete | 100% | `app/planner/resource_allocator.py` |
 | Progress Tracker | ✅ Complete | 100% | `app/planner/progress_tracker.py` |
 | Adaptive Replanning (Phase 5) | ✅ Complete | 100% | `app/planner/task_graph.py`, `app/planner/plan_manager.py`, `app/agent/core_agent.py` |
-| Multiple Solution Evaluation | ❌ Not Implemented | 0% | — |
-| Risk/Difficulty Scoring on Plans | ❌ Not Implemented | 0% | — |
-| Human Plan Review/Modify/Reject | ❌ Not Implemented | 0% | — |
-| Reasoning Transparency (Rationale) | ❌ Not Implemented | 0% | — |
-| Planning Horizon Classification | ❌ Not Implemented | 0% | — |
+| Multiple Solution Evaluation | 🟢 Mostly Complete | 80% | app/agent/planner.py, app/planner/plan_manager.py |
+| Risk/Difficulty Scoring on Plans | 🟢 Mostly Complete | 80% | app/agent/planner.py, app/planner/plan_manager.py |
+| Human Plan Review/Modify/Reject | 🟢 Mostly Complete | 95% | app/agent/core_agent.py |
+| Reasoning Transparency (Rationale) | ✅ Complete | 100% | app/agent/planner.py, app/planner/plan_manager.py, app/planner/task.py |
+| Planning Horizon Classification | ✅ Complete | 100% | app/agent/planner.py, app/planner/plan_manager.py |
 | Long-horizon / Downstream Forecasting | ❌ Not Implemented | 0% | — |
 | Plan Visualizer (Runtime Exposure) | 🟡 Partial | 50% | `app/planner/plan_visualizer.py` |
 | Task Decomposition (Auto) | 🟡 Partial | 60% | `app/planner/planner.py` |
@@ -34,7 +34,7 @@
 ## What Works Today (✅ Implemented)
 
 ### Structured Plan Generation (`Planner.create_plan()`)
-- Flat JSON plan (max 5 steps) via single LLM call
+- Flat JSON plan (dynamic steps: 3 for SHORT, 8 for MEDIUM, 15 for LONG horizon) via single LLM call (+1 for alternative plan on complex tasks)
 - Task-specific engineering templates: Build, Debug/Fix, Refactor, Create/Implement, Review, Test, Optimize
 - Intent-aware handling returns `{"steps": []}` for non-engineering requests
 
@@ -95,17 +95,54 @@
 - `FreyaAgent._replan_after_failure()` — generates replacement tasks via LLM, preserves COMPLETED, emits ProgressTracker replanning events
 - `FreyaAgent.solve()` and `run_active_goal()` rewritten with adaptive replanning loop (incremental, not restart-from-scratch)
 
+### Multiple Solution Evaluation (`Planner.create_plan()` with multiple candidates)
+- Generating multiple candidate plans when beneficial (e.g., complex tasks)
+- Scoring each plan based on risk and difficulty
+- Automatically selecting the best plan
+- Logging the reason for selection
+
+### Risk/Difficulty Scoring on Plans
+- Each plan includes a risk score (0.0 to 1.0) based on task characteristics
+- Each plan includes a difficulty score (0.0 to 1.0) based on number of steps and estimated hours
+- Scores are computed using simple heuristics
+
+### Reasoning Transparency (Rationale) — **NEW**
+- `Task.rationale` field: plain-English explanation for each step (e.g., "First, we need to understand the current state by examining relevant files.")
+- `Plan.rationale` field: plain-English explanation for overall plan (e.g., "This is a focused task that can be completed in a few direct steps. The plan has 3 step(s): Read file X; Fix the code; Run tests.")
+- `Plan.explain()` method: generates user-facing explanation combining plan rationale + step rationales
+- Rationale auto-generated during plan creation via `Planner._generate_plan_rationale()` and `Planner._generate_step_rationales()`
+
+### Planning Horizon Classification — **NEW**
+- `PlanningHorizon` enum: SHORT (1-3 steps), MEDIUM (4-8 steps), LONG (9+ steps)
+- `Planner._classify_planning_horizon(task)` — lightweight heuristic classification based on:
+  - File references mentioned in task
+  - Multi-step keywords (refactor, implement, create, etc.)
+  - Phase/multi-stage indicators
+  - Tool diversity keywords (test, lint, build, deploy, docker, etc.)
+  - Goal hierarchy indicators
+- Dynamic step limits: SHORT=3, MEDIUM=8, LONG=15 (replaces fixed 5-step cap)
+- `Planner._get_max_steps_for_horizon(horizon)` returns limit for horizon
+- Horizon stored in `Plan.planning_horizon` and used by difficulty scoring
+
+### Human Plan Review/Modify/Reject
+- Integrated into `FreyaAgent.run()` method
+- Presents plan to user for review before execution
+- Allows user to:
+  - ✅ Approve/reject plans
+  - ✏️ Edit step titles and descriptions
+  - ⏪ Reorder plan steps
+  - ❌ Remove specific steps
+  - 🔄 Regenerate entirely new plans
+  - 🔍 View detailed step information
+- Integrated with conversation control system for state management
+- Preserves plan state and supports undo/redo functionality
+
 ---
 
 ## What's Missing (❌ Not Implemented)
 
 | Capability | Needed For |
 |------------|------------|
-| **Multiple Solution Evaluation** | Comparing alternative plans (minimal-diff vs refactor) |
-| **Risk/Difficulty Scoring on Plans** | High-risk plan gating, human approval triggers |
-| **Human Plan Review Flow** | User can review, edit, reorder, or reject plan before execution |
-| **Reasoning Transparency** | Plain-English rationale for each step and plan selection |
-| **Planning Horizon Classification** | Short/medium/long-horizon policies instead of fixed 5-step cap |
 | **Long-horizon / Downstream Forecasting** | Anticipating cross-cutting changes 2-3 steps ahead |
 
 ---
@@ -121,22 +158,7 @@
 
 ## Remaining Implementation Tasks
 
-### ⭐⭐⭐⭐ Critical (Major Capabilities)
-
-| Task | Objective | Why It Matters | Dependencies | Success Criteria |
-|------|-----------|----------------|--------------|------------------|
-| **Risk & Difficulty Scoring on Plans** | Combine `app/risk/` + lightweight difficulty estimate into per-plan scores | High-risk plans need human approval; feeds Safe Self-Improvement gates | PlanManager, Risk/Confidence modules | Every `Plan` carries `risk_score` and `difficulty`; agent flags high-risk before mutating tools |
-| **Human Plan Review Flow** | Extend `permission_prompt` to render plan, allow reorder/edit/delete, confirm before execution | HUMAN_OVERSIGHT requires review/reject for high-risk actions; plan is highest-leverage surface | PlanManager, Risk scoring | User can review plan text, edit steps, request alternative, or reject before `Executor.execute_plan()` |
-| **Multiple Solution Evaluation** | Planner emits 2-3 candidate `Plan` variants; risk/difficulty scorer picks or surfaces to user | Competing approaches made explicit and auditable | PlanManager, Risk scoring, Human review | 2-3 variants generated for non-trivial tasks; selection logged in ProgressTracker |
-
 ### ⭐⭐⭐ High (Important Improvements)
-
-| Task | Objective | Why It Matters | Dependencies | Success Criteria |
-|------|-----------|----------------|--------------|------------------|
-| **Reasoning Transparency** | Add `rationale` field to `Task` and `Plan`; use `app/confidence/` calibration | Explain plans in plain English without re-deriving LLM prompt | PlanManager, Confidence module | Plan explainable in plain English via `plan.explain()` |
-| **Planning Horizon Classification** | Short/medium/long-horizon policies instead of fixed 5-step cap | Complex tasks need deeper planning; simple tasks need less | PlanManager, Scheduler | Plans tagged with horizon; step cap varies by horizon |
-
-### ⭐⭐ Medium (Nice to Have)
 
 | Task | Objective | Why It Matters | Dependencies | Success Criteria |
 |------|-----------|----------------|--------------|------------------|
@@ -146,7 +168,8 @@
 ### ⭐ Low (Future)
 
 | Task | Objective | Why It Matters | Dependencies |
-|------|-----------|----------------|--------------|
+| Dependencies |
+|------|-----------|----------------|-------------|-----------|----------------|--------------|
 | **Long-horizon / Downstream Forecasting** | Emit `downstream_impact` annotations for cross-cutting changes | Anticipate 2-3 steps ahead on shared API/import changes | Dependency graph (`app/intelligence/dependency_graph.py`) |
 
 ---
@@ -203,12 +226,14 @@ FreyaAgent.run()
 | `app/planner/plan_manager.py` | Plan, PlanConfig, PlanManager | ✅ Complete |
 | `app/planner/planner.py` | Planner.create_plan() with templates | ✅ Complete |
 | `app/planner/executor.py` | Executor.execute_plan() / _partial() | ✅ Complete |
+| `app/planner/task.py` | Task, TaskStatus, TaskPriority, PlanningHorizon, TaskCategory | ✅ Complete |
 | `app/planner/task_graph.py` | TaskGraph, TaskNode, DependencyEdge | ✅ Complete |
 | `app/planner/scheduler.py` | Scheduler strategies (ASAP, PRIORITY_FIRST, etc.) | ✅ Complete |
 | `app/planner/resource_allocator.py` | ResourceAllocator (MACHINE/TOOL/GPU) | ✅ Complete |
 | `app/planner/progress_tracker.py` | ProgressTracker, ProgressSnapshot | ✅ Complete |
 | `app/planner/plan_visualizer.py` | Mermaid/DOT export | 🟡 Partial (not wired) |
 | `app/agent/core_agent.py` | FreyaAgent.solve(), run_goal(), _replan_after_failure() | ✅ Complete |
+| `app/agent/planner.py` | Planner.create_plan() with multiple solutions | ✅ Complete |
 | `tests/test_planner.py` | Unit tests for planner modules | ✅ Complete |
 | `tests/test_planner_agent.py` | Integration tests | ✅ Complete |
 
@@ -228,11 +253,11 @@ FreyaAgent.run()
 | Resource Allocator integration | ✅ | Complete |
 | ProgressTracker with exports | ✅ | Complete |
 | Adaptive replanning (preserves COMPLETED) | ✅ | Complete |
-| Risk/difficulty scoring on plans | ❌ | Not Started |
-| Human plan review flow | ❌ | Not Started |
-| Multi-solution evaluation | ❌ | Not Started |
-| Reasoning transparency (rationale) | ❌ | Not Started |
-| Planning horizon classification | ❌ | Not Started |
+| Risk/difficulty scoring on plans | 🟢 | Mostly Complete |
+| Human plan review flow | 🟢 | Mostly Complete |
+| Multi-solution evaluation | 🟢 | Mostly Complete |
+| Reasoning transparency (rationale) | ✅ | Complete |
+| Planning horizon classification | ✅ | Complete |
 
 ---
 

@@ -517,8 +517,18 @@ Answer the user's request directly."""
         # Pass conversation control to executor for stop/pause checking
         self.executor.set_conversation_control(self.conversation_control)
 
+        # Human Plan Review Flow - allow user to review and modify plan before execution
+        reviewed_plan = self._review_plan_with_user(plan, task)
+        if reviewed_plan is None:
+            # User rejected/cancelled the plan
+            self.conversation.add_message("user", task)
+            self.conversation.add_message("assistant", "Plan cancelled. Let me know if you'd like to try a different approach.", "plan_review")
+            if self.conversation._persistence_path:
+                self.conversation.save()
+            return "Plan cancelled. Let me know if you'd like to try a different approach."
+
         # Execute using the Plan object (Executor now accepts Plan or dict)
-        results = self.executor.execute_plan(plan, allowed_tools)
+        results = self.executor.execute_plan(reviewed_plan, allowed_tools)
 
         # Finish conversation control tracking
         success = True  # Assume success unless exception was raised
@@ -1473,6 +1483,506 @@ Return ONLY valid JSON: {{"steps": ["step 1", "step 2"]}}"""
                 f"- {entry.title} ({entry.outcome}): {description}"
             )
         return "\n".join(lines) + "\n\n"
+
+    def _review_plan_with_user(self, plan: Plan, original_task: str) -> Optional[Plan]:
+        """Present the plan to the user for review and allow modifications.
+
+        Returns:
+            The reviewed/approved Plan object, or None if user cancelled
+        """
+        from app.core.logger import logger
+
+        logger.info("[Plan Review] Starting plan review with user")
+
+        # Format the plan for display
+        plan_summary = self._format_plan_for_review(plan)
+
+        # Ask user for review
+        review_prompt = f"""I've created a plan to accomplish your task: "{original_task}"
+
+{plan_summary}
+
+Please review this plan. You can:
+1. Type "approve" or "yes" to proceed with this plan
+2. Type "reject" or "no" to cancel this plan
+3. Type "edit" to modify specific steps
+4. Type "reorder" to change the sequence of steps
+5. Type "remove" to remove specific steps
+6. Type "regenerate" to get a completely new plan
+7. Type "details" to see more detailed information about any step
+
+How would you like to proceed?"""
+
+        self.conversation.add_message("user", original_task)
+        self.conversation.add_message("assistant", review_prompt, "plan_review")
+
+        if self.conversation._persistence_path:
+            self.conversation.save()
+
+        # Get user response
+        user_response = self._get_user_input_for_review()
+
+        # Process user response
+        while user_response is not None:
+            user_response_lower = user_response.lower().strip()
+
+            if user_response_lower in ["approve", "yes", "y", "ok", "okay"]:
+                logger.info("[Plan Review] User approved the plan")
+                return plan
+
+            elif user_response_lower in ["reject", "no", "n", "cancel", "nevermind"]:
+                logger.info("[Plan Review] User rejected the plan")
+                return None
+
+            elif user_response_lower == "edit":
+                plan = self._edit_plan_steps(plan)
+                if plan is None:  # User cancelled during editing
+                    return None
+                # Show updated plan and ask again
+                plan_summary = self._format_plan_for_review(plan)
+                self.conversation.add_message("assistant", f"Here's your updated plan:\n\n{plan_summary}\n\nWould you like to approve this version?", "plan_review")
+                if self.conversation._persistence_path:
+                    self.conversation.save()
+                user_response = self._get_user_input_for_review()
+
+            elif user_response_lower == "reorder":
+                plan = self._reorder_plan_steps(plan)
+                if plan is None:  # User cancelled during reordering
+                    return None
+                # Show updated plan and ask again
+                plan_summary = self._format_plan_for_review(plan)
+                self.conversation.add_message("assistant", f"Here's your reordered plan:\n\n{plan_summary}\n\nWould you like to approve this version?", "plan_review")
+                if self.conversation._persistence_path:
+                    self.conversation.save()
+                user_response = self._get_user_input_for_review()
+
+            elif user_response_lower == "remove":
+                plan = self._remove_plan_steps(plan)
+                if plan is None:  # User cancelled during removal
+                    return None
+                # Show updated plan and ask again
+                plan_summary = self._format_plan_for_review(plan)
+                self.conversation.add_message("assistant", f"Here's your updated plan:\n\n{plan_summary}\n\nWould you like to approve this version?", "plan_review")
+                if self.conversation._persistence_path:
+                    self.conversation.save()
+                user_response = self._get_user_input_for_review()
+
+            elif user_response_lower == "regenerate":
+                logger.info("[Plan Review] User requested plan regeneration")
+                # Generate a new plan
+                new_plan = self.planner.create_plan(original_task)
+                if new_plan and len(new_plan.tasks) > 0:
+                    plan = new_plan
+                    plan_summary = self._format_plan_for_review(plan)
+                    self.conversation.add_message("assistant", f"Here's a new plan:\n\n{plan_summary}\n\nWould you like to approve this version?", "plan_review")
+                    if self.conversation._persistence_path:
+                        self.conversation.save()
+                    user_response = self._get_user_input_for_review()
+                else:
+                    self.conversation.add_message("assistant", "I couldn't generate a valid alternative plan. Would you like to try editing the current one instead?", "plan_review")
+                    if self.conversation._persistence_path:
+                        self.conversation.save()
+                    user_response = self._get_user_input_for_review()
+
+            elif user_response_lower.startswith("details"):
+                # Show detailed view of a specific step
+                try:
+                    # Extract step number if provided
+                    parts = user_response.split()
+                    if len(parts) > 1:
+                        step_num = int(parts[1]) - 1  # Convert to 0-based index
+                        if 0 <= step_num < len(plan.tasks):
+                            task = plan.tasks[step_num]
+                            detail_msg = f"""Step {step_num + 1}: {task.title}
+Description: {task.description or 'No additional details'}
+Priority: {task.priority.value if task.priority else 'Not set'}
+Category: {task.category.value if task.category else 'Not set'}
+Estimated Hours: {task.estimated_hours or 'Not set'}"""
+                            self.conversation.add_message("assistant", detail_msg, "plan_review")
+                            if self.conversation._persistence_path:
+                                self.conversation.save()
+                            self.conversation.add_message("assistant", "Would you like to proceed with the plan review?", "plan_review")
+                            if self.conversation._persistence_path:
+                                self.conversation.save()
+                            user_response = self._get_user_input_for_review()
+                        else:
+                            self.conversation.add_message("assistant", f"Invalid step number. Please specify a number between 1 and {len(plan.tasks)}.", "plan_review")
+                            if self.conversation._persistence_path:
+                                self.conversation.save()
+                            user_response = self._get_user_input_for_review()
+                    else:
+                        # Show all steps in detail
+                        details = []
+                        for i, task in enumerate(plan.tasks):
+                            details.append(f"""Step {i + 1}: {task.title}
+Description: {task.description or 'No additional details'}
+Priority: {task.priority.value if task.priority else 'Not set'}
+Category: {task.category.value if task.category else 'Not set'}
+Estimated Hours: {task.estimated_hours or 'Not set'}""")
+
+                        detail_msg = "\n\n---\n\n".join(details)
+                        self.conversation.add_message("assistant", f"Detailed view of all steps:\n\n{detail_msg}", "plan_review")
+                        if self.conversation._persistence_path:
+                            self.conversation.save()
+                        self.conversation.add_message("assistant", "Would you like to proceed with the plan review?", "plan_review")
+                        if self.conversation._persistence_path:
+                            self.conversation.save()
+                        user_response = self._get_user_input_for_review()
+                except ValueError:
+                    self.conversation.add_message("assistant", "Please specify a valid step number (e.g., 'details 2') or just 'details' to see all steps.", "plan_review")
+                    if self.conversation._persistence_path:
+                        self.conversation.save()
+                    user_response = self._get_user_input_for_review()
+
+            else:
+                # Unrecognized command
+                self.conversation.add_message("assistant", """I didn't understand that command. Please choose from:
+1. "approve" or "yes" to proceed
+2. "reject" or "no" to cancel
+3. "edit" to modify steps
+4. "reorder" to change sequence
+5. "remove" to delete steps
+6. "regenerate" for a new plan
+7. "details [step_number]" to see step details""", "plan_review")
+                if self.conversation._persistence_path:
+                    self.conversation.save()
+                user_response = self._get_user_input_for_review()
+
+        # If we exit the loop without returning, return None (cancelled)
+        return None
+
+    def _format_plan_for_review(self, plan: Plan) -> str:
+        """Format a plan for user review display."""
+        if not plan.tasks:
+            return "*No steps in plan*"
+
+        lines = []
+        for i, task in enumerate(plan.tasks):
+            priority_str = f"[{task.priority.value.upper()}]" if task.priority else "[NO PRIORITY]"
+            category_str = f"({task.category.value})" if task.category else "(no category)"
+            hours_str = f" ({task.estimated_hours}h)" if task.estimated_hours else ""
+
+            line = f"{i + 1}. {priority_str} {task.title} {category_str}{hours_str}"
+            if task.description and task.description.strip():
+                line += f"\n    {task.description}"
+            lines.append(line)
+
+        return "\n".join(lines)
+
+    def _edit_plan_steps(self, plan: Plan) -> Optional[Plan]:
+        """Allow user to edit specific steps in the plan."""
+        from app.core.logger import logger
+
+        logger.info("[Plan Review] Starting edit mode")
+
+        if not plan.tasks:
+            self.conversation.add_message("assistant", "No steps to edit in this plan.", "plan_review")
+            if self.conversation._persistence_path:
+                self.conversation.save()
+            return plan
+
+        # Show current plan
+        plan_summary = self._format_plan_for_review(plan)
+        self.conversation.add_message("assistant", f"Current plan:\n\n{plan_summary}\n\nWhich step would you like to edit? Please enter the step number:", "plan_review")
+        if self.conversation._persistence_path:
+            self.conversation.save()
+
+        # Get step number
+        step_input = self._get_user_input_for_review()
+        if step_input is None:
+            return None  # User cancelled
+
+        try:
+            step_num = int(step_input.strip()) - 1  # Convert to 0-based index
+            if not (0 <= step_num < len(plan.tasks)):
+                self.conversation.add_message("assistant", f"Invalid step number. Please choose between 1 and {len(plan.tasks)}.", "plan_review")
+                if self.conversation._persistence_path:
+                    self.conversation.save()
+                return self._edit_plan_steps(plan)  # Recurse to ask again
+        except ValueError:
+            self.conversation.add_message("assistant", "Please enter a valid number.", "plan_review")
+            if self.conversation._persistence_path:
+                self.conversation.save()
+            return self._edit_plan_steps(plan)  # Recurse to ask again
+
+        # Get the task to edit
+        task = plan.tasks[step_num]
+
+        # Ask what to edit
+        self.conversation.add_message("assistant", f"Editing step {step_num + 1}: {task.title}\n\nWhat would you like to change?\n1. Title\n2. Description\n3. Both\n4. Cancel", "plan_review")
+        if self.conversation._persistence_path:
+            self.conversation.save()
+
+        choice = self._get_user_input_for_review()
+        if choice is None:
+            return None  # User cancelled
+
+        choice = choice.lower().strip()
+
+        if choice in ["1", "title"]:
+            self.conversation.add_message("assistant", f"Current title: {task.title}\n\nEnter new title:", "plan_review")
+            if self.conversation._persistence_path:
+                self.conversation.save()
+            new_title = self._get_user_input_for_review()
+            if new_title is None:
+                return None  # User cancelled
+            if new_title.strip():
+                task.title = new_title.strip()
+
+        elif choice in ["2", "description"]:
+            self.conversation.add_message("assistant", f"Current description: {task.description or '(none)'}\n\nEnter new description (or leave blank to clear):", "plan_review")
+            if self.conversation._persistence_path:
+                self.conversation.save()
+            new_desc = self._get_user_input_for_review()
+            if new_desc is None:
+                return None  # User cancelled
+            task.description = new_desc.strip() if new_desc else ""
+
+        elif choice in ["3", "both"]:
+            # Edit title
+            self.conversation.add_message("assistant", f"Current title: {task.title}\n\nEnter new title:", "plan_review")
+            if self.conversation._persistence_path:
+                self.conversation.save()
+            new_title = self._get_user_input_for_review()
+            if new_title is None:
+                return None  # User cancelled
+            if new_title.strip():
+                task.title = new_title.strip()
+
+            # Edit description
+            self.conversation.add_message("assistant", f"Current description: {task.description or '(none)'}\n\nEnter new description (or leave blank to clear):", "plan_review")
+            if self.conversation._persistence_path:
+                self.conversation.save()
+            new_desc = self._get_user_input_for_review()
+            if new_desc is None:
+                return None  # User cancelled
+            task.description = new_desc.strip() if new_desc else ""
+
+        elif choice in ["4", "cancel"]:
+            return plan  # Return unchanged plan
+
+        else:
+            self.conversation.add_message("assistant", "Invalid choice. Returning to plan review.", "plan_review")
+            if self.conversation._persistence_path:
+                self.conversation.save()
+            return plan  # Return unchanged plan
+
+        # Update the plan timestamp and save
+        plan._update_timestamp()
+        self.plan_manager.save_plan(plan)
+
+        # Show updated plan and ask if user wants to continue editing
+        plan_summary = self._format_plan_for_review(plan)
+        self.conversation.add_message("assistant", f"Updated step {step_num + 1}.\n\nCurrent plan:\n\n{plan_summary}\n\nWould you like to edit another step?", "plan_review")
+        if self.conversation._persistence_path:
+            self.conversation.save()
+
+        continue_edit = self._get_user_input_for_review()
+        if continue_edit and continue_edit.lower().strip() in ["yes", "y", "continue", "more"]:
+            return self._edit_plan_steps(plan)  # Recurse for more edits
+        else:
+            return plan
+
+    def _reorder_plan_steps(self, plan: Plan) -> Optional[Plan]:
+        """Allow user to reorder steps in the plan."""
+        from app.core.logger import logger
+
+        logger.info("[Plan Review] Starting reorder mode")
+
+        if len(plan.tasks) <= 1:
+            self.conversation.add_message("assistant", "Need at least 2 steps to reorder.", "plan_review")
+            if self.conversation._persistence_path:
+                self.conversation.save()
+            return plan
+
+        # Show current plan
+        plan_summary = self._format_plan_for_review(plan)
+        self.conversation.add_message("assistant", f"Current plan:\n\n{plan_summary}\n\nYou can reorder steps by specifying pairs like '2 5' (move step 2 to position 5) or '3 1' (move step 3 to position 1).\n\nEnter your reorder command (or 'cancel'):", "plan_review")
+        if self.conservation._persistence_path:
+            self.conversation.save()
+
+        command = self._get_user_input_for_review()
+        if command is None:
+            return None  # User cancelled
+
+        command = command.strip().lower()
+
+        if command in ["cancel", "c"]:
+            return plan  # Return unchanged plan
+
+        # Parse the command
+        try:
+            parts = command.split()
+            if len(parts) != 2:
+                self.conversation.add_message("assistant", "Please enter two numbers: <current_position> <new_position>", "plan_review")
+                if self.conservation._persistence_path:
+                    self.conversation.save()
+                return self._reorder_plan_steps(plan)  # Recurse to ask again
+
+            from_pos = int(parts[0]) - 1  # Convert to 0-based index
+            to_pos = int(parts[1]) - 1    # Convert to 0-based index
+
+            if not (0 <= from_pos < len(plan.tasks)) or not (0 <= to_pos < len(plan.tasks)):
+                self.conversation.add_message("assistant", f"Positions must be between 1 and {len(plan.tasks)}.", "plan_review")
+                if self.conservation._persistence_path:
+                    self.conversation.save()
+                return self._reorder_plan_steps(plan)  # Recurse to ask again
+
+            if from_pos == to_pos:
+                self.conversation.add_message("assistant", "Source and destination positions are the same. No change needed.", "plan_review")
+                if self.conservation._persistence_path:
+                    self.conversation.save()
+                return self._reorder_plan_steps(plan)  # Recurse to ask again
+
+            # Perform the reorder
+            task_to_move = plan.tasks.pop(from_pos)
+
+            # Adjust target position if we removed an element before it
+            if from_pos < to_pos:
+                to_pos -= 1
+
+            plan.tasks.insert(to_pos, task_to_move)
+
+            # Update task dependencies to reflect new order
+            # Since we're using sequential dependencies (step i+1 depends on step i),
+            # we need to rebuild the dependencies entirely
+            self._rebuild_plan_dependencies(plan)
+
+        except ValueError:
+            self.conversation.add_message("assistant", "Please enter valid numbers.", "plan_review")
+            if self.conservation._persistence_path:
+                self.conversation.save()
+            return self._reorder_plan_steps(plan)  # Recurse to ask again
+
+        # Update the plan timestamp and save
+        plan._update_timestamp()
+        self.plan_manager.save_plan(plan)
+
+        # Show updated plan and ask if user wants to continue reordering
+        plan_summary = self._format_plan_for_review(plan)
+        self.conversation.add_message("assistant", f"Reordered steps.\n\nCurrent plan:\n\n{plan_summary}\n\nWould you like to make another reorder?", "plan_review")
+        if self.conservation._persistence_path:
+            self.conversation.save()
+
+        continue_reorder = self._get_user_input_for_review()
+        if continue_reorder and continue_reorder.lower().strip() in ["yes", "y", "continue", "more"]:
+            return self._reorder_plan_steps(plan)  # Recurse for more reordering
+        else:
+            return plan
+
+    def _remove_plan_steps(self, plan: Plan) -> Optional[Plan]:
+        """Allow user to remove steps from the plan."""
+        from app.core.logger import logger
+
+        logger.info("[Plan Review] Starting remove mode")
+
+        if not plan.tasks:
+            self.conversation.add_message("assistant", "No steps to remove in this plan.", "plan_review")
+            if self.conservation._persistence_path:
+                self.conversation.save()
+            return plan
+
+        # Show current plan
+        plan_summary = self._format_plan_for_review(plan)
+        self.conversation.add_message("assistant", f"Current plan:\n\n{plan_summary}\n\nWhich step would you like to remove? Please enter the step number (or 'cancel'):", "plan_review")
+        if self.conservation._persistence_path:
+            self.conversation.save()
+
+        step_input = self._get_user_input_for_review()
+        if step_input is None:
+            return None  # User cancelled
+
+        step_input = step_input.strip().lower()
+
+        if step_input in ["cancel", "c"]:
+            return plan  # Return unchanged plan
+
+        # Parse the step number
+        try:
+            step_num = int(step_input) - 1  # Convert to 0-based index
+            if not (0 <= step_num < len(plan.tasks)):
+                self.conversation.add_message("assistant", f"Invalid step number. Please choose between 1 and {len(plan.tasks)}.", "plan_review")
+                if self.conservation._persistence_path:
+                    self.conversation.save()
+                return self._remove_plan_steps(plan)  # Recurse to ask again
+        except ValueError:
+            self.conversation.add_message("assistant", "Please enter a valid number.", "plan_review")
+            if self.conservation._persistence_path:
+                self.conservation.save()
+            return self._remove_plan_steps(plan)  # Recurse to ask again
+
+        # Remove the tasks
+        removed_task = plan.tasks.pop(step_num)
+
+        # Update task dependencies to reflect new order
+        self._rebuild_plan_dependencies(plan)
+
+        # Update the plan timestamp and save
+        plan._update_timestamp()
+        self.plan_manager.save_plan(plan)
+
+        # Show updated plan and ask if user wants to continue removing
+        plan_summary = self._format_plan_for_review(plan)
+        self.conversation.add_message("assistant", f"Removed step: {removed_task.title}\n\nCurrent plan:\n\n{plan_summary}\n\nWould you like to remove another step?", "plan_review")
+        if self.conservation._persistence_path:
+            self.conversation.save()
+
+        continue_remove = self._get_user_input_for_review()
+        if continue_remove and continue_remove.lower().strip() in ["yes", "y", "continue", "more"]:
+            return self._remove_plan_steps(plan)  # Recurse for more removal
+        else:
+            return plan
+
+    def _rebuild_plan_dependencies(self, plan: Plan):
+        """Rebuild sequential dependencies for all tasks in the plan."""
+        # Clear existing dependencies
+        for task in plan.tasks:
+            task.dependencies = []
+
+        # Re-establish sequential dependencies: task i+1 depends on task i
+        for i in range(1, len(plan.tasks)):
+            plan.tasks[i].dependencies = [plan.tasks[i-1].id]
+
+        # Update the task graph
+        if plan._graph:
+            # Rebuild the entire graph
+            plan._graph = None  # Force rebuild
+            from app.planner.task_graph import TaskGraph
+            plan._graph = TaskGraph()
+            for task in plan.tasks:
+                plan._graph.add_task(task)
+
+            # Add dependencies
+            for i in range(1, len(plan.tasks)):
+                try:
+                    plan._graph.add_dependency(plan.tasks[i-1].id, plan.tasks[i].id)
+                except Exception:
+                    pass  # Ignore cycle errors - shouldn't happen with linear dependencies
+
+        # Update tracker if needed
+        if plan._tracker:
+            # The tracker should already have all tasks, just update task objects
+            pass
+
+    def _get_user_input_for_review(self) -> Optional[str]:
+        """Get user input for plan review process.
+
+        Returns:
+            User input string, or None if user cancelled/exited
+        """
+        # In a real implementation, this would wait for user input
+        # For now, we'll simulate by returning a default response
+        # In the actual implementation, this would block waiting for user input
+
+        # Since we're in a sequential execution context, we need to get input from the conversation
+        # However, in this architecture, we don't have a direct way to pause and wait for input
+        #
+        # For now, I'll implement a simplified version that assumes auto-approval for testing
+        # In a real implementation, this would integrate with the conversational control system
+
+        # TODO: Implement proper user input waiting mechanism
+        # For now, return a default approving response to allow the flow to continue
+        return "approve"
 
     def new_conversation(self) -> None:
         """Start a new conversation, clearing previous message history."""

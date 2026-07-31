@@ -40,6 +40,13 @@ class TaskPriority(Enum):
         return scores.get(self, 0)
 
 
+class PlanningHorizon(Enum):
+    """Planning horizon classification."""
+    SHORT = "short"       # 1-3 steps, simple tasks, quick execution
+    MEDIUM = "medium"     # 4-8 steps, moderate complexity
+    LONG = "long"         # 9+ steps, complex tasks, multi-phase
+
+
 class TaskCategory(Enum):
     """Categories of tasks."""
     IMPLEMENTATION = "implementation"
@@ -92,6 +99,9 @@ class Task:
     # Progress
     progress_percent: float = 0.0
 
+    # Reasoning transparency
+    rationale: str = ""
+
     # Creation and modification timestamps
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
@@ -140,6 +150,7 @@ class Task:
             deadline=data.get("deadline"),
             start_after=data.get("start_after"),
             progress_percent=data.get("progress_percent", 0.0),
+            rationale=data.get("rationale", ""),
             created_at=data.get("created_at", ""),
             updated_at=data.get("updated_at", ""),
             metadata=data.get("metadata", {}),
@@ -167,6 +178,7 @@ class Task:
             "deadline": self.deadline,
             "start_after": self.start_after,
             "progress_percent": self.progress_percent,
+            "rationale": self.rationale,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "metadata": self.metadata,

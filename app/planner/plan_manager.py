@@ -11,7 +11,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 
-from app.planner.task import Task, TaskStatus, TaskPriority, TaskCategory
+from app.planner.task import Task, TaskStatus, TaskPriority, TaskCategory, PlanningHorizon
 from app.planner.task_graph import TaskGraph, CycleDetectedError
 from app.planner.scheduler import Scheduler, Schedule, SchedulingStrategy
 from app.planner.resource_allocator import ResourceAllocator, Resource, ResourceType
@@ -29,6 +29,9 @@ class PlanConfig:
     default_estimated_hours: float = 2.0
     auto_schedule: bool = True
     track_progress: bool = True
+    # Planning horizon affects max steps and decomposition depth
+    planning_horizon: PlanningHorizon = PlanningHorizon.SHORT
+    max_steps: int = 5  # Default, will be adjusted based on horizon
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -40,6 +43,8 @@ class PlanConfig:
             "default_estimated_hours": self.default_estimated_hours,
             "auto_schedule": self.auto_schedule,
             "track_progress": self.track_progress,
+            "planning_horizon": self.planning_horizon.value,
+            "max_steps": self.max_steps,
         }
 
     @classmethod
@@ -53,6 +58,8 @@ class PlanConfig:
             default_estimated_hours=data.get("default_estimated_hours", 2.0),
             auto_schedule=data.get("auto_schedule", True),
             track_progress=data.get("track_progress", True),
+            planning_horizon=PlanningHorizon(data.get("planning_horizon", "short")),
+            max_steps=data.get("max_steps", 5),
         )
 
 
@@ -66,6 +73,12 @@ class Plan:
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     status: str = "draft"  # draft, active, completed, archived
+    risk_score: float = 0.0  # 0.0 (no risk) to 1.0 (extreme risk)
+    difficulty: float = 0.0  # 0.0 (trivial) to 1.0 (extremely hard)
+    # Reasoning transparency
+    rationale: str = ""
+    # Planning horizon classification
+    planning_horizon: PlanningHorizon = PlanningHorizon.SHORT
 
     # Internal state
     _graph: Optional[TaskGraph] = field(default=None, repr=False)
@@ -98,6 +111,10 @@ class Plan:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "status": self.status,
+            "risk_score": self.risk_score,
+            "difficulty": self.difficulty,
+            "rationale": self.rationale,
+            "planning_horizon": self.planning_horizon.value,
         }
 
     @classmethod
@@ -115,6 +132,10 @@ class Plan:
             created_at=data.get("created_at", ""),
             updated_at=data.get("updated_at", ""),
             status=data.get("status", "draft"),
+            risk_score=data.get("risk_score", 0.0),
+            difficulty=data.get("difficulty", 0.0),
+            rationale=data.get("rationale", ""),
+            planning_horizon=PlanningHorizon(data.get("planning_horizon", "short")),
         )
         return plan
 
@@ -291,6 +312,80 @@ class Plan:
             "added": added_ids,
             "replanning_event": replanning_event,
         }
+
+    def explain(self) -> str:
+        """Generate a plain-English explanation of the plan.
+
+        Returns a user-friendly summary explaining:
+        - Why this plan was created
+        - What the plan aims to achieve
+        - Why the steps are ordered this way
+        - Key considerations (risk, difficulty, horizon)
+        """
+        if not self.tasks:
+            return "This plan has no steps. It may be a non-engineering request or the task was unclear."
+
+        lines = []
+
+        # Overall plan rationale
+        if self.rationale:
+            lines.append(f"Plan rationale: {self.rationale}")
+        else:
+            lines.append(f"This plan was created to: {self.config.description or 'accomplish the requested task'}")
+
+        # Planning horizon
+        horizon_descriptions = {
+            PlanningHorizon.SHORT: "a quick, focused task (1-3 steps)",
+            PlanningHorizon.MEDIUM: "a moderate task requiring several steps (4-8 steps)",
+            PlanningHorizon.LONG: "a complex, multi-phase task (9+ steps)",
+        }
+        lines.append(f"Planning horizon: {self.planning_horizon.value.capitalize()} — {horizon_descriptions.get(self.planning_horizon, 'unknown scope')}.")
+
+        # Risk and difficulty
+        if self.risk_score > 0.5:
+            lines.append(f"Risk level: High ({self.risk_score:.0%}). Extra caution and verification recommended.")
+        elif self.risk_score > 0.2:
+            lines.append(f"Risk level: Moderate ({self.risk_score:.0%}). Standard verification applies.")
+        else:
+            lines.append(f"Risk level: Low ({self.risk_score:.0%}). Routine execution expected.")
+
+        if self.difficulty > 0.6:
+            lines.append(f"Difficulty: High ({self.difficulty:.0%}). May require specialized knowledge or tools.")
+        elif self.difficulty > 0.3:
+            lines.append(f"Difficulty: Moderate ({self.difficulty:.0%}). Standard engineering effort expected.")
+        else:
+            lines.append(f"Difficulty: Low ({self.difficulty:.0%}). Straightforward execution.")
+
+        # Step-by-step explanation
+        lines.append("\nStep-by-step breakdown:")
+        for i, task in enumerate(self.tasks, 1):
+            step_rationale = task.rationale if task.rationale else "No specific rationale provided."
+            # Simplify the title for readability
+            simple_title = task.title.lower()
+            if simple_title.startswith(("read", "write", "create", "delete", "run", "fix", "update", "modify")):
+                action_verb = simple_title.split()[0]
+            else:
+                action_verb = "execute"
+
+            # Show dependencies
+            dep_info = ""
+            if task.dependencies:
+                dep_titles = []
+                for dep_id in task.dependencies:
+                    dep_task = next((t for t in self.tasks if t.id == dep_id), None)
+                    if dep_task:
+                        dep_titles.append(dep_task.title)
+                if dep_titles:
+                    dep_info = f" (depends on: {', '.join(dep_titles)})"
+
+            lines.append(f"  {i}. {task.title}{dep_info} — {step_rationale}")
+
+        # Total estimates
+        total_hours = sum(t.estimated_hours for t in self.tasks)
+        if total_hours > 0:
+            lines.append(f"\nEstimated effort: ~{total_hours:.1f} hours across {len(self.tasks)} step(s).")
+
+        return "\n".join(lines)
 
     def _rebuild_schedule(self) -> Optional[Schedule]:
         """Rebuild the schedule for the active plan."""
