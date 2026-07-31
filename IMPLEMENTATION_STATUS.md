@@ -56,7 +56,7 @@ This document should always reflect the current state of the codebase.
 | Software Engineering Knowledge | ⚪ NOT IMPLEMENTED | 0% |
 | Knowledge Acquisition & Knowledge Base | ✅ COMPLETE | 85% |
 | Knowledge Extraction | ✅ COMPLETE | 100% |
-| Knowledge Retrival | ⚪ NOT IMPLEMENTED | 0% |
+| Knowledge Retrieval | ✅ COMPLETE | 100% |
 | Knowledge Validation | ⚪ NOT IMPLEMENTED | 0% |
 | Tool Ecosystem | ✅ COMPLETE | 90% |
 | Business & Productivity | 🟡 MINIMAL | 20% |
@@ -375,6 +375,107 @@ Status: ✅ COMPLETE (100%)
 - PDF support optional (requires pypdf or pdfplumber)
 - Confidence is extraction estimate only (validation separate)
 - Basic deduplication (exact content match)
+
+---
+
+### Knowledge Retrieval
+
+Status: ✅ COMPLETE (100%)
+
+**Implementation Date:** 2026-07-31
+
+**Core Components Implemented:**
+
+1. **Knowledge Retrieval Pipeline** (`app/knowledge_retrieval/pipeline.py`)
+   - End-to-end orchestration: Multi-Source Retrieval → Confidence Calibration → Unified Ranking → Decision Making → Analytics Tracking
+   - `KnowledgeRetrievalPipeline` class with `retrieve()` main entry point
+   - Supports `RetrievalQuery` (string or object) with options: max_results, min_score, boost_category, boost_language, source filtering
+   - Returns `RetrievalResponse` with ranked results, decision, timing, and statistics
+   - Context manager support via `RetrievalContext` for automatic state persistence
+   - Factory function `create_pipeline_from_agent(agent)` for easy agent integration
+
+2. **Unified Data Models** (`app/knowledge_retrieval/models.py`)
+   - `KnowledgeRetrievalResult` — Retrieved knowledge with content, title, summary, source, confidence (raw/calibrated), category, tags, language, ranking score, ranking explanation
+   - `RetrievalQuery` — Query parameters (query string, max_results, min_score, sources, boosts, context, require_calibration)
+   - `RetrievalResponse` — Aggregated response with results, decision, decision reason, total candidates, retrieval time
+   - `RetrievalDecision` enum: USE_DIRECTLY, USE_WITH_CAUTION, ACQUIRE_MORE, ASK_USER, NO_KNOWLEDGE
+   - `KnowledgeSourceType` enum: SEMANTIC_MEMORY, EPISODIC_MEMORY, PROJECT_MEMORY, WORKING_MEMORY, CONVERSATION_MEMORY, LONG_TERM_MEMORY, EXPERIENCE_MEMORY, ENGINEERING_LESSONS, EXTRACTED_KNOWLEDGE, DOCUMENTATION, EXTERNAL_KNOWLEDGE, USER_KNOWLEDGE, KNOWLEDGE_BASE, UNKNOWN
+   - `RankingSignal` enum: RELEVANCE, CONFIDENCE, SOURCE_QUALITY, USAGE_FREQUENCY, RECENCY, COMPLETENESS, RELIABILITY, FRESHNESS, HISTORICAL_USEFULNESS
+   - `RankingConfig` — Full customization of weights, source quality scores, thresholds, adaptation settings
+   - `UsageEvent` — Analytics events (retrieved, selected, ignored, feedback, task_outcome)
+
+3. **Ranking Engine** (`app/knowledge_retrieval/ranking.py`)
+   - `RankingEngine` — 9 signal calculators combining into single rank score (0-1)
+     - Relevance (30%): Keyword/phrase matching, category/language boosting
+     - Confidence (20%): Calibrated confidence score
+     - Source Quality (15%): Per-source-type quality scores
+     - Usage Frequency (10%): Access count normalization
+     - Recency (10%): Exponential decay from update time
+     - Completeness (5%): Content richness (summary, tags, examples, related concepts, metadata)
+     - Reliability (5%): Source historical success rate (from analytics)
+     - Freshness (3%): Faster decay than recency
+     - Historical Usefulness (2%): Task outcome correlation per result
+   - `AdaptiveRankingEngine` — Weight adjustment from feedback using gradient-like updates
+   - `create_ranking_engine()` factory for standard/adaptive versions
+   - Detailed `RankingExplanation` with per-factor breakdown and `explain_simple()` method
+   - Extensible via `register_calculator(RankingSignal, callable)`
+
+4. **Calibration Manager** (`app/knowledge_retrieval/calibration.py`)
+   - `CalibrationManager` with 4 methods:
+     - **Isotonic Regression** (default) — PAVA algorithm, non-parametric monotonic calibration
+     - **Platt Scaling** — Sigmoid/logistic regression calibration
+     - **Temperature Scaling** — Single-parameter logit scaling
+     - **NoOp** — Passthrough (disabled calibration)
+   - Per-source-type calibration data with minimum sample requirements
+   - Persistent JSON storage with auto-save
+   - Beta calibration for high-confidence scenarios
+   - `get_calibration_metadata()` for debugging/transparency
+
+5. **Usage Analytics** (`app/knowledge_retrieval/analytics.py`)
+   - `UsageAnalytics` — Real-time event tracking:
+     - `record_retrieval()` — Session with query, results, context, duration
+     - `record_selection()`, `record_feedback()`, `record_task_outcome()`
+   - `ResultUsageStats` — Per-result: selection rate, positive/negative feedback, task success rate, usefulness score
+   - `SourceUsageStats` — Per-source: query count, result count, selection rate, reliability, usefulness
+   - Query analytics for pattern analysis
+   - Persistent JSON storage with configurable auto-save interval
+   - Drives adaptive ranking weight adjustment
+
+6. **Source Adapters** (`app/knowledge_retrieval/sources.py`)
+   - `KnowledgeSourceAdapter` base class with `source_type`, `is_available()`, `retrieve_candidates()`, `get_source_quality()`
+   - 9 concrete adapters:
+     - `SemanticMemoryAdapter` — General programming knowledge
+     - `EpisodicMemoryAdapter` — Event history with outcomes
+     - `ProjectMemoryAdapter` — Project-specific knowledge
+     - `WorkingMemoryAdapter` — Current execution context
+     - `LongTermMemoryAdapter` — User preferences, permanent facts
+     - `ExperienceMemoryAdapter` — Past task experiences
+     - `EngineeringLessonsAdapter` — Patterns and anti-patterns
+     - `ExtractedKnowledgeAdapter` — From knowledge_extraction pipeline
+     - `DocumentationAdapter` — Markdown/RST docs
+   - `create_adapters_from_agent(agent)` — Auto-creates all adapters from FreyaAgent
+
+**Integration:**
+- Convenience functions: `get_default_pipeline()`, `retrieve_knowledge()`, `register_knowledge_source()`, `create_pipeline_from_agent()`
+- Integrates with Natural Conversation, Planning, Memory, Decision Making, Reflection, Autonomous Learning, Knowledge Acquisition, Knowledge Validation, Software Engineering, Tool Ecosystem
+
+**Tests:** 27 tests in `tests/test_knowledge_retrieval.py` — all passing
+
+**Known Limitations:**
+- No semantic vector search (keyword/phrase matching only; could integrate FAISS)
+- No cross-project retrieval (single workspace only)
+- No UI dashboard (analytics via programmatic access only)
+- Calibration requires minimum samples (~20 observations per source)
+- Adaptation is simple (gradient-like weight adjustment only)
+
+**Future Enhancements:**
+- Semantic vector search integration
+- Multi-project/federated retrieval
+- Retrieval UI dashboard for observability
+- More sophisticated adaptive ranking (bandit algorithms)
+- Query expansion and reformulation
+- Knowledge graph traversal for related topics
+- Personalized ranking per user/context
 
 ---
 
