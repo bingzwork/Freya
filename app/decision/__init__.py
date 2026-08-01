@@ -21,6 +21,13 @@ from app.decision.models import (
     DecisionManagerConfig,
 )
 
+from app.confidence.confidence_model import (
+    DecisionConfidence,
+    ActionConfidence,
+    RecommendationConfidence,
+)
+from app.confidence.confidence_scoring import ConfidenceLevel
+
 from app.decision.manager import (
     DecisionManager,
     decide_tool_selection,
@@ -88,6 +95,11 @@ __all__ = [
     "DecisionResult",
     "DecisionRecord",
     "DecisionManagerConfig",
+    # Confidence scoring
+    "DecisionConfidence",
+    "ActionConfidence",
+    "RecommendationConfidence",
+    "ConfidenceLevel",
     # Core components
     "DecisionManager",
     "DecisionWorkflow",
