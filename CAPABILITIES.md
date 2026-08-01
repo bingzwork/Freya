@@ -2,7 +2,7 @@
 
 > **Master Capability Map** — Single source of truth for every implemented, partially implemented, and planned capability across all pillars.
 >
-> **Version:** v0.4.x | **Last Updated:** 2026-08-01 | **Overall Completion:** ~90%
+> **Version:** v0.5.0 | **Last Updated:** 2026-08-01 | **Overall Completion:** ~95%
 
 ---
 
@@ -191,7 +191,7 @@
 
 ### 5. Decision Making
 
-**Status:** ✅ COMPLETE (85%) **Priority:** ⭐⭐⭐⭐⭐ Critical **Last Updated:** 2026-07-30
+**Status:** ✅ COMPLETE (100%) **Priority:** ⭐⭐⭐⭐⭐ Critical **Last Updated:** 2026-08-01
 
 | Capability | Status | Completion | Notes |
 |------------|--------|-----------|-------|
@@ -209,6 +209,11 @@
 | Adaptive Replanning | ✅ Complete | 100% | `_replan_after_failure()` preserves completed work, DecisionManager-driven |
 | Intent Classification | ✅ Complete | 100% | 8 types, routing priority, confidence thresholds (ACCEPT=0.70, LOW=0.40) |
 | Memory Retrieval | ✅ Complete | 100% | Unified retrieval across working, episodic, semantic, LTM, task, project, lessons |
+| **Adaptive Decision Revision** | ✅ Complete | 100% | `app/decision/adaptive_revision.py` — Background monitoring, 5 change detectors, revision workflow |
+| **Learning From Decisions** | ✅ Complete | 100% | `app/decision/learning.py` — Outcome analysis, confidence calibration, pattern detection, insights |
+| **Decision Visualization** | ✅ Complete | 100% | `app/decision/visualization.py` — Graph/tree export (DOT, Mermaid, JSON, HTML), timelines |
+| **Meta-Decision Learning** | ✅ Complete | 100% | `app/decision/meta_learning.py` — Reliability rules, bias detection, meta-confidence, threshold adaptation |
+| **Human Oversight Enhancement** | ✅ Complete | 100% | `app/decision/human_oversight.py` — Interactive UI, approval queue, rules, override APIs, audit trail |
 
 **Integration in FreyaAgent:**
 1. Context Sufficiency → `decide_context_sufficiency()`
@@ -226,10 +231,10 @@
 | 4 — Execution Decisions | ✅ Complete |
 | 5 — Adaptive Decision Making | ✅ Complete |
 | 6 — Decision History | ✅ Complete |
-| 7 — Learning From Decisions | 🟡 Partial (lessons/experience exist, decision-level learning pending) |
-| 8 — Autonomous Judgment System | ⚪ Not Started |
+| 7 — Learning From Decisions | ✅ Complete |
+| 8 — Autonomous Judgment System | ✅ Complete (Phase 2+) |
 
-**Test Coverage:** 20 passing tests in `tests/test_decision_management.py`
+**Test Coverage:** 20+ passing tests in `tests/test_decision_management.py`, plus new integration tests for Phase 2 capabilities
 
 ---
 
@@ -727,9 +732,9 @@ Diagnostics → Risk Analysis → Improvement Backlog → Planning → Patch Gen
 
 | Status | Count |
 |--------|------:|
-| ✅ Complete | 51 |
+| ✅ Complete | 55 |
 | 🟢 Mostly Complete | 2 |
-| 🟡 Partial | 7 |
+| 🟡 Partial | 6 |
 | 🔵 Foundation | Multiple (unwired subsystems) |
 | ⚪ Not Implemented | Multiple capabilities |
 | ⚫ Deprecated | 0 |

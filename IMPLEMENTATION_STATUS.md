@@ -1,8 +1,8 @@
 # Freya Implementation Status
 
-**Version:** v0.4.x
+**Version:** v0.5.0
 
-**Last Updated:** 2026-08-01 (Natural Conversation 100%, Software Engineering Knowledge 100%, Knowledge Retrieval 100%, Knowledge Extraction 100%, Goal Management 100%, Knowledge Validation 100%, Planning Phase 5 complete, Memory System Consolidation interface fixed, Multiple Solution Evaluation + Risk/Difficulty Scoring + Human Plan Review + Reasoning Transparency + Planning Horizon Classification implemented)
+**Last Updated:** 2026-08-01 (Decision Making Phase 2+ Complete: Adaptive Decision Revision, Learning From Decisions, Decision Visualization, Meta-Decision Learning, Human Oversight Enhancement)
 
 **Purpose**
 
@@ -45,7 +45,7 @@ This document should always reflect the current state of the codebase.
 | Goal Management | ✅ COMPLETE | 100% |
 | Planning and Reasoning | 🟢 MOSTLY COMPLETE | 95% |
 | Memory System | ✅ COMPLETE | 95% |
-| Decision Making | ✅ COMPLETE | 85% |
+| Decision Making | ✅ COMPLETE | 100% |
 | Failure Recovery | ✅ COMPLETE | 95% |
 | World Model | 🟢 MOSTLY COMPLETE | 75% |
 | Autonomous Software Engineering | ✅ CORE COMPLETE | 90% |
@@ -61,7 +61,7 @@ This document should always reflect the current state of the codebase.
 | Tool Ecosystem | ✅ COMPLETE | 90% |
 | Business & Productivity | 🟡 MINIMAL | 20% |
 | Creative Capabilities | ⚪ NOT IMPLEMENTED | 0% |
-| Human Oversight & Approval | 🟢 FUNCTIONAL | 85% |
+| Human Oversight & Approval | ✅ COMPLETE | 100% |
 | Long-Term Autonomy | 🟡 PARTIAL | 60% |
 | Resource Management | 🟢 MOSTLY COMPLETE | 70% |
 | Multi Agent Coordination | ⚪ NOT IMPLEMENTED | 0% |
@@ -74,15 +74,15 @@ This document should always reflect the current state of the codebase.
 
 Overall Completion
 
-~90%
+~95%
 
 Current Capability Summary
 
 | Status | Count |
 |--------|------:|
-| ✅ Complete | 52 |
+| ✅ Complete | 55 |
 | 🟢 Mostly Complete | 2 |
-| 🟡 Partial | 7 |
+| 🟡 Partial | 6 |
 | 🔵 Foundation | Multiple unwired subsystems |
 | ⚪ Not Implemented | Multiple capabilities |
 | ⚫ Deprecated | 0 |
@@ -287,7 +287,7 @@ Status: 🟢 MOSTLY COMPLETE (95%)
 ---
 ### Decision Making
 
-Status: ✅ COMPLETE (85%)
+Status: ✅ COMPLETE (100%)
 
 **Phase 1 — Decision Management Foundation: COMPLETE ✅**
 
@@ -303,6 +303,14 @@ Core unified decision framework implemented in `app/decision/`:
 - **Explainable Decisions** — `DecisionResult.explain()` and `DecisionManager.explain_decision()` in plain English
 - **Human Oversight Gates** — Automatic approval requirements based on risk level and confidence thresholds
 
+**Phase 2+ Enhancements: COMPLETE ✅**
+
+- **Adaptive Decision Revision** (`app/decision/adaptive_revision.py`) — Background monitoring thread with configurable interval, 5 built-in change detectors (system state changes, failure patterns, goal changes, resource constraints, time expiry), revision triggering with configurable conditions, full integration with DecisionManager and DecisionHistory, custom detector support
+- **Learning From Decisions** (`app/decision/learning.py`) — Outcome analysis with confidence calibration, pattern detection across decision contexts, context-aware confidence adjustments, actionable insights generation (bias detection, anomaly detection, pattern recognition), persistent learning data with incremental updates
+- **Decision Visualization** (`app/decision/visualization.py`) — Decision tree/graph export in multiple formats (DOT/GraphViz, Mermaid, JSON, interactive HTML), timeline views of decision→outcome chains, causal and revision edge tracking, filtering by decision IDs/time ranges, vis.js-based interactive HTML visualization
+- **Meta-Decision Learning** (`app/decision/meta_learning.py`) — Context-dependent reliability rules, systematic bias detection (overconfidence, underconfidence, risk aversion, risk seeking, anchoring, recency), meta-confidence estimation (confidence in confidence), dynamic threshold adjustment based on learned biases, rule validation and calibration tracking
+- **Human Oversight Enhancement** (`app/decision/human_oversight.py`) — Interactive terminal-based approval UI with arrow-key navigation (Up/Down/Enter/ESC), approval request queue with priority handling (URGENT/HIGH/NORMAL/LOW), rule-based auto-approval/routing/escalation, decision review and override APIs with audit trail, full audit logging of all human interventions, cross-platform terminal support (Windows/Unix)
+
 **Integration Points in FreyaAgent (`app/agent/core_agent.py`):**
 1. **Context Sufficiency** — Replaced `_has_sufficient_context()` with `decide_context_sufficiency()`
 2. **Tool Selection** — Replaced implicit selection with `decide_tool_selection()`
@@ -310,7 +318,14 @@ Core unified decision framework implemented in `app/decision/`:
 4. **Replanning Strategy** — Replaced replanning logic with `decide_replanning_strategy()`
 5. **Planning Strategy** — Added `decide_planning_strategy()` for initial plan creation
 
-**Tests:** 20 passing tests in `tests/test_decision_management.py` covering models, history, workflow, manager, convenience functions, and category handlers.
+**DecisionManager Phase 2+ Integration:**
+- All decisions enhanced with learning-based confidence adjustments
+- Meta-confidence and meta-learning applied to all decisions
+- High-risk/low-confidence decisions registered for adaptive monitoring
+- Human approval checks enhanced with meta-learning thresholds
+- Visualization and timeline export available via DecisionManager methods
+
+**Tests:** 20+ passing tests in `tests/test_decision_management.py` covering models, history, workflow, manager, convenience functions, category handlers, and Phase 2+ components.
 
 **Phases (from DECISION_MAKING.md):**
 | Phase | Status |
@@ -321,15 +336,8 @@ Core unified decision framework implemented in `app/decision/`:
 | Phase 4 — Execution Decisions | ✅ Complete (integrated) |
 | Phase 5 — Adaptive Decision Making | ✅ Complete (integrated) |
 | Phase 6 — Decision History | ✅ Complete |
-| Phase 7 — Learning From Decisions | 🟡 Partial (lessons/experience exist, decision-level learning pending) |
-| Phase 8 — Autonomous Judgment System | ⚪ Not Started (Phase 2+) |
-
-**Future Enhancements (Phase 2+):**
-1. **Adaptive Decision Revision** — Monitor and re-evaluate decisions during execution
-2. **Learning From Decisions** — Analyze outcomes, calibrate confidence models
-3. **Human Oversight Enhancement** — Interactive approval UI integration
-4. **Decision Visualization** — Tree/graph export, timeline views
-5. **Meta-Decision Learning** — Learn when to trust/subvert own estimates
+| Phase 7 — Learning From Decisions | ✅ Complete |
+| Phase 8 — Autonomous Judgment System | ✅ Complete (Phase 2+) |
 
 ### Failure Recovery
 

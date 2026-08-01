@@ -15,7 +15,7 @@ It integrates with existing systems:
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 import logging
 import uuid
 
@@ -153,6 +153,16 @@ class DecisionManager:
             "confidence_calibrations": 0,
         }
 
+        # Phase 2+ Enhancement Components (lazy-initialized to avoid circular imports)
+        self._adaptive_revision: Optional[Any] = None
+        self._learning_from_decisions: Optional[Any] = None
+        self._visualization: Optional[Any] = None
+        self._meta_learning: Optional[Any] = None
+        self._human_oversight: Optional[Any] = None
+
+        # Initialize Phase 2+ capabilities
+        self._init_phase2_capabilities()
+
         logger.info(f"DecisionManager initialized with workspace: {workspace}")
 
     def _register_default_handlers(self) -> None:
@@ -210,6 +220,9 @@ class DecisionManager:
         handler = self._handlers.get(result.category)
         if handler:
             result = handler(context, result)
+
+        # Enhance with Phase 2+ capabilities
+        result = self._enhance_result_with_phase2(context, result)
 
         # Record decision if enabled
         if self.config.record_all_decisions:
@@ -402,6 +415,327 @@ class DecisionManager:
         stats["history"] = self.history.get_summary()
         return stats
 
+    # -------------------------------------------------------------------------
+    # Phase 2+ Enhancement Accessors
+    # -------------------------------------------------------------------------
+
+    @property
+    def adaptive_revision(self) -> Optional[Any]:
+        """Get the Adaptive Decision Revision component."""
+        return self._adaptive_revision
+
+    @property
+    def learning_from_decisions(self) -> Optional[Any]:
+        """Get the Learning From Decisions component."""
+        return self._learning_from_decisions
+
+    @property
+    def visualization(self) -> Optional[Any]:
+        """Get the Decision Visualization component."""
+        return self._visualization
+
+    @property
+    def meta_learning(self) -> Optional[Any]:
+        """Get the Meta-Decision Learning component."""
+        return self._meta_learning
+
+    @property
+    def human_oversight(self) -> Optional[Any]:
+        """Get the Human Oversight Manager component."""
+        return self._human_oversight
+
+    # -------------------------------------------------------------------------
+    # Phase 2+ Enhancement Public Methods
+    # -------------------------------------------------------------------------
+
+    def start_adaptive_monitoring(self, context_provider: Callable[[], DecisionContext]) -> None:
+        """Start background adaptive decision monitoring.
+
+        Args:
+            context_provider: Function that returns current DecisionContext
+        """
+        if self._adaptive_revision:
+            self._adaptive_revision.start_monitoring(context_provider)
+            logger.info("[DecisionManager] Started adaptive decision monitoring")
+        else:
+            logger.warning("[DecisionManager] Adaptive revision not available")
+
+    def stop_adaptive_monitoring(self) -> None:
+        """Stop background adaptive decision monitoring."""
+        if self._adaptive_revision:
+            self._adaptive_revision.stop_monitoring()
+            logger.info("[DecisionManager] Stopped adaptive decision monitoring")
+
+    def run_learning_analysis(self, force_refresh: bool = False) -> Dict[str, Any]:
+        """Run learning analysis on decision outcomes.
+
+        Args:
+            force_refresh: Force re-analysis of all records
+
+        Returns:
+            Analysis results
+        """
+        if self._learning_from_decisions:
+            return self._learning_from_decisions.analyze_outcomes(force_refresh=force_refresh)
+        return {"error": "Learning from decisions not available"}
+
+    def run_meta_analysis(self, force_refresh: bool = False) -> Dict[str, Any]:
+        """Run meta-decision learning analysis.
+
+        Args:
+            force_refresh: Force re-analysis of all records
+
+        Returns:
+            Analysis results
+        """
+        if self._meta_learning:
+            return self._meta_learning.analyze(force_refresh=force_refresh)
+        return {"error": "Meta-decision learning not available"}
+
+    def get_meta_confidence(
+        self,
+        decision_type: DecisionType,
+        predicted_confidence: float,
+        context: Dict[str, Any],
+    ) -> Tuple[float, float, str]:
+        """Get meta-confidence for a confidence estimate.
+
+        Returns:
+            Tuple of (meta_confidence, adjusted_confidence, explanation)
+        """
+        if self._meta_learning:
+            return self._meta_learning.get_meta_confidence(decision_type, predicted_confidence, context)
+        return 0.5, predicted_confidence, "Meta-learning not available"
+
+    def should_require_human_approval(
+        self,
+        decision_type: DecisionType,
+        risk_level: str,
+        confidence: float,
+        context: Dict[str, Any],
+    ) -> Tuple[bool, str]:
+        """Determine if human approval is required (with meta-learning)."""
+        if self._meta_learning:
+            return self._meta_learning.should_require_human_approval(decision_type, risk_level, confidence, context)
+
+        # Fallback to default logic
+        requires = risk_level in ("critical", "high") or confidence < 0.5
+        reason = []
+        if risk_level in ("critical", "high"):
+            reason.append(f"risk level {risk_level}")
+        if confidence < 0.5:
+            reason.append(f"low confidence {confidence:.0%}")
+        return requires, "; ".join(reason) if reason else "No approval required"
+
+    def export_decision_graph(
+        self,
+        decision_ids: Optional[List[str]] = None,
+        formats: List[str] = None,
+    ) -> Dict[str, str]:
+        """Export decision graph visualization.
+
+        Args:
+            decision_ids: Optional list of decision IDs to visualize
+            formats: List of formats (dot, mermaid, json, html)
+
+        Returns:
+            Dict mapping format to output file path
+        """
+        if not self._visualization:
+            return {"error": "Visualization not available"}
+
+        formats = formats or ["dot", "mermaid", "json", "html"]
+        return self._visualization.export_all_formats(decision_ids, formats=formats)
+
+    def export_decision_timeline(
+        self,
+        decision_ids: Optional[List[str]] = None,
+        formats: List[str] = None,
+    ) -> Dict[str, str]:
+        """Export decision timeline visualization.
+
+        Args:
+            decision_ids: Optional list of decision IDs to visualize
+            formats: List of formats (json, mermaid)
+
+        Returns:
+            Dict mapping format to output file path
+        """
+        if not self._visualization:
+            return {"error": "Visualization not available"}
+
+        formats = formats or ["json", "mermaid"]
+        events = self._visualization.build_timeline(decision_ids)
+        results = {}
+        if "json" in formats:
+            results["json"] = self._visualization.export_timeline_json(events)
+        if "mermaid" in formats:
+            results["mermaid"] = self._visualization.export_timeline_mermaid(events)
+        return results
+
+    def request_human_approval(
+        self,
+        decision_id: str,
+        decision_type: DecisionType,
+        risk_level: str,
+        confidence: float,
+        title: str,
+        description: str,
+        options: List[DecisionOption],
+        recommended_option: Optional[DecisionOption] = None,
+        context: Optional[Dict[str, Any]] = None,
+        priority: Any = None,
+    ) -> Optional[Any]:
+        """Request human approval for a decision.
+
+        Args:
+            decision_id: ID of the decision
+            decision_type: Type of decision
+            risk_level: Risk level
+            confidence: Confidence in recommendation
+            title: Short title
+            description: Detailed description
+            options: Available options
+            recommended_option: Recommended option
+            context: Additional context
+            priority: Request priority
+
+        Returns:
+            ApprovalRequest if created, None if oversight not available
+        """
+        # Handle priority lazily
+        if priority is None:
+            try:
+                from app.decision.human_oversight import ApprovalPriority
+                priority = getattr(ApprovalPriority, 'NORMAL', 'normal')
+            except ImportError:
+                priority = 'normal'
+
+        if not self._human_oversight:
+            return None
+
+        return self._human_oversight.request_approval(
+            decision_id=decision_id,
+            decision_type=decision_type,
+            risk_level=risk_level,
+            confidence=confidence,
+            title=title,
+            description=description,
+            options=options,
+            recommended_option=recommended_option,
+            context=context or {},
+            priority=priority,
+        )
+
+    def get_pending_approvals(self) -> List[Any]:
+        """Get all pending approval requests."""
+        if self._human_oversight:
+            return self._human_oversight.get_pending_requests()
+        return []
+
+    def run_approval_ui(self) -> None:
+        """Run the interactive approval UI."""
+        if self._human_oversight:
+            self._human_oversight.run_approval_ui()
+        else:
+            logger.warning("[DecisionManager] Human oversight not available")
+
+    def review_decision(self, decision_id: str) -> Optional[Dict[str, Any]]:
+        """Review a decision and its approval history."""
+        if self._human_oversight:
+            return self._human_oversight.review_decision(decision_id)
+        return None
+
+    def override_decision(
+        self,
+        decision_id: str,
+        new_option: DecisionOption,
+        reason: str,
+        overridden_by: str = "user",
+    ) -> bool:
+        """Override a decision's chosen option."""
+        if self._human_oversight:
+            return self._human_oversight.override_decision(decision_id, new_option, reason, overridden_by)
+        return False
+
+    def get_audit_log(
+        self,
+        decision_id: Optional[str] = None,
+        action_type: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """Get audit log entries."""
+        if self._human_oversight:
+            return self._human_oversight.get_audit_log(decision_id, action_type, limit)
+        return []
+
+    # -------------------------------------------------------------------------
+    # Enhanced Decision Workflow Integration
+    # -------------------------------------------------------------------------
+
+    def _enhance_result_with_phase2(self, context: DecisionContext, result: DecisionResult) -> DecisionResult:
+        """Enhance decision result with Phase 2+ capabilities."""
+        # Apply learning-based confidence adjustment
+        if self._learning_from_decisions:
+            adjustment, explanation = self._learning_from_decisions.get_confidence_adjustment(
+                result.decision_type,
+                {
+                    "risk_level": result.risk_level,
+                    "component": context.component,
+                    **context.metadata,
+                },
+            )
+            if adjustment != 1.0:
+                original_confidence = result.confidence
+                result.confidence = max(0.0, min(1.0, result.confidence * adjustment))
+                result.confidence_level = self._confidence_level_from_score(result.confidence)
+                result.rationale += f" [Learning adjustment: {explanation}]"
+
+        # Apply meta-learning confidence adjustment
+        if self._meta_learning:
+            meta_conf, adjusted_conf, meta_explanation = self._meta_learning.get_meta_confidence(
+                result.decision_type,
+                result.confidence,
+                {
+                    "risk_level": result.risk_level,
+                    "component": context.component,
+                    **context.metadata,
+                },
+            )
+            if meta_conf < 0.5:
+                result.rationale += f" [Low meta-confidence: {meta_explanation}]"
+            result.confidence = adjusted_conf
+            result.confidence_level = self._confidence_level_from_score(result.confidence)
+
+        # Check if human approval required (enhanced with meta-learning)
+        if self.config.enable_human_oversight and self._meta_learning:
+            requires_approval, reason = self.should_require_human_approval(
+                result.decision_type,
+                result.risk_level,
+                result.confidence,
+                {
+                    "risk_level": result.risk_level,
+                    "component": context.component,
+                    **context.metadata,
+                },
+            )
+            if requires_approval:
+                result.requires_approval = True
+                result.should_execute = False
+                result.rationale += f" [Meta-learning: {reason}]"
+
+        # Register for adaptive monitoring if significant decision
+        if (self._adaptive_revision and
+            result.risk_level in ("high", "critical") and
+            result.confidence > 0.5):
+            self._adaptive_revision.register_decision_for_monitoring(
+                decision_id=result.decision_id,
+                context=context,
+                max_revisions=3,
+            )
+
+        return result
+
     def calibrate_confidence(
         self,
         decision_id: str,
@@ -580,17 +914,19 @@ class DecisionManager:
 
     def _confidence_level_from_score(self, score: float):
         """Convert score to confidence level."""
-        if ConfidenceLevel:
-            return ConfidenceLevel.from_score(score)
-        if score >= 0.8:
-            return "very_high"
-        elif score >= 0.6:
-            return "high"
-        elif score >= 0.4:
-            return "medium"
-        elif score >= 0.2:
-            return "low"
-        return "critical"
+        try:
+            from app.confidence.confidence_scoring import ConfidenceLevel as CL
+            return CL.from_score(score).value
+        except ImportError:
+            if score >= 0.8:
+                return "very_high"
+            elif score >= 0.6:
+                return "high"
+            elif score >= 0.4:
+                return "medium"
+            elif score >= 0.2:
+                return "low"
+            return "critical"
 
     # -------------------------------------------------------------------------
     # Recording and statistics
@@ -599,6 +935,17 @@ class DecisionManager:
     def _record_decision(self, context: DecisionContext, result: DecisionResult) -> None:
         """Record decision to history."""
         record = DecisionRecord.from_result(result, context)
+        # Store alternatives in metadata for visualization
+        if result.alternatives_considered:
+            record.metadata["alternatives_considered"] = [
+                {"name": opt.name, "action": opt.action, "description": opt.description}
+                for opt in result.alternatives_considered
+            ]
+        # Store revision info if applicable
+        if result.metadata.get("is_revision"):
+            record.metadata["is_revision"] = True
+            record.metadata["original_decision_id"] = result.metadata.get("original_decision_id")
+            record.metadata["trigger_changes"] = result.metadata.get("trigger_changes", [])
         self.history.add_record(record)
 
     def _update_stats(self, result: DecisionResult) -> None:
@@ -621,6 +968,67 @@ class DecisionManager:
         # This is a placeholder for more sophisticated calibration
         # In the future, this could update the confidence calculator's weights
         pass
+
+    def _init_phase2_capabilities(self) -> None:
+        """Initialize Phase 2+ enhancement capabilities."""
+        # Lazy imports to avoid circular dependency
+        try:
+            from app.decision.adaptive_revision import AdaptiveDecisionRevision
+            self._adaptive_revision = AdaptiveDecisionRevision(
+                decision_manager=self,
+                decision_history=self.history,
+                check_interval_seconds=30.0,
+            )
+            logger.info("[DecisionManager] Adaptive Decision Revision initialized")
+        except ImportError:
+            logger.debug("[DecisionManager] Adaptive Decision Revision not available")
+
+        try:
+            from app.decision.learning import LearningFromDecisions
+            calc = self._get_confidence_calculator()
+            self._learning_from_decisions = LearningFromDecisions(
+                decision_history=self.history,
+                confidence_calculator=calc,
+                workspace=self.workspace,
+            )
+            logger.info("[DecisionManager] Learning From Decisions initialized")
+        except ImportError:
+            logger.debug("[DecisionManager] Learning From Decisions not available")
+
+        try:
+            from app.decision.visualization import DecisionVisualization
+            self._visualization = DecisionVisualization(
+                decision_history=self.history,
+                workspace=self.workspace,
+            )
+            logger.info("[DecisionManager] Decision Visualization initialized")
+        except ImportError:
+            logger.debug("[DecisionManager] Decision Visualization not available")
+
+        try:
+            from app.decision.meta_learning import MetaDecisionLearning
+            calc = self._get_confidence_calculator()
+            self._meta_learning = MetaDecisionLearning(
+                decision_history=self.history,
+                learning_from_decisions=self._learning_from_decisions,
+                confidence_calculator=calc,
+                workspace=self.workspace,
+            )
+            logger.info("[DecisionManager] Meta-Decision Learning initialized")
+        except ImportError:
+            logger.debug("[DecisionManager] Meta-Decision Learning not available")
+
+        try:
+            from app.decision.human_oversight import HumanOversightManager
+            self._human_oversight = HumanOversightManager(
+                decision_history=self.history,
+                workspace=self.workspace,
+                default_timeout_seconds=300.0,
+                enable_ui=True,
+            )
+            logger.info("[DecisionManager] Human Oversight Manager initialized")
+        except ImportError:
+            logger.debug("[DecisionManager] Human Oversight not available")
 
 
 # -------------------------------------------------------------------------

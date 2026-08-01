@@ -1,6 +1,6 @@
 # Decision Making
 
-**Status:** ✅ IMPLEMENTED (Phase 1 Complete - Unified Decision Framework)
+**Status:** ✅ IMPLEMENTED (Phase 1 & Phase 2 Complete - Full Decision Framework + Enhancements)
 
 **Priority:** ⭐⭐⭐⭐⭐ Critical
 
@@ -22,6 +22,11 @@ Decision Making is Freya's judgment layer — the system that evaluates whether 
 | **Decision History** | ✅ Complete | Structured decision log with outcomes |
 | **Explainable Decisions** | ✅ Complete | Plain-English decision explanations |
 | **Human Oversight Integration** | ✅ Complete | Approval gates based on risk/confidence |
+| **Adaptive Decision Revision** | ✅ Complete | Monitor outcomes during execution, re-evaluate when context changes |
+| **Learning From Decisions** | ✅ Complete | Analyze outcomes, update confidence models, detect patterns |
+| **Decision Visualization** | ✅ Complete | Decision tree/graph export, timeline view in multiple formats |
+| **Meta-Decision Learning** | ✅ Complete | Learn when to trust/subvert confidence estimates |
+| **Human Oversight Enhancement** | ✅ Complete | Interactive approval UI, review/override APIs, audit trail |
 
 ---
 
@@ -74,14 +79,14 @@ Code and system risk analysis:
 
 ---
 
-## What's Missing (Phase 2+ Enhancements)
+## What's Missing (Phase 3+ Future Enhancements)
 
 | Missing Piece | Purpose | Dependencies |
 |---------------|---------|--------------|
-| **Adaptive Decision Revision** | Monitor outcomes during execution, re-evaluate when context changes | Decision Manager |
-| **Learning From Decisions** | Analyze successful vs failed decisions, update confidence models | Decision History |
-| **Decision Visualization** | Decision tree/graph export, timeline view | Decision History |
-| **Meta-Decision Learning** | Learn when to trust/subvert own confidence estimates | Learning From Decisions |
+| **Advanced Decision Visualization** | Interactive web-based dashboard, real-time updates | Decision Visualization (basic complete) |
+| **Cross-Project Decision Transfer** | Transfer decision patterns across projects | Meta-Decision Learning |
+| **Collaborative Decision Making** | Multi-human approval workflows | Human Oversight Enhancement |
+| **Decision Market/Trading** | Internal prediction markets for decision outcomes | All Phase 2 components |
 
 ---
 
@@ -120,30 +125,68 @@ Code and system risk analysis:
    - Persistent log with decision, rationale, confidence, risk, outcome, timestamp
    - Searchable by type, component, time range, outcome
 
-### ⭐⭐⭐⭐ High (Phase 2+ - Future Enhancements)
-4. **Adaptive Decision Revision**
+### ⭐⭐⭐⭐ High (Phase 2+ - COMPLETE ✅)
+4. **Adaptive Decision Revision** (`app/decision/adaptive_revision.py`)
    - Monitor outcomes during execution
    - Re-evaluate decisions when context changes significantly
    - Dynamic action selection based on new information
+   - Background monitoring thread with configurable interval
+   - 5 built-in change detectors (system state, failures, goals, resources, time)
 
-5. **Learning From Decisions**
+5. **Learning From Decisions** (`app/decision/learning.py`)
    - Analyze successful vs failed decisions
    - Update confidence models from outcomes
    - Pattern recognition for recurring decision contexts
+   - Confidence calibration with context-aware adjustments
+   - Actionable insights generation (bias, anomaly, pattern detection)
 
-6. **Human Oversight Enhancement**
-   - Interactive approval UI integration
-   - Review history and override APIs
+6. **Human Oversight Enhancement** (`app/decision/human_oversight.py`)
+   - Interactive terminal-based approval UI with arrow-key navigation
+   - Approval request queue with priority handling
+   - Rule-based auto-approval/routing/escalation
+   - Decision review and override APIs
+   - Full audit trail for human interventions
 
-### ⭐⭐⭐ Medium (Phase 3 - Optional Improvements)
-7. **Decision Visualization**
+### ⭐⭐⭐ Medium (Phase 2+ - COMPLETE ✅)
+7. **Decision Visualization** (`app/decision/visualization.py`)
    - Decision tree/graph export for debugging
    - Timeline view of decision → outcome chains
+   - Multiple output formats: DOT/GraphViz, Mermaid, JSON, HTML (interactive)
+   - Causal and revision edge tracking
+
+### ⭐⭐ High (Phase 2+ - COMPLETE ✅)
+8. **Meta-Decision Learning** (`app/decision/meta_learning.py`)
+   - Learn when to trust/subvert own confidence estimates
+   - Context-dependent reliability rules
+   - Systematic bias detection (overconfidence, risk aversion, anchoring, recency)
+   - Dynamic threshold adjustment based on learned biases
+   - Meta-confidence: confidence in confidence estimates
+
+---
+
+## Phase 3+ Future Enhancements
+
+### ⭐⭐⭐ Medium (Phase 3 - Optional Improvements)
+9. **Advanced Decision Visualization**
+   - Interactive web-based dashboard with real-time updates
+   - Drill-down into decision contexts and outcomes
+   - Comparative analysis across projects
+
+10. **Cross-Project Decision Transfer**
+    - Transfer decision patterns across projects
+    - Shared meta-learning models
+    - Federated decision learning
 
 ### ⭐⭐ Low (Phase 4 - Future Ideas)
-8. **Meta-Decision Learning**
-   - Learn when to trust/subvert own confidence estimates
-   - Transfer decision patterns across projects
+11. **Collaborative Decision Making**
+    - Multi-human approval workflows
+    - Consensus-based decision routing
+    - Stakeholder notification and escalation
+
+12. **Decision Market/Trading**
+    - Internal prediction markets for decision outcomes
+    - Calibration through betting mechanisms
+    - Incentivized accuracy in confidence estimation
 
 ---
 
@@ -176,7 +219,7 @@ The Decision Manager connects these existing systems:
 
 ## Completion Estimate
 
-**Current: ~85%** — Core Phase 1 complete with unified orchestration layer.
+**Current: ~100%** — Phase 1 & Phase 2 complete with full unified orchestration layer + all enhancements.
 
 | Phase | Status |
 |-------|--------|
@@ -186,15 +229,14 @@ The Decision Manager connects these existing systems:
 | Phase 4 — Execution Decisions | ✅ Complete (integrated) |
 | Phase 5 — Adaptive Decision Making | ✅ Complete (integrated) |
 | Phase 6 — Decision History | ✅ Complete |
-| Phase 7 — Learning From Decisions | 🟡 Partial (lessons/experience exist, decision-level learning pending) |
-| Phase 8 — Autonomous Judgment System | ⚪ Not Started (Phase 2+) |
+| Phase 7 — Learning From Decisions | ✅ Complete |
+| Phase 8 — Autonomous Judgment System | ✅ Complete (Phase 2+) |
 
 ---
 
-## Next Steps
+## Next Steps (Phase 3+)
 
-1. **Phase 2**: Implement Adaptive Decision Revision - monitor and re-evaluate decisions during execution
-2. **Phase 2**: Enhance Learning From Decisions - analyze outcomes and update confidence models
-3. **Phase 2**: Human Oversight Enhancement - interactive approval UI
-4. **Phase 3**: Decision Visualization - tree/graph export and timeline views
-5. **Phase 4**: Meta-Decision Learning - learn when to trust/subvert confidence estimates
+1. **Phase 3**: Advanced Decision Visualization - interactive web dashboard with real-time updates
+2. **Phase 3**: Cross-Project Decision Transfer - share patterns across projects
+3. **Phase 4**: Collaborative Decision Making - multi-human approval workflows
+4. **Phase 4**: Decision Market/Trading - internal prediction markets for decision outcomes
