@@ -12,6 +12,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 
+from app.core.file_allowlist import FileAllowlist, get_file_allowlist, FileOperation, AccessRule
+
+# Shared infrastructure imports
+from app.core.events import get_event_bus
+from app.core.background_jobs import get_job_service
+from app.core.background_jobs import JobTriggerConfig, JobTriggerType, JobPriority
+from app.core.observability import get_observability_hub
+from app.core.observability import HealthStatus, HealthResult, HealthCheck, ComponentInfo, ComponentType
+
 
 def _get_default_storage_path() -> Path:
     """Get the default storage path for long-term memory.
@@ -88,6 +97,10 @@ class LongTermMemory:
         workspace: str = ".",
         storage_path: str = "data/memory/long_term_memory.json",
         max_entries: int = 5000,
+        file_allowlist: Optional[FileAllowlist] = None,
+        event_bus: Optional[object] = None,
+        job_service: Optional[object] = None,
+        observability: Optional[object] = None,
     ):
         """Initialize Long-Term Memory.
 
@@ -95,13 +108,135 @@ class LongTermMemory:
             workspace: Project workspace directory
             storage_path: Relative path to storage file within workspace
             max_entries: Maximum number of entries to keep in history
+            file_allowlist: Optional FileAllowlist for access validation
+            event_bus: Optional EventBus instance (uses global if not provided)
+            job_service: Optional BackgroundJobService instance (uses global if not provided)
+            observability: Optional ObservabilityHub instance (uses global if not provided)
         """
         self.workspace = Path(workspace).resolve()
         self.storage_path = self.workspace / storage_path
         self.max_entries = max_entries
+        self.file_allowlist = file_allowlist or get_file_allowlist()
         self._lock = threading.RLock()
         self._entries: Dict[str, LongTermEntry] = {}  # key -> entry (key is category.key)
+
+        # Shared infrastructure
+        self._event_bus = event_bus or get_event_bus()
+        self._job_service = job_service or get_job_service()
+        self._observability = observability or get_observability_hub()
+
+        # Configure allowlist for this workspace
+        self._configure_allowlist_for_workspace()
+
         self._load()
+
+        # Register with observability
+        self._register_with_observability()
+
+        # Schedule periodic persistence
+        self._schedule_persistence()
+
+    def _register_with_observability(self) -> None:
+        """Register this subsystem with the shared ObservabilityHub."""
+        if self._observability:
+            self._observability.add_health_check(HealthCheck(
+                name="long_term_memory_health",
+                component="memory",
+                check_func=self._health_check,
+                interval_seconds=60.0,
+            ))
+
+            # Register component
+            self._observability.register_component(ComponentInfo(
+                name="LongTermMemory",
+                component_type=ComponentType.SERVICE,
+                version="1.0.0",
+                description="Long-term memory for user preferences and cross-project knowledge",
+                metadata={},
+            ))
+
+    def _health_check(self) -> HealthResult:
+        """Health check for LongTermMemory."""
+        entry_count = len(self._entries)
+        categories = len(self.get_all_categories())
+        sources = len(self.get_all_sources())
+
+        return HealthResult(
+            name="long_term_memory_health",
+            component="memory",
+            status=HealthStatus.HEALTHY,
+            message=f"{entry_count} entries, {categories} categories, {sources} sources",
+            details={
+                "entry_count": entry_count,
+                "categories": categories,
+                "sources": sources,
+            },
+        )
+
+    def _publish_event(self, event_type: str, data: Dict[str, Any]) -> None:
+        """Publish an event to the EventBus."""
+        try:
+            self._event_bus.emit(event_type, data)
+        except Exception:
+            # Don't let event publishing break the system
+            pass
+
+    def _schedule_persistence(self, interval_seconds: int = 300) -> None:
+        """Schedule periodic persistence."""
+        # Check if job already exists to avoid duplicate scheduling
+        existing_job = self._job_service.get_job("long_term_memory_persist")
+        if existing_job:
+            return
+
+        trigger = JobTriggerConfig(
+            type=JobTriggerType.RECURRING,
+            interval_seconds=interval_seconds,
+        )
+        self._job_service.schedule(
+            job_id="long_term_memory_persist",
+            func=self._save,
+            trigger=trigger,
+            name="Long-Term Memory Persistence",
+            priority=JobPriority.LOW,
+        )
+
+    def _configure_allowlist_for_workspace(self):
+        """Configure the file allowlist with workspace-specific rules."""
+        workspace_str = str(self.workspace)
+
+        # Add rule for workspace root directory
+        self.file_allowlist.add_rule(AccessRule(
+            pattern=workspace_str,
+            operations={FileOperation.LIST, FileOperation.READ},
+            description=f"Workspace root directory: {workspace_str}",
+            tags={"type": "workspace_root", "workspace": workspace_str},
+        ))
+
+        # Add rules for workspace directory contents
+        self.file_allowlist.add_rule(AccessRule(
+            pattern=f"{workspace_str}/**",
+            operations={FileOperation.READ, FileOperation.WRITE, FileOperation.CREATE, FileOperation.MODIFY, FileOperation.DELETE, FileOperation.LIST},
+            description=f"Full access to workspace contents: {workspace_str}",
+            tags={"type": "workspace", "workspace": workspace_str},
+        ))
+
+        # Add rules for common project directories
+        common_dirs = [
+            "data/**",
+            "logs/**",
+            "cache/**",
+            "tmp/**",
+            "temp/**",
+            ".freya/**",
+        ]
+        for dir_pattern in common_dirs:
+            full_pattern = f"{workspace_str}/{dir_pattern}"
+            self.file_allowlist.add_rule(AccessRule(
+                pattern=full_pattern,
+                operations={FileOperation.READ, FileOperation.WRITE, FileOperation.CREATE, FileOperation.MODIFY, FileOperation.DELETE, FileOperation.LIST},
+                description=f"Project directory: {dir_pattern}",
+                tags={"type": "project_dir", "workspace": workspace_str},
+            ))
 
     def _make_key(self, category: str, key: str) -> str:
         """Create composite key for storage."""
@@ -117,6 +252,9 @@ class LongTermMemory:
 
     def _save(self) -> None:
         """Save all entries to storage (atomic write)."""
+        # Validate write access
+        self.file_allowlist.require_allowed(self.storage_path, FileOperation.WRITE, "LongTermMemory._save")
+
         self._ensure_storage_dir()
         temp_path = self.storage_path.with_suffix(".tmp")
         try:
@@ -134,6 +272,9 @@ class LongTermMemory:
 
     def _load(self) -> None:
         """Load entries from storage file."""
+        # Validate read access
+        self.file_allowlist.require_allowed(self.storage_path, FileOperation.READ, "LongTermMemory._load")
+
         if not self.storage_path.exists():
             return
         try:
@@ -207,6 +348,16 @@ class LongTermMemory:
                 if metadata:
                     entry.metadata.update(metadata)
                 entry.updated_at = now
+
+                # Publish event for update
+                self._publish_event("memory.long_term_set", {
+                    "category": category,
+                    "key": key,
+                    "value": value,
+                    "confidence": confidence,
+                    "source": source,
+                    "is_new": False,
+                })
             else:
                 # Create new
                 entry = LongTermEntry(
@@ -226,6 +377,17 @@ class LongTermMemory:
 
             self._enforce_limit()
             self._save()
+
+            # Publish event
+            self._publish_event("memory.long_term_set", {
+                "category": category,
+                "key": key,
+                "value": value,
+                "confidence": confidence,
+                "source": source,
+                "is_new": True,
+            })
+
             return entry
 
     def get(self, category: str, key: str, default: Any = None) -> Any:
@@ -367,19 +529,37 @@ class LongTermMemory:
         with self._lock:
             composite_key = self._make_key(category, key)
             if composite_key in self._entries:
+                entry = self._entries[composite_key]
                 del self._entries[composite_key]
                 self._save()
+
+                # Publish event
+                self._publish_event("memory.long_term_deleted", {
+                    "category": category,
+                    "key": key,
+                })
                 return True
             return False
 
     def delete_category(self, category: str) -> int:
         """Delete all entries in a category."""
         with self._lock:
-            to_remove = [k for k, v in self._entries.items() if v.category == category]
-            for key in to_remove:
+            to_remove = []
+            for k, v in self._entries.items():
+                if v.category == category:
+                    to_remove.append((k, v))
+
+            for key, entry in to_remove:
                 del self._entries[key]
+
             if to_remove:
                 self._save()
+
+                # Publish event
+                self._publish_event("memory.long_term_category_deleted", {
+                    "category": category,
+                    "count": len(to_remove),
+                })
             return len(to_remove)
 
     def get_all_categories(self) -> List[str]:
@@ -491,6 +671,7 @@ def create_long_term_memory(
     workspace: Optional[str] = None,
     storage_path: Optional[str] = None,
     max_entries: int = 5000,
+    file_allowlist: Optional[FileAllowlist] = None,
 ) -> LongTermMemory:
     """Factory function to create LongTermMemory with sensible defaults.
 
@@ -507,4 +688,5 @@ def create_long_term_memory(
         workspace=workspace or ".",
         storage_path=storage_path,
         max_entries=max_entries,
+        file_allowlist=file_allowlist,
     )

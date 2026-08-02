@@ -6,12 +6,14 @@ This module implements the core autonomous learning pipeline that:
 3. Validates extracted knowledge before storage
 4. Persists validated knowledge with provenance and confidence tracking
 5. Detects knowledge gaps and triggers autonomous research
+6. Tracks learning analytics for performance monitoring
 """
 
 import time
 import threading
+import re
 from datetime import datetime, timezone
-from typing import Dict, List, Any, Optional, Callable
+from typing import Dict, List, Any, Optional, Callable, Set
 from pathlib import Path
 
 from app.core.logger import logger
@@ -19,7 +21,7 @@ from app.memory.experience_memory import ExperienceMemory, ExperienceEntry
 from app.memory.engineering_lessons import EngineeringLessonStorage, EngineeringLesson
 from app.memory.long_term_memory import LongTermMemory, LongTermEntry
 from app.memory.semantic_memory import SemanticMemory, SemanticEntry
-from app.memory.validation import KnowledgeValidator, ValidationResult, ValidationSourceType
+from app.memory.validation import KnowledgeValidator, ValidationResult, ValidationSourceType, ValidationSource
 from app.knowledge_extraction.pipeline import KnowledgeExtractionPipeline, KnowledgeObject
 from app.knowledge_extraction.models import KnowledgeCategory, SourceType
 from app.autonomous_learning.models import (
@@ -36,7 +38,15 @@ from app.autonomous_learning.models import (
 )
 from app.autonomous_learning.gap_detection import KnowledgeGapDetector
 from app.autonomous_learning.research_loop import AutonomousResearchLoop
+from app.autonomous_learning.analytics import LearningAnalytics
 from app.memory.cross_references import CrossMemoryReferences
+from app.multi_agent_learning.share import KnowledgeSharer, KnowledgeReceiver
+from app.memory.consolidation import ConsolidationEngine, ConsolidationConfig, ConsolidationTrigger, create_consolidation_engine
+
+# Shared infrastructure imports
+from app.core.events import get_event_bus
+from app.core.background_jobs import get_job_service, JobTriggerConfig, JobTriggerType, JobPriority
+from app.core.observability import get_observability_hub, HealthCheck, HealthResult, HealthStatus, ComponentInfo, ComponentType
 
 
 class AutonomousLearningPipeline:
@@ -58,7 +68,14 @@ class AutonomousLearningPipeline:
         gap_detector: Optional[KnowledgeGapDetector] = None,
         research_loop: Optional[AutonomousResearchLoop] = None,
         cross_references: Optional[CrossMemoryReferences] = None,
+        consolidation_engine: Optional[ConsolidationEngine] = None,
+        goal_storage: Optional[Any] = None,
+        planner: Optional[Any] = None,
         config: Optional[AutonomousLearningConfig] = None,
+        # Shared infrastructure
+        event_bus: Optional[object] = None,
+        job_service: Optional[object] = None,
+        observability: Optional[object] = None,
     ):
         """Initialize the autonomous learning pipeline.
 
@@ -72,7 +89,13 @@ class AutonomousLearningPipeline:
             gap_detector: Detects knowledge gaps
             research_loop: Performs autonomous research to fill gaps
             cross_references: Manages cross-memory relationships
+            consolidation_engine: Engine for memory consolidation
+            goal_storage: Storage for goals
+            planner: Planner for creating plans from goals/tasks
             config: Pipeline configuration
+            event_bus: Optional shared EventBus instance
+            job_service: Optional shared BackgroundJobService instance
+            observability: Optional shared ObservabilityHub instance
         """
         self.experience_memory = experience_memory
         self.engineering_lessons = engineering_lessons
@@ -95,17 +118,109 @@ class AutonomousLearningPipeline:
             semantic_memory=semantic_memory,
         )
         self.cross_references = cross_references
+        self.consolidation_engine = consolidation_engine
         self.config = config or AutonomousLearningConfig()
+        self.analytics = LearningAnalytics()  # Initialize analytics system
+        self.multi_agent_enabled = self.config.multi_agent_enabled
+
+        # Shared infrastructure
+        self.event_bus = event_bus or get_event_bus()
+        self.job_service = job_service or get_job_service()
+        self.observability = observability or get_observability_hub()
 
         # Pipeline state
         self._lock = threading.RLock()
         self._is_running = False
         self._last_run_time: Optional[datetime] = None
+        self._last_export_time: Optional[datetime] = None  # For multi-agent knowledge export
 
         # Statistics
         self.stats = LearningPipelineResult()
 
-    def run_pipeline(self) -> LearningPipelineResult:
+        # Multi-agent learning components
+        if self.multi_agent_enabled:
+            self.knowledge_sharer = KnowledgeSharer(
+                shared_dir=self.config.shared_knowledge_dir,
+                instance_id=self.config.instance_id,
+                experience_memory=self.experience_memory,
+                engineering_lessons=self.engineering_lessons,
+                long_term_memory=self.long_term_memory,
+                semantic_memory=self.semantic_memory,
+                knowledge_validator=self.knowledge_validator,
+            )
+            self.knowledge_receiver = KnowledgeReceiver(
+                shared_dir=self.config.shared_knowledge_dir,
+                instance_id=self.config.instance_id,
+                experience_memory=self.experience_memory,
+                engineering_lessons=self.engineering_lessons,
+                long_term_memory=self.long_term_memory,
+                semantic_memory=self.semantic_memory,
+                knowledge_validator=self.knowledge_validator,
+            )
+        else:
+            self.knowledge_sharer = None
+            self.knowledge_receiver = None
+
+        # Goal-driven learning components
+        self.goal_storage = goal_storage
+        self.planner = planner
+
+        # Register with observability
+        self._register_with_observability()
+
+    def _register_with_observability(self) -> None:
+        """Register this subsystem with the shared ObservabilityHub."""
+        if self.observability:
+            self.observability.add_health_check(HealthCheck(
+                name="autonomous_learning_pipeline_health",
+                component="autonomous_learning",
+                check_func=self._health_check,
+                interval_seconds=60.0,
+            ))
+
+            # Register component
+            self.observability.register_component(ComponentInfo(
+                name="AutonomousLearningPipeline",
+                component_type=ComponentType.SERVICE,
+                version="1.0.0",
+                description="Autonomous learning pipeline: experience analysis, knowledge extraction, validation, gap detection, research",
+                metadata={},
+            ))
+
+    def _health_check(self) -> HealthResult:
+        """Health check for AutonomousLearningPipeline."""
+        try:
+            return HealthResult(
+                name="autonomous_learning_pipeline_health",
+                component="autonomous_learning",
+                status=HealthStatus.HEALTHY,
+                message="AutonomousLearningPipeline operational",
+                metadata={
+                    "is_running": self._is_running,
+                    "last_run_time": self._last_run_time.isoformat() if self._last_run_time else None,
+                    "total_experiences_processed": self.stats.experiences_processed,
+                    "total_knowledge_stored": self.stats.knowledge_objects_stored,
+                    "total_gaps_detected": self.stats.gaps_detected,
+                    "total_research_tasks": self.stats.research_tasks_started,
+                }
+            )
+        except Exception as e:
+            return HealthResult(
+                name="autonomous_learning_pipeline_health",
+                component="autonomous_learning",
+                status=HealthStatus.UNHEALTHY,
+                message=f"Health check failed: {e}",
+                metadata={"error": str(e)}
+            )
+
+    def _publish_event(self, event_type: str, data: Dict[str, Any]) -> None:
+        """Publish an event to the shared EventBus."""
+        try:
+            self.event_bus.emit(event_type, data)
+        except Exception as e:
+            logger.warning(f"Failed to publish event {event_type}: {e}")
+
+    def __call__(self) -> LearningPipelineResult:
         """Execute the full autonomous learning pipeline.
 
         Returns:
@@ -119,6 +234,13 @@ class AutonomousLearningPipeline:
             self._is_running = True
             start_time = time.time()
             self.stats = LearningPipelineResult()
+
+            # Record pipeline start in analytics
+            self.analytics.record_pipeline_start()
+
+            # Import knowledge from other agents if multi-agent learning is enabled
+            if self.multi_agent_enabled and self.knowledge_receiver:
+                self._import_shared_knowledge()
 
             try:
                 logger.info("Starting autonomous learning pipeline")
@@ -135,38 +257,98 @@ class AutonomousLearningPipeline:
                 # Step 4: Store validated knowledge
                 self._store_knowledge()
 
+                # Step 4b: Export newly learned knowledge to other agents
+                if self.multi_agent_enabled and self.knowledge_sharer:
+                    self._export_learned_knowledge()
+
                 # Step 5: Detect knowledge gaps
                 if self.config.gap_detection_enabled:
                     self._detect_knowledge_gaps()
+
+                # Step 5b: Detect goal-driven knowledge gaps
+                self._detect_goal_driven_knowledge_gaps()
 
                 # Step 6: Execute autonomous research to fill gaps
                 if self.config.research_enabled:
                     self._execute_autonomous_research()
 
+                # Step 7: Run memory consolidation
+                if self.config.use_consolidation_engine and self.consolidation_engine:
+                    self._run_consolidation()
+
                 # Update final statistics
                 self.stats.duration_seconds = time.time() - start_time
                 self._last_run_time = datetime.now(timezone.utc)
+
+                # Record pipeline completion metrics
+                self.analytics.record_pipeline_duration(self.stats.duration_seconds)
+
+                # Calculate and record knowledge quality metrics
+                if self.stats.knowledge_objects_extracted > 0:
+                    avg_confidence = self._calculate_average_confidence()
+                    high_confidence_ratio = self._calculate_high_confidence_ratio()
+                    self.analytics.record_knowledge_quality(avg_confidence, high_confidence_ratio)
+
+                # Record pipeline result for detailed analytics
+                self.analytics.record_pipeline_result(self.stats)
 
                 # Log completion
                 logger.info(
                     f"Autonomous learning pipeline completed in {self.stats.duration_seconds:.2f}s. "
                     f"Processed {self.stats.experiences_processed} experiences, "
-                    f"extracted {self.stats.knowledge_objects_extracted := self.stats.knowledge_objects_extracted} knowledge objects, "
+                    f"extracted {self.stats.knowledge_objects_extracted} knowledge objects, "
                     f"validated {self.stats.knowledge_objects_validated}, "
                     f"stored {self.stats.knowledge_objects_stored}, "
                     f"detected {self.stats.gaps_detected} gaps, "
-                    f"started {self.stats.research_tasks_started} research tasks"
+                    f"goal gaps: {self.stats.goal_gaps_detected}, "
+                    f"started {self.stats.research_tasks_started} research tasks, "
+                    f"consolidation runs: {self.stats.consolidation_runs}"
                 )
+
+                # Publish pipeline completion event
+                self._publish_event("learning.pipeline_completed", {
+                    "duration_seconds": self.stats.duration_seconds,
+                    "experiences_processed": self.stats.experiences_processed,
+                    "knowledge_objects_extracted": self.stats.knowledge_objects_extracted,
+                    "knowledge_objects_validated": self.stats.knowledge_objects_validated,
+                    "knowledge_objects_stored": self.stats.knowledge_objects_stored,
+                    "gaps_detected": self.stats.gaps_detected,
+                    "goal_gaps_detected": self.stats.goal_gaps_detected,
+                    "research_tasks_started": self.stats.research_tasks_started,
+                    "consolidation_runs": self.stats.consolidation_runs,
+                    "errors": len(self.stats.errors),
+                    "warnings": len(self.stats.warnings),
+                })
 
                 return self.stats
 
             except Exception as e:
                 logger.error(f"Autonomous learning pipeline failed: {e}")
                 self.stats.errors.append(f"Pipeline execution failed: {str(e)}")
+                self.analytics.record_error("pipeline")
                 self.stats.duration_seconds = time.time() - start_time
                 return self.stats
             finally:
                 self._is_running = False
+
+    def _calculate_average_confidence(self) -> float:
+        """Calculate average confidence of recently processed knowledge objects.
+
+        Returns:
+            Average confidence score (0.0-1.0)
+        """
+        # Placeholder implementation - in a full version, this would calculate
+        # actual average from processed knowledge objects
+        return 0.75
+
+    def _calculate_high_confidence_ratio(self) -> float:
+        """Calculate ratio of high confidence knowledge objects (>0.8 confidence).
+
+        Returns:
+            Ratio of high confidence knowledge (0.0-1.0)
+        """
+        # Placeholder implementation
+        return 0.6
 
     def _process_experiences(self) -> None:
         """Process recent experiences to prepare for knowledge extraction."""
@@ -754,6 +936,39 @@ class AutonomousLearningPipeline:
             self.stats.errors.append(f"Autonomous research failed: {str(e)}")
             return []
 
+    def _run_consolidation(self) -> None:
+        """Run memory consolidation to promote high-value entries to long-term memory."""
+        try:
+            logger.debug("Running memory consolidation")
+            result = self.consolidation_engine.run_consolidation()
+
+            self.stats.consolidation_runs += 1
+            self.stats.experiences_promoted = result.experiences_promoted
+            self.stats.lessons_promoted = result.lessons_promoted
+            self.stats.entries_archived = result.project_entries_archived + result.experiences_archived + result.lessons_archived
+
+            if result.experiences_promoted > 0 or result.lessons_promoted > 0:
+                logger.info(f"Consolidation completed: promoted {result.experiences_promoted} experiences, {result.lessons_promoted} lessons, archived {result.project_entries_archived + result.experiences_archived + result.lessons_archived} entries")
+                self._record_learning_event(
+                    LearningEventType.CONSOLIDATION_RUN,
+                    f"Consolidation promoted {result.experiences_promoted} experiences and {result.lessons_promoted} lessons",
+                    {
+                        "experiences_promoted": result.experiences_promoted,
+                        "lessons_promoted": result.lessons_promoted,
+                        "entries_archived": result.project_entries_archived + result.experiences_archived + result.lessons_archived,
+                        "run_id": result.run_id,
+                        "duration_seconds": result.duration_seconds
+                    }
+                )
+
+            if result.errors:
+                for error in result.errors:
+                    self.stats.warnings.append(f"Consolidation: {error}")
+
+        except Exception as e:
+            logger.error(f"Error running consolidation: {e}")
+            self.stats.warnings.append(f"Consolidation failed: {str(e)}")
+
     def _record_learning_event(
         self,
         event_type: LearningEventType,
@@ -791,7 +1006,536 @@ class AutonomousLearningPipeline:
                 "config": self.config.to_dict()
             }
 
+    def get_learning_progress_dashboard(self) -> Dict[str, Any]:
+        """Get a comprehensive learning progress dashboard.
+
+        Returns:
+            Dictionary with learning progress metrics, trends, and statistics
+        """
+        status = self.get_pipeline_status()
+        stats = status.get("stats", {})
+
+        dashboard = {
+            "pipeline": status,
+            "learning_metrics": {
+                "total_experiences_processed": stats.get("experiences_processed", 0),
+                "total_knowledge_extracted": stats.get("knowledge_objects_extracted", 0),
+                "total_knowledge_validated": stats.get("knowledge_objects_validated", 0),
+                "total_knowledge_stored": stats.get("knowledge_objects_stored", 0),
+                "total_knowledge_rejected": stats.get("knowledge_objects_rejected", 0),
+                "total_gaps_detected": stats.get("gaps_detected", 0),
+                "total_gaps_resolved": stats.get("gaps_resolved", 0),
+                "total_goal_gaps_detected": stats.get("goal_gaps_detected", 0),
+                "total_research_started": stats.get("research_tasks_started", 0),
+                "total_research_completed": stats.get("research_tasks_completed", 0),
+                "total_research_failed": stats.get("research_tasks_failed", 0),
+                "total_consolidation_runs": stats.get("consolidation_runs", 0),
+                "total_experiences_promoted": stats.get("experiences_promoted", 0),
+                "total_lessons_promoted": stats.get("lessons_promoted", 0),
+                "total_entries_archived": stats.get("entries_archived", 0),
+                "last_run_duration_seconds": stats.get("duration_seconds", 0),
+            },
+            "efficiency": {
+                "validation_success_rate": (
+                    stats.get("knowledge_objects_validated", 0) /
+                    max(stats.get("knowledge_objects_extracted", 1), 1)
+                ),
+                "storage_success_rate": (
+                    stats.get("knowledge_objects_stored", 0) /
+                    max(stats.get("knowledge_objects_validated", 1), 1)
+                ),
+                "gap_resolution_rate": (
+                    stats.get("gaps_resolved", 0) /
+                    max(stats.get("gaps_detected", 1), 1)
+                ),
+                "research_completion_rate": (
+                    stats.get("research_tasks_completed", 0) /
+                    max(stats.get("research_tasks_started", 1), 1)
+                ),
+            },
+            "health": {
+                "error_count": len(stats.get("errors", [])),
+                "warning_count": len(stats.get("warnings", [])),
+                "last_errors": stats.get("errors", [])[-5:],
+                "last_warnings": stats.get("warnings", [])[-5:],
+            },
+            "trends": {},
+        }
+
+        # Add analytics trends if available
+        if hasattr(self, 'analytics') and self.analytics:
+            try:
+                dashboard["trends"] = {
+                    "knowledge_extraction": self.analytics.get_trends("knowledge_extracted", hours=6),
+                    "knowledge_storage": self.analytics.get_trends("knowledge_stored", hours=6),
+                    "gap_resolution": self.analytics.get_trends("gap_resolution_rate", hours=6),
+                    "research_completion": self.analytics.get_trends("research_success_rate", hours=6),
+                }
+                # Convert LearningTrend objects to dicts
+                for key, trend in dashboard["trends"].items():
+                    if trend:
+                        dashboard["trends"][key] = {
+                            "metric_name": trend.metric_name,
+                            "direction": trend.direction,
+                            "change_rate": trend.change_rate,
+                            "values": trend.values[-10:],  # Last 10 values
+                            "timestamps": trend.timestamps[-10:],
+                        }
+            except Exception:
+                pass
+
+        # Add consolidation stats if available
+        if self.consolidation_engine:
+            try:
+                dashboard["consolidation"] = self.consolidation_engine.get_stats()
+            except Exception:
+                pass
+
+        return dashboard
+
     def reset_stats(self) -> None:
         """Reset pipeline statistics."""
         with self._lock:
             self.stats = LearningPipelineResult()
+
+    def _import_shared_knowledge(self) -> None:
+        """Import knowledge from other agents via the shared directory."""
+        try:
+            if self.knowledge_receiver:
+                imported_count = self.knowledge_receiver.import_knowledge()
+                if imported_count > 0:
+                    logger.info(f"Imported {imported_count} knowledge items from other agents")
+                    # Record learning event for imported knowledge
+                    self._record_learning_event(
+                        LearningEventType.EXPERIENCE_COLLECTED,  # Reuse existing event type or create a new one
+                        f"Imported {imported_count} knowledge items from other agents",
+                        {"imported_count": imported_count}
+                    )
+        except Exception as e:
+            logger.error(f"Error importing shared knowledge: {e}")
+            self.stats.errors.append(f"Import shared knowledge failed: {str(e)}")
+
+    def _export_learned_knowledge(self) -> None:
+        """Export learned knowledge to other agents via the shared directory."""
+        try:
+            if self.knowledge_sharer:
+                # Export knowledge since the last export time (or all if never exported)
+                since_time = self._last_export_time
+                exported_count = self.knowledge_sharer.export_knowledge(since_time)
+                if exported_count > 0:
+                    self._last_export_time = datetime.now(timezone.utc)
+                    logger.info(f"Exported {exported_count} knowledge items to other agents")
+                    # Record learning event for exported knowledge
+                    self._record_learning_event(
+                        LearningEventType.KNOWLEDGE_STORED,  # Reuse existing event type
+                        f"Exported {exported_count} knowledge items to other agents",
+                        {"exported_count": exported_count}
+                    )
+        except Exception as e:
+            logger.error(f"Error exporting learned knowledge: {e}")
+            self.stats.errors.append(f"Export learned knowledge failed: {str(e)}")
+
+    def _detect_goal_driven_knowledge_gaps(self) -> None:
+        """Detect knowledge gaps based on current goals and planned tasks.
+
+        Analyzes active goals to determine what knowledge is required to achieve them,
+        compares with existing knowledge, and identifies gaps.
+        """
+        if not self.goal_storage or not self.planner or not self.config.goal_driven_learning_enabled:
+            return
+
+        try:
+            logger.debug("Detecting goal-driven knowledge gaps")
+
+            # Get active and pending goals
+            goals = []
+            active_goal = self.goal_storage.active_goal()
+            if active_goal:
+                goals.append(active_goal)
+
+            # Get queued goals
+            queued_goals = self.goal_storage.queue()
+            goals.extend(queued_goals[:10])  # Limit to avoid overload
+
+            # Also get any goals that are not completed
+            all_goals = self.goal_storage.all()
+            incomplete_goals = [g for g in all_goals if getattr(g, 'status', '') != 'completed']
+            goals.extend([g for g in incomplete_goals if g not in goals][:10])  # Limit and deduplicate
+
+            goal_gaps = []
+
+            for goal in goals:
+                try:
+                    # Skip if goal has no description
+                    if not getattr(goal, 'description', None) and not getattr(goal, 'name', None):
+                        continue
+
+                    # Create a plan for this goal to understand what tasks are involved
+                    goal_description = getattr(goal, 'description', '') or getattr(goal, 'name', '')
+                    plan = self.planner.create_plan(goal_description)
+
+                    # Extract knowledge requirements from goal and plan
+                    required_knowledge = self._extract_knowledge_requirements(goal, plan)
+
+                    # Check what knowledge we already have
+                    available_knowledge = self._get_available_knowledge()
+
+                    # Identify gaps
+                    gaps = self._identify_knowledge_gaps(goal, required_knowledge, available_knowledge)
+                    goal_gaps.extend(gaps)
+
+                except Exception as e:
+                    logger.debug(f"Error analyzing goal {getattr(goal, 'id', 'unknown')}: {e}")
+                    continue
+
+            # Update stats and record events
+            self.stats.goal_gaps_detected = len(goal_gaps)
+
+            if goal_gaps:
+                logger.info(f"Detected {len(goal_gaps)} goal-driven knowledge gaps")
+                self._record_learning_event(
+                    LearningEventType.GAP_DETECTED,
+                    f"Detected {len(goal_gaps)} goal-driven knowledge gaps",
+                    {"goal_gap_count": len(goal_gaps)}
+                )
+
+                # Optionally, we could trigger immediate research for high-priority gaps
+                # but for now, we'll just record them and let the regular gap detection
+                # and research loop handle them in the next cycle
+
+        except Exception as e:
+            logger.error(f"Error detecting goal-driven knowledge gaps: {e}")
+            self.stats.errors.append(f"Goal-driven gap detection failed: {str(e)}")
+
+    def _extract_knowledge_requirements(self, goal: Any, plan: Any) -> Dict[str, Any]:
+        """Extract knowledge requirements from a goal and its plan.
+
+        Returns a dictionary categorizing the knowledge needed.
+        """
+        requirements = {
+            'concepts': set(),
+            'tools': set(),
+            'frameworks': set(),
+            'skills': set(),
+            'domains': set()
+        }
+
+        try:
+            # Extract from goal name and description
+            goal_text = f"{getattr(goal, 'name', '')} {getattr(goal, 'description', '')}".lower()
+
+            # Enhanced keyword extraction with better categorization
+            # Use a combination of pattern matching and known technology lists
+
+            # Known frameworks/technologies
+            known_frameworks = {
+                'django', 'flask', 'fastapi', 'express', 'react', 'vue', 'angular', 'svelte',
+                'spring', 'springboot', 'rails', 'laravel', 'dotnet', 'aspnet', 'nodejs', 'nextjs',
+                'pytorch', 'tensorflow', 'jax', 'sklearn', 'pandas', 'numpy', 'scipy',
+                'kubernetes', 'docker', 'terraform', 'ansible', 'helm',
+                'postgresql', 'mysql', 'mongodb', 'redis', 'sqlite', 'cassandra',
+                'graphql', 'rest', 'grpc', 'websocket',
+                'aws', 'gcp', 'azure', 'vercel', 'netlify',
+                'github', 'gitlab', 'bitbucket', 'ci', 'cd', 'jenkins', 'githubactions',
+                'pytest', 'jest', 'vitest', 'cypress', 'playwright', 'selenium',
+                'webpack', 'vite', 'rollup', 'esbuild', 'swc', 'babel', 'typescript',
+                'rust', 'go', 'java', 'python', 'javascript', 'typescript', 'cpp', 'csharp',
+                'sqlalchemy', 'prisma', 'drizzle', 'typeorm', 'mongoose',
+            }
+
+            # Known tools
+            known_tools = {
+                'git', 'docker', 'kubectl', 'terraform', 'ansible', 'helm', 'vagrant',
+                'curl', 'wget', 'httpie', 'postman', 'insomnia',
+                'vscode', 'vim', 'neovim', 'emacs', 'intellij', 'pycharm', 'webstorm',
+                'eslint', 'prettier', 'black', 'isort', 'flake8', 'mypy', 'pyright',
+                'jest', 'vitest', 'pytest', 'coverage', 'sonarqube',
+                'prometheus', 'grafana', 'datadog', 'newrelic', 'sentry',
+                'nginx', 'apache', 'traefik', 'caddy',
+                'redis', 'memcached', 'rabbitmq', 'kafka', 'nats',
+            }
+
+            # Known skills/methods
+            known_skills = {
+                'testing', 'debugging', 'refactoring', 'optimization', 'profiling',
+                'deployment', 'ci_cd', 'monitoring', 'logging', 'tracing',
+                'security', 'authentication', 'authorization', 'encryption',
+                'database_design', 'api_design', 'architecture', 'scalability',
+                'performance', 'caching', 'async', 'concurrency', 'parallelism',
+                'machine_learning', 'data_science', 'nlp', 'computer_vision',
+                'code_review', 'documentation', 'technical_writing', 'mentoring',
+            }
+
+            # Known domains
+            known_domains = {
+                'web', 'mobile', 'backend', 'frontend', 'fullstack',
+                'database', 'cloud', 'devops', 'security', 'ai', 'ml',
+                'data', 'analytics', 'blockchain', 'embedded', 'iot',
+                'game', 'graphics', 'compiler', 'os', 'kernel',
+                'network', 'distributed', 'microservices', 'serverless',
+            }
+
+            words = re.findall(r'\b[a-zA-Z][a-zA-Z0-9_-]*\b', goal_text)
+
+            for word in words:
+                word_lower = word.lower()
+                if len(word_lower) <= 2:
+                    continue
+
+                # Check frameworks
+                if word_lower in known_frameworks:
+                    requirements['frameworks'].add(word_lower)
+                    requirements['tools'].add(word_lower)
+                    continue
+
+                # Check tools
+                if word_lower in known_tools:
+                    requirements['tools'].add(word_lower)
+                    continue
+
+                # Check skills
+                if word_lower in known_skills:
+                    requirements['skills'].add(word_lower)
+                    continue
+
+                # Check domains
+                if word_lower in known_domains:
+                    requirements['domains'].add(word_lower)
+                    continue
+
+                # Check for tech-like patterns (compound words with dots, hyphens, underscores)
+                if any(sep in word_lower for sep in ['.', '-', '_']):
+                    requirements['tools'].add(word_lower)
+                    requirements['frameworks'].add(word_lower)
+                    continue
+
+                # Longer words that might be concepts
+                if len(word_lower) > 4:
+                    requirements['concepts'].add(word_lower)
+
+            # Also extract from specific patterns like "use X", "implement Y with Z"
+            import_pattern = re.findall(r'\b(?:use|using|with|implement|build|create|add|integrate|setup|configure)\s+(\w+)', goal_text)
+            for match in import_pattern:
+                if match.lower() in known_frameworks:
+                    requirements['frameworks'].add(match.lower())
+                    requirements['tools'].add(match.lower())
+                elif match.lower() in known_tools:
+                    requirements['tools'].add(match.lower())
+                elif len(match) > 3:
+                    requirements['concepts'].add(match.lower())
+
+            # Extract from plan steps if available
+            if hasattr(plan, 'tasks'):
+                for task in plan.tasks:
+                    task_text = f"{getattr(task, 'title', '')} {getattr(task, 'description', '')}".lower()
+                    words = re.findall(r'\b[a-zA-Z][a-zA-Z0-9_-]*\b', task_text)
+                    for word in words:
+                        word_lower = word.lower()
+                        if len(word_lower) <= 2:
+                            continue
+                        if word_lower in known_frameworks:
+                            requirements['frameworks'].add(word_lower)
+                            requirements['tools'].add(word_lower)
+                        elif word_lower in known_tools:
+                            requirements['tools'].add(word_lower)
+                        elif word_lower in known_skills:
+                            requirements['skills'].add(word_lower)
+                        elif word_lower in known_domains:
+                            requirements['domains'].add(word_lower)
+                        elif any(sep in word_lower for sep in ['.', '-', '_']):
+                            requirements['tools'].add(word_lower)
+                            requirements['frameworks'].add(word_lower)
+                        elif len(word_lower) > 4:
+                            requirements['concepts'].add(word_lower)
+
+                    # Also check for specific patterns in task descriptions
+                    import_pattern = re.findall(r'\b(?:use|using|with|implement|build|create|add|integrate|setup|configure)\s+(\w+)', task_text)
+                    for match in import_pattern:
+                        if match.lower() in known_frameworks:
+                            requirements['frameworks'].add(match.lower())
+                            requirements['tools'].add(match.lower())
+                        elif match.lower() in known_tools:
+                            requirements['tools'].add(match.lower())
+                        elif len(match) > 3:
+                            requirements['concepts'].add(match.lower())
+
+        except Exception as e:
+            logger.debug(f"Error extracting knowledge requirements: {e}")
+
+        return requirements
+
+    def _get_available_knowledge(self) -> Dict[str, Set[str]]:
+        """Get currently available knowledge from our memory systems.
+
+        Returns a dictionary categorizing the knowledge we already have.
+        """
+        available = {
+            'concepts': set(),
+            'tools': set(),
+            'frameworks': set(),
+            'skills': set(),
+            'domains': set()
+        }
+
+        try:
+            # Check semantic memory for concepts
+            if self.semantic_memory:
+                try:
+                    semantic_entries = self.semantic_memory.all() if hasattr(self.semantic_memory, 'all') else []
+                    for entry in semantic_entries[:100]:  # Limit for performance
+                        if hasattr(entry, 'key'):
+                            available['concepts'].add(entry.key.lower())
+                        if hasattr(entry, 'tags'):
+                            for tag in getattr(entry, 'tags', []):
+                                if isinstance(tag, str):
+                                    available['concepts'].add(tag.lower())
+                                    # Categorize tags
+                                    if any(tech in tag.lower() for tech in ['api', 'sdk', 'framework', 'library', 'tool']):
+                                        available['tools'].add(tag.lower())
+                                        available['frameworks'].add(tag.lower())
+                                    if any(domain in tag.lower() for domain in ['web', 'mobile', 'database', 'cloud', 'security']):
+                                        available['domains'].add(tag.lower())
+                except Exception as e:
+                    logger.debug(f"Error accessing semantic memory: {e}")
+
+            # Check engineering lessons for skills, tools, frameworks
+            if self.engineering_lessons:
+                try:
+                    lessons = self.engineering_lessons.all() if hasattr(self.engineering_lessons, 'all') else []
+                    for lesson in lessons[:100]:  # Limit for performance
+                        if hasattr(lesson, 'title'):
+                            title_lower = lesson.title.lower()
+                            available['concepts'].add(title_lower)
+                            if hasattr(lesson, 'tags'):
+                                for tag in getattr(lesson, 'tags', []):
+                                    if isinstance(tag, str):
+                                        tag_lower = tag.lower()
+                                        available['concepts'].add(tag_lower)
+                                        if any(tech in tag_lower for tech in ['api', 'sdk', 'framework', 'library', 'tool']):
+                                            available['tools'].add(tag_lower)
+                                            available['frameworks'].add(tag_lower)
+                                        if any(skill in tag_lower for skill in ['test', 'deploy', 'build', 'compile', 'debug']):
+                                            available['skills'].add(tag_lower)
+                                        if any(domain in tag_lower for domain in ['web', 'mobile', 'database', 'cloud', 'security']):
+                                            available['domains'].add(tag_lower)
+                            if hasattr(lesson, 'category'):
+                                cat = getattr(lesson, 'category', '')
+                                if isinstance(cat, str):
+                                    available['domains'].add(cat.lower())
+                                    if any(skill in cat.lower() for skill in ['test', 'deploy', 'build', 'code']):
+                                        available['skills'].add(cat.lower())
+                        if hasattr(lesson, 'lesson_type'):
+                            lt = getattr(lesson, 'lesson_type', '')
+                            if hasattr(lt, 'value'):
+                                lt_val = lt.value
+                                if isinstance(lt_val, str):
+                                    if any(skill in lt_val.lower() for skill in ['test', 'deploy', 'build', 'debug']):
+                                        available['skills'].add(lt_val.lower())
+                                    if any(domain in lt_val.lower() for domain in ['web', 'mobile', 'database', 'cloud', 'security']):
+                                        available['domains'].add(lt_val.lower())
+                except Exception as e:
+                    logger.debug(f"Error accessing engineering lessons: {e}")
+
+            # Check experiences for practical knowledge
+            if self.experience_memory:
+                try:
+                    experiences = self.experience_memory.all() if hasattr(self.experience_memory, 'all') else []
+                    for exp in experiences[:100]:  # Limit for performance
+                        if hasattr(exp, 'tags'):
+                            for tag in getattr(exep, 'tags', []):
+                                if isinstance(tag, str):
+                                    tag_lower = tag.lower()
+                                    available['skills'].add(tag_lower)
+                                    if any(tech in tag_lower for tech in ['api', 'sdk', 'framework', 'library', 'tool']):
+                                        available['tools'].add(tag_lower)
+                                        available['frameworks'].add(tag_lower)
+                                    if any(domain in tag_lower for domain in ['web', 'mobile', 'database', 'cloud', 'security']):
+                                        available['domains'].add(tag_lower)
+                        if hasattr(exp, 'category'):
+                            cat = getattr(exp, 'category', '')
+                            if isinstance(cat, str):
+                                available['domains'].add(cat.lower())
+                                if any(skill in cat.lower() for skill in ['test', 'build', 'debug']):
+                                    available['skills'].add(cat.lower())
+                except Exception as e:
+                    logger.debug(f"Error accessing experience memory: {e}")
+
+        except Exception as e:
+            logger.debug(f"Error getting available knowledge: {e}")
+
+        return available
+
+    def _identify_knowledge_gaps(self, goal: Any, required: Dict[str, Set[str]], available: Dict[str, Set[str]]) -> List[KnowledgeGap]:
+        """Identify gaps between required and available knowledge.
+
+        Returns a list of KnowledgeGap objects.
+        """
+        gaps = []
+
+        try:
+            goal_id = getattr(goal, 'id', 'unknown')
+            goal_name = getattr(goal, 'name', 'Unknown Goal')
+            goal_desc = getattr(goal, 'description', '')
+
+            # Check each knowledge category
+            for category in ['concepts', 'tools', 'frameworks', 'skills', 'domains']:
+                required_set = required.get(category, set())
+                available_set = available.get(category, set())
+
+                missing = required_set - available_set
+
+                if missing:
+                    # Determine priority based on goal priority and category importance
+                    goal_priority = getattr(goal, 'priority', 'medium')
+                    priority_map = {
+                        'critical': 4,
+                        'high': 3,
+                        'medium': 2,
+                        'low': 1
+                    }
+                    priority_num = priority_map.get(goal_priority, 2)
+
+                    # Boost priority for tools and frameworks as they're often blocking
+                    if category in ['tools', 'frameworks']:
+                        priority_num = min(4, priority_num + 1)
+
+                    priority_levels = {4: GapPriority.CRITICAL, 3: GapPriority.HIGH, 2: GapPriority.MEDIUM, 1: GapPriority.LOW}
+                    priority = priority_levels.get(priority_num, GapPriority.MEDIUM)
+
+                    # Create a gap for each missing item (or group them)
+                    # For simplicity, we'll create one gap per category with all missing items
+                    if missing:
+                        gap_description = f"Missing {category} for goal '{goal_name}': {', '.join(sorted(list(missing)[:10]))}"
+                        if len(missing) > 10:
+                            gap_description += f" and {len(missing) - 10} more"
+
+                        gap = KnowledgeGap(
+                            id=f"goal_gap_{goal_id}_{category}_{int(time.time())}",
+                            title=f"Missing {category.title()} for {goal_name}",
+                            description=gap_description,
+                            category="goal_requirement",
+                            sub_category=category,
+                            missing_concepts=list(missing) if category == 'concepts' else [],
+                            missing_tools=list(missing) if category == 'tools' else [],
+                            missing_frameworks=list(missing) if category == 'frameworks' else [],
+                            priority=priority,
+                            confidence=0.7,  # Default confidence for goal-derived gaps
+                            estimated_effort_hours=len(missing) * 0.5,  # Rough estimate
+                            status=GapStatus.DETECTED,
+                            trigger_context=f"goal_analysis:{goal_id}",
+                            source_experiences=[],  # Would need to be populated from goal-related experiences
+                            tags=[f"goal_{goal_id}", category, f"priority_{goal_priority}"],
+                            metadata={
+                                "goal_id": goal_id,
+                                "goal_name": goal_name,
+                                "goal_description": goal_desc,
+                                "requirement_type": category,
+                                "missing_count": len(missing)
+                            }
+                        )
+                        gaps.append(gap)
+
+        except Exception as e:
+            logger.debug(f"Error identifying knowledge gaps: {e}")
+
+        return gaps

@@ -7,12 +7,18 @@ Imports knowledge from:
 - Vendor documentation (AWS, GCP, Azure)
 """
 
+import asyncio
 import json
 import re
+import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote_plus
+
+import httpx
+from bs4 import BeautifulSoup
 
 from app.software_engineering_knowledge.models import (
     EngineeringDomain,
@@ -134,6 +140,158 @@ EXTERNAL_SOURCES = {
 }
 
 
+class RateLimiter:
+    """Simple rate limiter for HTTP requests."""
+
+    def __init__(self, requests_per_second: float):
+        self.min_interval = 1.0 / requests_per_second
+        self.last_request_time = 0.0
+
+    def wait(self) -> None:
+        """Wait if necessary to maintain rate limit."""
+        elapsed = time.time() - self.last_request_time
+        if elapsed < self.min_interval:
+            time.sleep(self.min_interval - elapsed)
+        self.last_request_time = time.time()
+
+
+class HTTPClient:
+    """Async HTTP client with rate limiting and error handling."""
+
+    def __init__(self, timeout: float = 30.0, max_retries: int = 3):
+        self.timeout = timeout
+        self.max_retries = max_retries
+        self._client: Optional[httpx.AsyncClient] = None
+        self._rate_limiters: Dict[str, RateLimiter] = {}
+
+    async def _get_client(self) -> httpx.AsyncClient:
+        if self._client is None:
+            self._client = httpx.AsyncClient(
+                timeout=httpx.Timeout(self.timeout),
+                follow_redirects=True,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (compatible; Freya AI Knowledge Bot/1.0; +https://github.com/freya-ai)"
+                },
+            )
+        return self._client
+
+    def _get_rate_limiter(self, domain: str, rate_limit: float) -> RateLimiter:
+        if domain not in self._rate_limiters:
+            self._rate_limiters[domain] = RateLimiter(rate_limit)
+        return self._rate_limiters[domain]
+
+    async def get(self, url: str, rate_limit: float = 1.0, headers: Optional[Dict[str, str]] = None) -> Optional[str]:
+        """Fetch content from URL with rate limiting and retries."""
+        parsed = urlparse(url)
+        domain = parsed.netloc
+        rate_limiter = self._get_rate_limiter(domain, rate_limit)
+
+        client = await self._get_client()
+        request_headers = headers or {}
+
+        for attempt in range(self.max_retries):
+            rate_limiter.wait()
+            try:
+                response = await client.get(url, headers=request_headers)
+                response.raise_for_status()
+                return response.text
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 429:  # Rate limited
+                    wait_time = 2 ** attempt
+                    await asyncio.sleep(wait_time)
+                    continue
+                elif e.response.status_code >= 500:  # Server error
+                    if attempt < self.max_retries - 1:
+                        await asyncio.sleep(1)
+                        continue
+                return None
+            except (httpx.RequestError, httpx.TimeoutException):
+                if attempt < self.max_retries - 1:
+                    await asyncio.sleep(1)
+                    continue
+                return None
+        return None
+
+    async def close(self) -> None:
+        if self._client:
+            await self._client.aclose()
+            self._client = None
+
+
+class HTMLParser:
+    """Parse HTML content using BeautifulSoup with CSS selectors."""
+
+    @staticmethod
+    def extract_content(
+        html: str,
+        content_selector: str,
+        title_selector: str = "h1",
+        section_selector: str = "section",
+        base_url: str = "",
+    ) -> Dict[str, Any]:
+        """Extract structured content from HTML."""
+        soup = BeautifulSoup(html, "lxml")
+
+        # Extract title
+        title_elem = soup.select_one(title_selector)
+        title = title_elem.get_text(strip=True) if title_elem else ""
+
+        # Extract main content
+        content_elem = soup.select_one(content_selector)
+        if not content_elem:
+            # Fallback: try body
+            content_elem = soup.select_one("body")
+
+        content = ""
+        sections = []
+
+        if content_elem:
+            # Remove navigation, headers, footers, scripts, styles
+            for unwanted in content_elem.select("nav, header, footer, script, style, .navigation, .sidebar, .toc, .admonition"):
+                unwanted.decompose()
+
+            # Extract sections
+            for section in content_elem.select(section_selector):
+                section_title_elem = section.select_one("h1, h2, h3, h4")
+                section_title = section_title_elem.get_text(strip=True) if section_title_elem else ""
+                section_text = section.get_text(separator="\n", strip=True)
+                if section_text:
+                    sections.append({
+                        "title": section_title,
+                        "content": section_text[:5000],  # Limit section size
+                    })
+
+            # Get full content text
+            content = content_elem.get_text(separator="\n", strip=True)
+
+        # Extract code blocks
+        code_blocks = []
+        for code in content_elem.select("pre code, pre") if content_elem else []:
+            code_text = code.get_text(strip=True)
+            if code_text and len(code_text) > 10:
+                code_blocks.append(code_text[:3000])
+
+        # Extract links
+        links = []
+        for link in soup.select("a[href]") if content_elem else []:
+            href = link.get("href", "")
+            text = link.get_text(strip=True)
+            if href and text:
+                # Make absolute URL
+                if href.startswith("/"):
+                    from urllib.parse import urljoin
+                    href = urljoin(base_url, href)
+                links.append({"url": href, "text": text})
+
+        return {
+            "title": title,
+            "content": content[:15000],  # Limit total content
+            "sections": sections,
+            "code_blocks": code_blocks,
+            "links": links[:50],  # Limit links
+        }
+
+
 class ExternalKnowledgeImporter:
     """Import engineering knowledge from external sources."""
 
@@ -141,8 +299,10 @@ class ExternalKnowledgeImporter:
         self.cache_dir = cache_dir or Path("data/external_knowledge_cache")
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.registry = get_category_registry()
+        self.http_client = HTTPClient()
+        self.parser = HTMLParser()
 
-    def import_from_source(self, source_name: str, query: str, max_results: int = 10) -> ExtractionResult:
+    async def import_from_source(self, source_name: str, query: str, max_results: int = 10) -> ExtractionResult:
         """Import knowledge from a predefined external source."""
         source = EXTERNAL_SOURCES.get(source_name)
         if not source:
@@ -154,24 +314,240 @@ class ExternalKnowledgeImporter:
                 source_type=KnowledgeSource.EXTERNAL_DOCS,
             )
 
-        # This would normally fetch from the web
-        # For now, return placeholder showing structure
-        return ExtractionResult(
-            success=False,
-            items=[],
-            errors=[f"Web fetching not implemented. Source {source_name} configured but requires HTTP client."],
-            source=source_name,
-            source_type=source.source_type,
-            metadata={"source_config": source.__dict__},
-        )
+        try:
+            # Build search URL for the source
+            search_url = self._build_search_url(source, query)
+            if not search_url:
+                return ExtractionResult(
+                    success=False,
+                    items=[],
+                    errors=[f"Cannot build search URL for source: {source_name}"],
+                    source=source_name,
+                    source_type=source.source_type,
+                )
 
-    def import_from_url(self, url: str) -> ExtractionResult:
+            # Fetch search results page
+            html = await self.http_client.get(search_url, rate_limit=source.rate_limit)
+            if not html:
+                return ExtractionResult(
+                    success=False,
+                    items=[],
+                    errors=[f"Failed to fetch search results from {source_name}"],
+                    source=source_name,
+                    source_type=source.source_type,
+                )
+
+            # Parse search results to get article URLs
+            article_urls = self._parse_search_results(source_name, html, base_url=source.base_url)
+            article_urls = article_urls[:max_results]
+
+            # Fetch and parse each article
+            items = []
+            errors = []
+            for url in article_urls:
+                try:
+                    article_html = await self.http_client.get(url, rate_limit=source.rate_limit)
+                    if not article_html:
+                        errors.append(f"Failed to fetch article: {url}")
+                        continue
+
+                    parsed = self.parser.extract_content(
+                        article_html,
+                        content_selector=source.selectors.get("content", "main"),
+                        title_selector=source.selectors.get("title", "h1"),
+                        section_selector=source.selectors.get("section", "section"),
+                        base_url=source.base_url,
+                    )
+
+                    if parsed["content"]:
+                        item = self.create_knowledge_from_content(
+                            title=parsed["title"] or self._extract_title_from_url(url),
+                            content=parsed["content"],
+                            url=url,
+                            domain=self._infer_domain(source_name, parsed),
+                            knowledge_type=EngineeringKnowledgeType.REFERENCE,
+                            tags=["external", "documentation", source_name] + self._extract_tags(parsed),
+                            language=self._infer_language(source_name),
+                        )
+                        # Add sections and code blocks to metadata
+                        item.source_metadata.update({
+                            "sections": parsed["sections"],
+                            "code_blocks": parsed["code_blocks"],
+                            "links": parsed["links"],
+                            "fetch_timestamp": datetime.now(timezone.utc).isoformat(),
+                        })
+                        items.append(item)
+
+                except Exception as e:
+                    errors.append(f"Error processing {url}: {str(e)}")
+
+            return ExtractionResult(
+                success=len(items) > 0,
+                items=items,
+                errors=errors,
+                source=source_name,
+                source_type=source.source_type,
+                metadata={"source_config": source.__dict__, "articles_fetched": len(items)},
+            )
+
+        except Exception as e:
+            return ExtractionResult(
+                success=False,
+                items=[],
+                errors=[f"Import failed: {str(e)}"],
+                source=source_name,
+                source_type=source.source_type,
+            )
+
+    def _build_search_url(self, source: ExternalSource, query: str) -> Optional[str]:
+        """Build search URL for a source."""
+        search_endpoints = {
+            "python_docs": f"{source.base_url}search.html?q={quote_plus(query)}",
+            "mdn": f"{source.base_url}search?q={quote_plus(query)}",
+            "rust_docs": f"{source.base_url}search.html?q={quote_plus(query)}",
+            "go_docs": f"{source.base_url}search?q={quote_plus(query)}",
+            "aws_docs": f"{source.base_url}search?query={quote_plus(query)}",
+            "kubernetes_docs": f"{source.base_url}search?q={quote_plus(query)}",
+            "terraform_docs": f"{source.base_url}search?q={quote_plus(query)}",
+            "rfc_editor": f"{source.base_url}search/rfc_search_detail.php?search={quote_plus(query)}",
+        }
+        return search_endpoints.get(source_name if False else None)  # placeholder
+
+    def _build_search_url(self, source: ExternalSource, query: str) -> Optional[str]:
+        """Build search URL for a source."""
+        base = source.base_url.rstrip("/")
+        search_paths = {
+            "python_docs": "/search.html",
+            "mdn": "/search",
+            "rust_docs": "/search.html",
+            "go_docs": "/search",
+            "aws_docs": "/search",
+            "kubernetes_docs": "/search",
+            "terraform_docs": "/search",
+            "rfc_editor": "/search/rfc_search_detail.php",
+        }
+
+        # This is a simplified approach - in reality each site has different search params
+        # For now, we'll use the base URL and append common search paths
+        return f"{base}{search_paths.get(source.name.lower().replace(' ', '_'), '/search')}?q={quote_plus(query)}"
+
+    def _parse_search_results(self, source_name: str, html: str, base_url: str) -> List[str]:
+        """Parse search results page to extract article URLs."""
+        soup = BeautifulSoup(html, "lxml")
+        urls = []
+
+        # Source-specific selectors for search results
+        selectors = {
+            "python_docs": "div.search-results a[href], li.search-result a[href]",
+            "mdn": "article.search-result a[href], .search-result a[href]",
+            "rust_docs": "div.search-results a[href]",
+            "go_docs": ".search-results a[href]",
+            "aws_docs": ".aws-search-results a[href]",
+            "kubernetes_docs": ".search-results a[href]",
+            "terraform_docs": ".search-results a[href]",
+            "rfc_editor": "table.search-results a[href]",
+        }
+
+        selector = selectors.get(source_name, "a[href]")
+        for link in soup.select(selector):
+            href = link.get("href", "")
+            if href:
+                # Make absolute URL
+                if href.startswith("/"):
+                    from urllib.parse import urljoin
+                    href = urljoin(base_url, href)
+                elif not href.startswith("http"):
+                    from urllib.parse import urljoin
+                    href = urljoin(base_url, href)
+
+                # Filter out non-article links
+                if self._is_article_url(href, source_name):
+                    urls.append(href)
+
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_urls = []
+        for url in urls:
+            if url not in seen:
+                seen.add(url)
+                unique_urls.append(url)
+
+        return unique_urls
+
+    def _is_article_url(self, url: str, source_name: str) -> bool:
+        """Check if URL is likely an article/page (not nav, API, etc.)."""
+        skip_patterns = [
+            r"/api/", r"\.json$", r"\.xml$", r"\.pdf$",
+            r"/search", r"/login", r"/signup", r"/account",
+            r"github\.com", r"twitter\.com", r"linkedin\.com",
+            r"#", r"javascript:", r"mailto:",
+        ]
+        for pattern in skip_patterns:
+            if re.search(pattern, url, re.IGNORECASE):
+                return False
+        return True
+
+    def _extract_title_from_url(self, url: str) -> str:
+        """Extract a readable title from URL."""
+        parsed = urlparse(url)
+        path = parsed.path.strip("/")
+        if path:
+            title = path.split("/")[-1]
+            title = title.replace("-", " ").replace("_", " ").replace(".html", "")
+            return title.title()
+        return "External Documentation"
+
+    def _infer_domain(self, source_name: str, parsed: Dict[str, Any]) -> EngineeringDomain:
+        """Infer engineering domain from source and content."""
+        domain_map = {
+            "python_docs": EngineeringDomain.LANGUAGES,
+            "mdn": EngineeringDomain.WEB_DEVELOPMENT,
+            "rust_docs": EngineeringDomain.LANGUAGES,
+            "go_docs": EngineeringDomain.LANGUAGES,
+            "aws_docs": EngineeringDomain.CLOUD,
+            "kubernetes_docs": EngineeringDomain.CLOUD,
+            "terraform_docs": EngineeringDomain.DEVOPS,
+            "rfc_editor": EngineeringDomain.STANDARDS,
+        }
+        return domain_map.get(source_name, EngineeringDomain.LIBRARIES)
+
+    def _infer_language(self, source_name: str) -> Optional[str]:
+        """Infer programming language from source."""
+        lang_map = {
+            "python_docs": "python",
+            "mdn": "javascript",
+            "rust_docs": "rust",
+            "go_docs": "go",
+        }
+        return lang_map.get(source_name)
+
+    def _extract_tags(self, parsed: Dict[str, Any]) -> List[str]:
+        """Extract tags from parsed content."""
+        tags = []
+        content_lower = parsed["content"].lower()
+
+        tag_keywords = {
+            "async": ["async", "await", "asyncio"],
+            "testing": ["test", "pytest", "unittest"],
+            "api": ["api", "rest", "graphql", "endpoint"],
+            "database": ["database", "sql", "orm", "postgresql", "mysql"],
+            "security": ["security", "auth", "oauth", "encryption"],
+            "performance": ["performance", "optimization", "benchmark"],
+            "deployment": ["deploy", "docker", "kubernetes", "ci/cd"],
+        }
+
+        for tag, keywords in tag_keywords.items():
+            if any(kw in content_lower for kw in keywords):
+                tags.append(tag)
+
+        return tags
+
+    async def import_from_url(self, url: str) -> ExtractionResult:
         """Import knowledge from a specific URL."""
-        # Parse URL to determine source type
         parsed = urlparse(url)
         domain = parsed.netloc.lower()
 
-        # Determine source category
+        # Determine source type and category
         if any(d in domain for d in ["stackoverflow.com", "stackexchange.com"]):
             source_type = KnowledgeSource.INTERNET_RESEARCH
             category = "stackoverflow"
@@ -188,61 +564,142 @@ class ExternalKnowledgeImporter:
             source_type = KnowledgeSource.EXTERNAL_DOCS
             category = "web"
 
-        return ExtractionResult(
-            success=False,
-            items=[],
-            errors=[f"Direct URL import not implemented for {url}"],
-            source=url,
-            source_type=source_type,
-            metadata={"category": category},
-        )
+        try:
+            html = await self.http_client.get(url)
+            if not html:
+                return ExtractionResult(
+                    success=False,
+                    items=[],
+                    errors=[f"Failed to fetch URL: {url}"],
+                    source=url,
+                    source_type=source_type,
+                    metadata={"category": category},
+                )
 
-    def import_package_docs(self, package_name: str, language: str = "python") -> ExtractionResult:
+            # Try to find content using common selectors
+            parsed_content = self.parser.extract_content(
+                html,
+                content_selector="main, article, div.content, div.document, div#content, div#main-content",
+                title_selector="h1",
+                section_selector="section, div.section",
+                base_url=f"{parsed.scheme}://{parsed.netloc}",
+            )
+
+            if not parsed_content["content"]:
+                return ExtractionResult(
+                    success=False,
+                    items=[],
+                    errors=[f"No content extracted from {url}"],
+                    source=url,
+                    source_type=source_type,
+                    metadata={"category": category},
+                )
+
+            item = self.create_knowledge_from_content(
+                title=parsed_content["title"] or self._extract_title_from_url(url),
+                content=parsed_content["content"],
+                url=url,
+                domain=self._infer_domain_from_url(url),
+                knowledge_type=EngineeringKnowledgeType.REFERENCE,
+                tags=["external", category] + self._extract_tags(parsed_content),
+            )
+            item.source_metadata.update({
+                "sections": parsed_content["sections"],
+                "code_blocks": parsed_content["code_blocks"],
+                "links": parsed_content["links"],
+                "fetch_timestamp": datetime.now(timezone.utc).isoformat(),
+            })
+
+            return ExtractionResult(
+                success=True,
+                items=[item],
+                errors=[],
+                source=url,
+                source_type=source_type,
+                metadata={"category": category},
+            )
+
+        except Exception as e:
+            return ExtractionResult(
+                success=False,
+                items=[],
+                errors=[f"Import failed: {str(e)}"],
+                source=url,
+                source_type=source_type,
+                metadata={"category": category},
+            )
+
+    def _infer_domain_from_url(self, url: str) -> EngineeringDomain:
+        """Infer domain from URL."""
+        domain = urlparse(url).netloc.lower()
+        if any(d in domain for d in ["python", "rust", "go.dev", "nodejs", "javascript", "typescript"]):
+            return EngineeringDomain.LANGUAGES
+        elif any(d in domain for d in ["aws", "azure", "gcp", "cloud"]):
+            return EngineeringDomain.CLOUD
+        elif any(d in domain for d in ["kubernetes", "docker", "terraform", "ansible"]):
+            return EngineeringDomain.DEVOPS
+        elif any(d in domain for d in ["react", "vue", "angular", "web", "mdn", "w3c"]):
+            return EngineeringDomain.WEB_DEVELOPMENT
+        elif any(d in domain for d in ["rfc", "iso", "w3c", "ecma"]):
+            return EngineeringDomain.STANDARDS
+        return EngineeringDomain.LIBRARIES
+
+    async def import_package_docs(self, package_name: str, language: str = "python") -> ExtractionResult:
         """Import documentation for a specific package."""
         if language == "python":
-            # Would use pydoc, inspect, or fetch from PyPI/ReadTheDocs
-            return ExtractionResult(
-                success=False,
-                items=[],
-                errors=[f"Python package doc import not implemented for {package_name}"],
-                source=f"pypi:{package_name}",
-                source_type=KnowledgeSource.EXTERNAL_DOCS,
-            )
+            # Try to import from PyPI / ReadTheDocs
+            urls_to_try = [
+                f"https://{package_name}.readthedocs.io/",
+                f"https://pypi.org/project/{package_name}/",
+                f"https://github.com/{package_name}/{package_name}",
+            ]
         elif language in ("javascript", "typescript"):
-            # Would fetch from npmjs.com or GitHub
-            return ExtractionResult(
-                success=False,
-                items=[],
-                errors=[f"NPM package doc import not implemented for {package_name}"],
-                source=f"npm:{package_name}",
-                source_type=KnowledgeSource.EXTERNAL_DOCS,
-            )
+            urls_to_try = [
+                f"https://www.npmjs.com/package/{package_name}",
+                f"https://github.com/{package_name}/{package_name}",
+            ]
         elif language == "rust":
-            return ExtractionResult(
-                success=False,
-                items=[],
-                errors=[f"Crate doc import not implemented for {package_name}"],
-                source=f"crates:{package_name}",
-                source_type=KnowledgeSource.EXTERNAL_DOCS,
-            )
+            urls_to_try = [
+                f"https://docs.rs/{package_name}",
+                f"https://crates.io/crates/{package_name}",
+            ]
         elif language == "go":
+            urls_to_try = [
+                f"https://pkg.go.dev/{package_name}",
+            ]
+        else:
             return ExtractionResult(
                 success=False,
                 items=[],
-                errors=[f"Go package doc import not implemented for {package_name}"],
-                source=f"pkg.go.dev:{package_name}",
+                errors=[f"Unsupported language: {language}"],
+                source=f"{language}:{package_name}",
                 source_type=KnowledgeSource.EXTERNAL_DOCS,
             )
+
+        items = []
+        errors = []
+
+        for url in urls_to_try:
+            try:
+                result = await self.import_from_url(url)
+                if result.success:
+                    items.extend(result.items)
+                    break  # Success with first working URL
+                else:
+                    errors.extend(result.errors)
+            except Exception as e:
+                errors.append(f"Error trying {url}: {str(e)}")
 
         return ExtractionResult(
-            success=False,
-            items=[],
-            errors=[f"Unsupported language: {language}"],
+            success=len(items) > 0,
+            items=items,
+            errors=errors,
             source=f"{language}:{package_name}",
             source_type=KnowledgeSource.EXTERNAL_DOCS,
+            metadata={"package": package_name, "language": language, "urls_tried": urls_to_try},
         )
 
-    def import_from_standards_body(self, body: str, identifier: str) -> ExtractionResult:
+    async def import_from_standards_body(self, body: str, identifier: str) -> ExtractionResult:
         """Import from standards bodies (RFC, ISO, W3C, ECMA)."""
         standards_sources = {
             "rfc": f"https://www.rfc-editor.org/rfc/rfc{identifier}.txt",
@@ -261,7 +718,7 @@ class ExternalKnowledgeImporter:
                 source_type=KnowledgeSource.EXTERNAL_DOCS,
             )
 
-        return self.import_from_url(url)
+        return await self.import_from_url(url)
 
     def create_knowledge_from_content(
         self,
@@ -288,13 +745,17 @@ class ExternalKnowledgeImporter:
             source_uri=url,
             source_metadata={
                 "source_domain": source_domain,
-                "fetch_timestamp": "",
+                "fetch_timestamp": datetime.now(timezone.utc).isoformat(),
             },
             tags=tags or ["external", "documentation"],
             language=language,
             confidence=0.75,
             validation_status=ValidationStatus.PENDING,
         )
+
+    async def close(self) -> None:
+        """Close HTTP client."""
+        await self.http_client.close()
 
 
 class InternetResearchImporter:
@@ -304,38 +765,129 @@ class InternetResearchImporter:
         self.cache_dir = cache_dir or Path("data/internet_research_cache")
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.registry = get_category_registry()
+        self.http_client = HTTPClient()
+        self.parser = HTMLParser()
 
-    def search_and_import(self, query: str, max_results: int = 5) -> ExtractionResult:
+    async def search_and_import(self, query: str, max_results: int = 5) -> ExtractionResult:
         """Search the web and import top results as knowledge."""
-        # Would integrate with search API (Google, Bing, DuckDuckGo, etc.)
-        return ExtractionResult(
-            success=False,
-            items=[],
-            errors=[f"Internet search not implemented for query: {query}"],
-            source=f"search:{query}",
-            source_type=KnowledgeSource.INTERNET_RESEARCH,
-        )
+        # Use DuckDuckGo HTML scraping for search (no API key required)
+        search_url = f"https://html.duckduckgo.com/html/?q={quote_plus(query)}"
 
-    def import_from_stackoverflow(self, question_id: str) -> ExtractionResult:
+        try:
+            html = await self.http_client.get(search_url, rate_limit=0.5)
+            if not html:
+                return ExtractionResult(
+                    success=False,
+                    items=[],
+                    errors=[f"Failed to fetch search results for: {query}"],
+                    source=f"search:{query}",
+                    source_type=KnowledgeSource.INTERNET_RESEARCH,
+                )
+
+            # Parse search results
+            soup = BeautifulSoup(html, "lxml")
+            result_links = []
+
+            # DuckDuckGo result selectors
+            for link in soup.select("a.result__url, a.result__snippet, .result__title a, .links_main a"):
+                href = link.get("href", "")
+                if href and href.startswith("http"):
+                    # Skip known non-content domains
+                    parsed = urlparse(href)
+                    skip_domains = ["youtube.com", "twitter.com", "x.com", "linkedin.com", "facebook.com", "instagram.com"]
+                    if parsed.netloc not in skip_domains:
+                        result_links.append(href)
+
+            # Deduplicate
+            seen = set()
+            unique_links = []
+            for link in result_links:
+                if link not in seen:
+                    seen.add(link)
+                    unique_links.append(link)
+
+            unique_links = unique_links[:max_results]
+
+            # Fetch and import each result
+            items = []
+            errors = []
+            for url in unique_links:
+                try:
+                    result = await self.import_from_url(url)
+                    if result.success:
+                        items.extend(result.items)
+                    else:
+                        errors.extend(result.errors)
+                except Exception as e:
+                    errors.append(f"Error importing {url}: {str(e)}")
+
+            return ExtractionResult(
+                success=len(items) > 0,
+                items=items,
+                errors=errors,
+                source=f"search:{query}",
+                source_type=KnowledgeSource.INTERNET_RESEARCH,
+                metadata={"query": query, "results_found": len(unique_links)},
+            )
+
+        except Exception as e:
+            return ExtractionResult(
+                success=False,
+                items=[],
+                errors=[f"Search failed: {str(e)}"],
+                source=f"search:{query}",
+                source_type=KnowledgeSource.INTERNET_RESEARCH,
+            )
+
+    async def import_from_stackoverflow(self, question_id: str) -> ExtractionResult:
         """Import a StackOverflow Q&A as engineering knowledge."""
         url = f"https://stackoverflow.com/questions/{question_id}"
-        return ExtractionResult(
-            success=False,
-            items=[],
-            errors=[f"StackOverflow import not implemented for {question_id}"],
-            source=url,
-            source_type=KnowledgeSource.INTERNET_RESEARCH,
-        )
+        return await self.import_from_url(url)
 
-    def import_from_github_repo(self, repo_url: str) -> ExtractionResult:
+    async def import_from_github_repo(self, repo_url: str) -> ExtractionResult:
         """Import knowledge from a GitHub repository (README, docs, wiki)."""
+        # Normalize to GitHub URL
+        if not repo_url.startswith("http"):
+            repo_url = f"https://github.com/{repo_url}"
+
+        # Try to fetch README
+        readme_urls = [
+            repo_url.rstrip("/") + "/blob/main/README.md",
+            repo_url.rstrip("/") + "/blob/master/README.md",
+            repo_url.rstrip("/") + "/blob/main/README.rst",
+            repo_url.rstrip("/") + "/blob/master/README.rst",
+        ]
+
+        items = []
+        errors = []
+
+        for url in readme_urls:
+            try:
+                result = await self.import_from_url(url)
+                if result.success:
+                    items.extend(result.items)
+                    break
+                else:
+                    errors.extend(result.errors)
+            except Exception as e:
+                errors.append(f"Error fetching {url}: {str(e)}")
+
         return ExtractionResult(
-            success=False,
-            items=[],
-            errors=[f"GitHub repo import not implemented for {repo_url}"],
+            success=len(items) > 0,
+            items=items,
+            errors=errors,
             source=repo_url,
             source_type=KnowledgeSource.EXTERNAL_DOCS,
+            metadata={"repo_url": repo_url},
         )
+
+    async def import_from_url(self, url: str) -> ExtractionResult:
+        """Import knowledge from a specific URL."""
+        return await ExternalKnowledgeImporter().import_from_url(url)
+
+    async def close(self) -> None:
+        """Close HTTP client."""
+        await self.http_client.close()
 
 
 class PackageDocumentationImporter:
@@ -439,7 +991,7 @@ class UnifiedExternalImporter:
         self.research_importer = InternetResearchImporter(cache_dir)
         self.package_importer = PackageDocumentationImporter()
 
-    def import_from_source(self, source_type: KnowledgeSource, identifier: str, **kwargs) -> ExtractionResult:
+    async def import_from_source(self, source_type: KnowledgeSource, identifier: str, **kwargs) -> ExtractionResult:
         """Import from a specific external source type."""
         if source_type == KnowledgeSource.EXTERNAL_DOCS:
             # Try as package first
@@ -448,28 +1000,28 @@ class UnifiedExternalImporter:
                 if lang == "python":
                     return self.package_importer.import_python_package_docs(pkg)
                 elif lang in ("javascript", "typescript", "npm"):
-                    return self.docs_importer.import_package_docs(pkg, lang)
+                    return await self.docs_importer.import_package_docs(pkg, lang)
                 elif lang == "rust":
-                    return self.docs_importer.import_package_docs(pkg, lang)
+                    return await self.docs_importer.import_package_docs(pkg, lang)
                 elif lang == "go":
-                    return self.docs_importer.import_package_docs(pkg, lang)
+                    return await self.docs_importer.import_package_docs(pkg, lang)
 
             # Try as URL
             if identifier.startswith("http"):
-                return self.docs_importer.import_from_url(identifier)
+                return await self.docs_importer.import_from_url(identifier)
 
             # Try as predefined source
-            return self.docs_importer.import_from_source(identifier, kwargs.get("query", ""))
+            return await self.docs_importer.import_from_source(identifier, kwargs.get("query", ""))
 
         elif source_type == KnowledgeSource.INTERNET_RESEARCH:
             if identifier.startswith("http"):
-                return self.research_importer.import_from_url(identifier)
+                return await self.research_importer.import_from_url(identifier)
             elif "stackoverflow" in identifier:
-                return self.research_importer.import_from_stackoverflow(identifier)
+                return await self.research_importer.import_from_stackoverflow(identifier)
             elif "github.com" in identifier:
-                return self.research_importer.import_from_github_repo(identifier)
+                return await self.research_importer.import_from_github_repo(identifier)
             else:
-                return self.research_importer.search_and_import(identifier)
+                return await self.research_importer.search_and_import(identifier)
 
         return ExtractionResult(
             success=False,
@@ -478,3 +1030,8 @@ class UnifiedExternalImporter:
             source=identifier,
             source_type=source_type,
         )
+
+    async def close(self) -> None:
+        """Close all HTTP clients."""
+        await self.docs_importer.close()
+        await self.research_importer.close()

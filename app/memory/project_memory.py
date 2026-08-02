@@ -36,6 +36,15 @@ except ImportError:
     VECTOR_DB_AVAILABLE = False
     VectorDB = None
 
+from app.core.file_allowlist import FileAllowlist, get_file_allowlist, FileOperation, AccessRule
+
+# Shared infrastructure imports
+from app.core.events import get_event_bus
+from app.core.background_jobs import get_job_service
+from app.core.background_jobs import JobTriggerConfig, JobTriggerType, JobPriority
+from app.core.observability import get_observability_hub
+from app.core.observability import HealthStatus, HealthResult, HealthCheck, ComponentInfo, ComponentType
+
 
 class ProjectMemory:
     def __init__(
@@ -45,6 +54,10 @@ class ProjectMemory:
         limit: int = 200,
         use_vector_db: bool = True,
         vector_db_name: str = "project_memory",
+        file_allowlist: Optional[FileAllowlist] = None,
+        event_bus: Optional[object] = None,
+        job_service: Optional[object] = None,
+        observability: Optional[object] = None,
     ):
         """
         Initialize enhanced project memory with similarity search capabilities.
@@ -55,11 +68,24 @@ class ProjectMemory:
             limit: Maximum number of entries to keep in memory
             use_vector_db: Whether to use persistent vector database for embeddings
             vector_db_name: Name for the vector database (used in data/vector_db/)
+            file_allowlist: Optional FileAllowlist for access validation
+            event_bus: Optional EventBus instance (uses global if not provided)
+            job_service: Optional BackgroundJobService instance (uses global if not provided)
+            observability: Optional ObservabilityHub instance (uses global if not provided)
         """
         self.workspace = Path(workspace).resolve()
         self.path = self.workspace / relative_path
         self.limit = limit
         self.use_vector_db = use_vector_db and VECTOR_DB_AVAILABLE
+        self.file_allowlist = file_allowlist or get_file_allowlist()
+
+        # Shared infrastructure
+        self._event_bus = event_bus or get_event_bus()
+        self._job_service = job_service or get_job_service()
+        self._observability = observability or get_observability_hub()
+
+        # Configure allowlist for this workspace
+        self._configure_allowlist_for_workspace()
 
         # Initialize embedding model if available
         self.embedding_model = None
@@ -77,6 +103,8 @@ class ProjectMemory:
         if self.use_vector_db and self.embedding_model is not None:
             try:
                 vector_db_path = self.workspace / "data" / "vector_db" / f"{vector_db_name}.faiss"
+                # Validate write access for vector DB directory
+                self.file_allowlist.require_allowed(vector_db_path.parent, FileOperation.WRITE, "ProjectMemory.vector_db")
                 self._vector_db = VectorDB(
                     index_path=vector_db_path,
                     embedding_dim=self._embedding_dimension,
@@ -88,6 +116,116 @@ class ProjectMemory:
 
         # Cache for embeddings to avoid recomputation (fallback when vector DB not used)
         self._embeddings_cache: dict[str, Any] = {}
+
+        # Register with observability
+        self._register_with_observability()
+
+        # Schedule periodic persistence
+        self._schedule_persistence()
+
+    def _register_with_observability(self) -> None:
+        """Register this subsystem with the shared ObservabilityHub."""
+        if self._observability:
+            self._observability.add_health_check(HealthCheck(
+                name="project_memory_health",
+                component="memory",
+                check_func=self._health_check,
+                interval_seconds=60.0,
+            ))
+
+            # Register component
+            self._observability.register_component(ComponentInfo(
+                name="ProjectMemory",
+                component_type=ComponentType.SERVICE,
+                version="1.0.0",
+                description="Project-level memory with semantic similarity search",
+                metadata={},
+            ))
+
+    def _health_check(self) -> HealthResult:
+        """Health check for ProjectMemory."""
+        entries = self._load()
+        entry_count = len(entries)
+        has_embeddings = self.embedding_model is not None
+        has_vector_db = self._vector_db is not None
+
+        return HealthResult(
+            name="project_memory_health",
+            component="memory",
+            status=HealthStatus.HEALTHY,
+            message=f"{entry_count} entries, embeddings: {has_embeddings}, vector_db: {has_vector_db}",
+            details={
+                "entry_count": entry_count,
+                "has_embeddings": has_embeddings,
+                "has_vector_db": has_vector_db,
+                "limit": self.limit,
+            },
+        )
+
+    def _publish_event(self, event_type: str, data: Dict[str, Any]) -> None:
+        """Publish an event to the EventBus."""
+        try:
+            self._event_bus.emit(event_type, data)
+        except Exception:
+            # Don't let event publishing break the system
+            pass
+
+    def _schedule_persistence(self, interval_seconds: int = 300) -> None:
+        """Schedule periodic persistence (force save to disk)."""
+        # Check if job already exists to avoid duplicate scheduling
+        existing_job = self._job_service.get_job("project_memory_persist")
+        if existing_job:
+            return
+
+        trigger = JobTriggerConfig(
+            type=JobTriggerType.RECURRING,
+            interval_seconds=interval_seconds,
+        )
+        self._job_service.schedule(
+            job_id="project_memory_persist",
+            func=lambda: self._save(self._load()),
+            trigger=trigger,
+            name="Project Memory Persistence",
+            priority=JobPriority.LOW,
+        )
+
+    def _configure_allowlist_for_workspace(self):
+        """Configure the file allowlist with workspace-specific rules."""
+        workspace_str = str(self.workspace)
+
+        # Add rule for workspace root directory
+        self.file_allowlist.add_rule(AccessRule(
+            pattern=workspace_str,
+            operations={FileOperation.LIST, FileOperation.READ},
+            description=f"Workspace root directory: {workspace_str}",
+            tags={"type": "workspace_root", "workspace": workspace_str},
+        ))
+
+        # Add rules for workspace directory contents
+        self.file_allowlist.add_rule(AccessRule(
+            pattern=f"{workspace_str}/**",
+            operations={FileOperation.READ, FileOperation.WRITE, FileOperation.CREATE, FileOperation.MODIFY, FileOperation.DELETE, FileOperation.LIST},
+            description=f"Full access to workspace contents: {workspace_str}",
+            tags={"type": "workspace", "workspace": workspace_str},
+        ))
+
+        # Add rules for common project directories
+        common_dirs = [
+            "data/**",
+            "logs/**",
+            "cache/**",
+            "tmp/**",
+            "temp/**",
+            ".freya/**",
+        ]
+        for dir_pattern in common_dirs:
+            full_pattern = f"{workspace_str}/{dir_pattern}"
+            self.file_allowlist.add_rule(AccessRule(
+                pattern=full_pattern,
+                operations={FileOperation.READ, FileOperation.WRITE, FileOperation.CREATE, FileOperation.MODIFY, FileOperation.DELETE, FileOperation.LIST},
+                description=f"Project directory: {dir_pattern}",
+                tags={"type": "project_dir", "workspace": workspace_str},
+            ))
 
     def _extract_text_for_embedding(self, entry: dict) -> str:
         """
@@ -221,6 +359,12 @@ class ProjectMemory:
         }
         entries.append(entry)
         self._save(entries[-self.limit :])
+
+        # Publish event
+        self._publish_event("memory.project_recorded", {
+            "kind": kind,
+            "content": content,
+        })
 
         # Update vector DB if we're using it
         if self._vector_db is not None:
@@ -416,6 +560,9 @@ class ProjectMemory:
 
     def _load(self) -> list[dict]:
         """Load memory entries from disk."""
+        # Validate read access
+        self.file_allowlist.require_allowed(self.path, FileOperation.READ, "ProjectMemory._load")
+
         if not self.path.exists():
             return []
         try:
@@ -426,6 +573,9 @@ class ProjectMemory:
 
     def _save(self, entries: list[dict]) -> None:
         """Save memory entries to disk."""
+        # Validate write access
+        self.file_allowlist.require_allowed(self.path, FileOperation.WRITE, "ProjectMemory._save")
+
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.path.with_suffix(".tmp")
         temporary.write_text(json.dumps(entries, indent=2, ensure_ascii=False), encoding="utf-8")

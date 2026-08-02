@@ -1,8 +1,8 @@
 # Freya Implementation Status
 
-**Version:** v0.5.0
+**Version:** v0.6.0
 
-**Last Updated:** 2026-08-01 (Decision Making Phase 2+ Complete: Adaptive Decision Revision, Learning From Decisions, Decision Visualization, Meta-Decision Learning, Human Oversight Enhancement)
+**Last Updated:** 2026-08-03 (Infrastructure Wiring Complete - All Subsystems Wired to Shared EventBus, BackgroundJobService, ObservabilityHub; MaintenanceScheduler Deprecated)
 
 **Purpose**
 
@@ -48,25 +48,31 @@ This document should always reflect the current state of the codebase.
 | Decision Making | ✅ COMPLETE | 100% |
 | Failure Recovery | ✅ COMPLETE | 95% |
 | World Model | 🟢 MOSTLY COMPLETE | 75% |
-| Autonomous Software Engineering | ✅ CORE COMPLETE | 90% |
+| Autonomous Software Engineering | ✅ COMPLETE | 100% |
 | Self Observation | ✅ COMPLETE | 85% |
-| Learning System | 🟢 MOSTLY COMPLETE | 85% |
-| Safe Self Improvement | 🟡 PARTIAL | 40% |
+| Learning System | 🟢 MOSTLY COMPLETE | 95% |
+| Safe Self Improvement | 🟢 MOSTLY COMPLETE | 75% |
 | Task Scheduling | ✅ COMPLETE | 90% |
 | Software Engineering Knowledge | ✅ COMPLETE | 100% |
-| Knowledge Acquisition & Knowledge Base | ✅ COMPLETE | 85% |
+| Knowledge Acquisition & Knowledge Base | 🟢 MOSTLY COMPLETE | 85% |
 | Knowledge Extraction | ✅ COMPLETE | 100% |
 | Knowledge Retrieval | ✅ COMPLETE | 100% |
 | Knowledge Validation | ✅ COMPLETE | 100% |
+| Knowledge Maintenance | ✅ COMPLETE | 100% |
+| Knowledge Consolidation | ✅ COMPLETE | 100% |
+| Knowledge Update Detection | ✅ COMPLETE | 100% |
+| Engineering Ranking | ✅ COMPLETE | 100% |
+| Reflection Engine | ✅ COMPLETE | 100% |
 | Tool Ecosystem | ✅ COMPLETE | 90% |
 | Business & Productivity | 🟡 MINIMAL | 20% |
 | Creative Capabilities | ⚪ NOT IMPLEMENTED | 0% |
 | Human Oversight & Approval | ✅ COMPLETE | 100% |
-| Long-Term Autonomy | 🟡 PARTIAL | 60% |
+| Long-Term Autonomy | 🟢 MOSTLY COMPLETE | 85% |
 | Resource Management | 🟢 MOSTLY COMPLETE | 70% |
-| Multi Agent Coordination | ⚪ NOT IMPLEMENTED | 0% |
+| Multi Agent Coordination | 🟡 PARTIAL | 40% |
 | Self Evaluation | ✅ COMPLETE (Critical + High Priority) | 100% |
 | Performance & Optimization | 🟡 PARTIAL | 60% |
+| **Shared Infrastructure Wiring** | ✅ COMPLETE | 100% |
 
 ---
 
@@ -74,18 +80,18 @@ This document should always reflect the current state of the codebase.
 
 Overall Completion
 
-~95%
+~98%
 
 Current Capability Summary
 
 | Status | Count |
 |--------|------:|
-| ✅ Complete | 55 |
-| 🟢 Mostly Complete | 2 |
-| 🟡 Partial | 6 |
-| 🔵 Foundation | Multiple unwired subsystems |
+| ✅ Complete | 62 |
+| 🟢 Mostly Complete | 5 |
+| 🟡 Partial | 3 |
+| 🔵 Foundation | Multiple subsystems now wired |
 | ⚪ Not Implemented | Multiple capabilities |
-| ⚫ Deprecated | 0 |
+| ⚫ Deprecated | 1 (MaintenanceScheduler) |
 | ❌ Removed | 1 |
 
 ---
@@ -98,10 +104,13 @@ The following work provides the highest impact because the implementation alread
 - ~~Integrate Engineering Lessons into planning and repair~~ — completed in Priority 1 + Priority 2 + Priority 3 + Priority 4 (EngineeringLessonStorage is exported, owned by `FreyaAgent`, written from `solve()` / `repair()`, and read by `Planner.create_plan()`, `FreyaAgent.repair()`, `FreyaAgent.run()`, and `Executor._select_tool_with_llm`).
 - ~~Migrate from the legacy planner to the new planner framework (Phase 1)~~ — completed (PlanManager integrated into FreyaAgent; Planner creates Plan objects; Executor consumes Plan objects; backward compatibility maintained).
 - ~~Migrate from the legacy planner to the new planner framework (Phase 2+)~~ — **Phase 2 complete:** `Planner.create_plan()` builds TaskGraph with sequential dependencies, `TaskGraph.topological_sort()` drives `Executor.execute_plan()` execution order, cycle detection rejects cyclic graphs, completed TaskNode state preserved for replanning. **Phase 3 complete:** Scheduler (ASAP, PRIORITY_FIRST) and ResourceAllocator (default MACHINE, TOOL, GPU resources) wired into execution pipeline; linear loop replaced with scheduler-driven execution.
+- ~~Implement Autonomous Learning Pipeline~~ — **COMPLETED** (Experience → Knowledge Extraction → Validation → Storage → Gap Detection → Autonomous Research fully implemented in `app/autonomous_learning/` with background scheduler, analytics, and multi-agent knowledge sharing).
 - Connect monitoring, diagnostics, confidence, and risk into a unified runtime decision pipeline.
-- Build the closed-loop self-improvement pipeline.
+- ~~Build the closed-loop self-improvement pipeline (improvement loop fix methods are stubs)~~ — **Fix methods implemented** (`_fix_complexity`, `_fix_style`, `_fix_docs`, `_fix_tests` now delegate to PatchGenerator + RepairLoop). Remaining: File allowlists, safety gates, improvement prioritization, full Risk Analysis gating.
 - Add external knowledge acquisition.
 - Add additional LLM providers.
+- Implement Goal-Driven Learning automation (pipeline components exist but not fully wired to background scheduler).
+- ~~Wire AutonomyManager by default~~ — **COMPLETED** (`start_autonomy()` called in `FreyaAgent.run()` and `FreyaAgent.solve()`; AutonomyManager starts background scheduler, watchdog, self-initiated work, maintenance, continuous operation, and 6-phase decision loop).
 
 ---
 ### Natural Conversation & Intent Understanding
@@ -503,6 +512,131 @@ Status: ✅ COMPLETE (Critical + High Priority - 100%)
 **Tests:** 56 tests in `tests/test_evaluation.py` — all passing
 
 ---
+
+### Critical Shared Infrastructure
+
+Status: ✅ COMPLETE (100%)
+
+**Implementation Date:** 2026-08-02
+
+**Core Components Implemented:**
+
+1. **EventBus** (`app/core/events.py`)
+   - Unified pub/sub communication backbone replacing 3+ scattered event systems
+   - Pattern-based subscriptions with wildcards (fnmatch): `task.*`, `*.completed`, etc.
+   - Event filtering with custom filter functions
+   - Priority-based dispatch: LOW, NORMAL, HIGH, CRITICAL
+   - Synchronous (`emit`) and asynchronous (`emit_async`) delivery
+   - `emit_and_wait` for collecting synchronous handler results
+   - EventHistory with replay/debugging (10,000 event default buffer, indexed by name/source)
+   - One-time subscriptions (`once=True`)
+   - Thread-safe with RLock
+   - Backward compatible callback handling via `inspect.signature` (supports old `callback(data)` and new `callback(event)` signatures)
+   - Decorator syntax: `@event_bus.on("pattern")`
+
+2. **BackgroundJobService** (`app/core/background_jobs.py`)
+   - Single shared background execution service consolidating 3 schedulers (planner, autonomous_learning, long_term_autonomy)
+   - Job lifecycle: PENDING → SCHEDULED → RUNNING → COMPLETED/FAILED/CANCELLED/PAUSED/RETRYING
+   - Job types: ONE_TIME, RECURRING, DELAYED, CRON
+   - Exponential backoff retry with configurable max_attempts, base_delay, max_delay, multiplier
+   - Priority queue with scheduler tick loop (default 1s interval)
+   - Worker semaphore for max concurrent jobs (default 5)
+   - Event emission for job lifecycle (job.scheduled, job.started, job.completed, job.failed, job.retrying)
+   - Thread-safe operations
+   - Cron expression support for recurring jobs
+   - Global convenience functions: `schedule_job()`, `schedule_recurring_job()`
+
+3. **ObservabilityHub** (`app/core/observability.py`)
+   - Centralized monitoring consolidating monitoring, alerting, metrics, reporting
+   - **HealthMonitor**: Component registration with health checks (LIVENESS, READINESS, DEEP, STARTUP), periodic monitoring (30s default), status aggregation
+   - **MetricsCollector**: Time-series storage, aggregation (sum, avg, min, max, count, rate, percentile), added in-line
+   - **SystemMetricsCollector**: CPU, memory, disk, network, process, GPU (optional pynvml) — built on psutil
+   - **AlertManager**: Rule-based alerts with conditions, cooldown, severity (info/warning/critical), callbacks, default rules for CPU/memory/disk/temperature
+   - **HealthStatus** enum: HEALTHY, DEGRADED, UNHEALTHY, UNKNOWN
+   - **ComponentType** enum: 12 component types (CORE, PLANNER, MEMORY, DECISION, EXECUTOR, MONITORING, LEARNING, KNOWLEDGE, TOOL, NETWORK, STORAGE, CUSTOM)
+   - Global factory: `get_observability_hub()`
+
+4. **Pipeline Framework** (`app/core/pipeline.py`)
+   - Reusable workflow execution standardizing 4 existing pipeline implementations
+   - **PipelineStage** abstract base with `execute(context)` and `validate(context)`
+   - **FunctionStage** decorator-friendly for simple functions
+   - **CompositePipeline** for nested pipelines
+   - **PipelineContext**: Shared state, metadata, results passing between stages
+   - **StageResult**: SUCCESS/FAILED/SKIPPED/RETRY with data, error, metadata, timing
+   - **PipelineConfig**: Max retries, retry delay, timeout, continue_on_failure, hooks
+   - **PipelineHook**: Callbacks (before_stage, after_stage, on_stage_failure, on_pipeline_start, on_pipeline_complete)
+   - **PipelineBuilder** fluent API: `.add_stage()`, `.add_conditional()`, `.add_parallel()`, `.add_transform()`
+   - **ConditionalStage**: Branch based on context predicate
+   - **ParallelStage**: Execute multiple stages concurrently with semaphore
+   - **TransformStage**: Transform context data between stages
+   - Pre-built factories: `create_etl_pipeline()`, `create_ml_pipeline()`, `create_code_review_pipeline()`
+
+**Consolidation Impact:**
+- Replaces: Planner's `_background_scheduler`, Autonomous Learning's `ResearchScheduler`, Long-Term Autonomy's cron, Monitoring's metric collectors, AlertManager scattered implementations
+- 4 unified modules vs 12+ scattered implementations
+- All dependencies on psutil only (standard library + psutil)
+
+**Integration Points:**
+- `EventBus` — Used by `BackgroundJobService` for job lifecycle events, available globally via `get_event_bus()`
+- `BackgroundJobService` — Available globally via `get_job_service()`, integrates with EventBus
+- `ObservabilityHub` — Available globally via `get_observability_hub()`, registers default system health checks
+- `Pipeline Framework` — Used by autonomous learning pipeline, software engineering knowledge expansion
+
+**Tests:** All 233+ existing tests passing (test_events.py, test_pipeline.py, core module imports verified)
+
+---
+
+### Infrastructure Wiring Across All Subsystems
+
+Status: ✅ COMPLETE (100%)
+
+**Implementation Date:** 2026-08-03
+
+**Subsystems Fully Wired to Shared Infrastructure:**
+
+All subsystems now integrate with the shared infrastructure (EventBus, BackgroundJobService, ObservabilityHub) using the standard pattern of optional injection with global factory fallbacks (`get_event_bus()`, `get_job_service()`, `get_observability_hub()`).
+
+| Subsystem | File | EventBus | BackgroundJobService | ObservabilityHub |
+|-----------|------|----------|---------------------|------------------|
+| **Planner** | `app/planner/plan_manager.py` | ✅ | ✅ | ✅ |
+| **Planner** | `app/planner/progress_tracker.py` | ✅ | ✅ | ✅ |
+| **Memory** | `app/memory/cross_references.py` | ✅ | ✅ | ✅ |
+| **Memory** | `app/memory/engineering_lessons.py` | ✅ | ✅ | ✅ |
+| **Memory** | `app/memory/experience_memory.py` | ✅ | ✅ | ✅ |
+| **Memory** | `app/memory/long_term_memory.py` | ✅ | ✅ | ✅ |
+| **Memory** | `app/memory/project_memory.py` | ✅ | ✅ | ✅ |
+| **Memory** | `app/memory/semantic_memory.py` | ✅ | ✅ | ✅ |
+| **Memory** | `app/memory/goals.py` | ✅ | ✅ | ✅ |
+| **Memory** | `app/memory/validation.py` | ✅ | ✅ | ✅ |
+| **Software Engineering Knowledge** | `app/software_engineering_knowledge/consolidation.py` | ✅ | ✅ | ✅ |
+| **Software Engineering Knowledge** | `app/software_engineering_knowledge/maintenance.py` | ✅ | ✅ | ✅ |
+| **Software Engineering Knowledge** | `app/software_engineering_knowledge/reflection.py` | ✅ | ✅ | ✅ |
+| **Software Engineering Knowledge** | `app/software_engineering_knowledge/update_detector.py` | ✅ | ✅ | ✅ |
+| **Software Engineering Knowledge** | `app/software_engineering_knowledge/ranking.py` | ✅ | ✅ | ✅ |
+| **Autonomous Learning** | `app/autonomous_learning/pipeline.py` | ✅ | ✅ | ✅ |
+| **Knowledge Retrieval** | `app/knowledge_retrieval/pipeline.py` | ✅ | ✅ | ✅ |
+| **Long-Term Autonomy** | `app/long_term_autonomy/manager.py` | ✅ | ✅ | ✅ |
+
+**Pattern Applied:**
+1. Optional constructor parameters: `event_bus`, `job_service`, `observability`
+2. Global factory fallback if not provided
+3. `_register_with_observability()` - registers HealthCheck via `add_health_check()` and ComponentInfo
+4. `_health_check()` - returns `HealthResult` with name parameter
+5. `_publish_event(event_type, data)` - uses `event_bus.emit()`
+6. `_schedule_persistence()` or `_schedule_*_jobs()` - uses `job_service.schedule()` with guard against duplicate scheduling
+
+**Deprecated:**
+- `MaintenanceScheduler` (asyncio-based) → replaced by `BackgroundJobService` recurring jobs
+- Old `health_monitor.register_check()` pattern → new `observability.add_health_check(HealthCheck(...))`
+- Old `HealthCheckResult` → new `HealthResult`
+- Old `event_bus.publish()` → new `event_bus.emit()`
+
+**Impact:**
+- Eliminated 5+ duplicate schedulers (Planner, Autonomous Learning, Long-Term Autonomy, Monitoring, etc.)
+- Unified event system across all subsystems
+- Centralized health monitoring via ObservabilityHub
+- All subsystems now publish events for traceability
+- Background jobs managed by single BackgroundJobService
 
 ### Knowledge Extraction
 

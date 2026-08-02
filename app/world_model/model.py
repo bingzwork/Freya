@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from app.core.tool_manager import ToolManager
     from app.health.health_monitor import HealthMonitor
     from app.core.project_index import ProjectIndex
+    from app.world_model.project_metadata import ProjectMetadata, DependencySet, ProjectDependencies
 
 
 @dataclass
@@ -485,6 +486,34 @@ class WorldModel:
             self._project_index.build()
         return self._project_index
 
+    @property
+    def project_metadata(self) -> "ProjectMetadata":
+        """Get project metadata (cached)."""
+        if not hasattr(self, '_project_metadata') or self._project_metadata is None:
+            from app.world_model.project_metadata import detect_project_metadata
+            self._project_metadata = detect_project_metadata(self._workspace_str)
+        return self._project_metadata
+
+    @property
+    def project_dependencies(self) -> "DependencySet":
+        """Get project dependencies (cached)."""
+        if not hasattr(self, '_project_dependencies') or self._project_dependencies is None:
+            from app.world_model.project_metadata import detect_dependencies
+            self._project_dependencies = detect_dependencies(self._workspace_str)
+        return self._project_dependencies
+
+    def get_full_project_data(self) -> "ProjectDependencies":
+        """Get full project data including metadata and all dependencies."""
+        from app.world_model.project_metadata import ProjectDependencies
+        return ProjectDependencies(
+            metadata=self.project_metadata,
+            dependencies=self.project_dependencies,
+        )
+
+    def get_project_context(self, task_type: str = "unknown") -> Dict[str, Any]:
+        """Get relevant project context for a task type."""
+        return self.get_full_project_data().get_context_for_task(task_type)
+
     # --- Public API ---
 
     def get_snapshot(self, force_refresh: bool = False) -> EnvironmentSnapshot:
@@ -591,12 +620,18 @@ class WorldModel:
     # --- Private collection methods ---
 
     def _collect_project_info(self) -> ProjectInfo:
-        """Collect project-level information."""
+        """Collect project-level information using the enhanced metadata parser."""
         info = ProjectInfo(root_path=self._workspace_str)
 
         try:
-            # Project name from directory
-            info.name = self.workspace.name
+            # Use the new project metadata parser for rich information
+            meta = self.project_metadata
+
+            # Basic info
+            info.name = meta.name or self.workspace.name
+            info.main_language = meta.primary_language
+            info.build_system = meta.build_system
+            info.framework = meta.framework
 
             # Check git repo
             info.is_git_repo = self.git_manager.is_repo()
@@ -611,89 +646,11 @@ class WorldModel:
                 total_lines += content.count("\n") + 1
             info.total_lines = total_lines
 
-            # Detect main language
-            ext_counts: Dict[str, int] = {}
-            for path in pi.files.keys():
-                ext = Path(path).suffix.lower()
-                if ext:
-                    ext_counts[ext] = ext_counts.get(ext, 0) + 1
+            # Config files from metadata
+            info.config_files = list(meta.raw_config.get("config_files", []))
 
-            if ext_counts:
-                main_ext = max(ext_counts, key=ext_counts.get)
-                lang_map = {
-                    ".py": "Python", ".js": "JavaScript", ".ts": "TypeScript",
-                    ".java": "Java", ".cpp": "C++", ".c": "C", ".rs": "Rust",
-                    ".go": "Go", ".rb": "Ruby", ".php": "PHP", ".cs": "C#",
-                }
-                info.main_language = lang_map.get(main_ext, main_ext.lstrip(".").upper())
-
-            # Detect config files and frameworks
-            config_files = []
-            frameworks = []
-            build_systems = []
-
-            for path in pi.files.keys():
-                name = Path(path).name
-                if name in ("pyproject.toml", "setup.py", "requirements.txt", "Pipfile", "poetry.lock"):
-                    config_files.append(path)
-                    if "pyproject.toml" in path.lower():
-                        build_systems.append("pyproject.toml")
-                    elif "setup.py" in path.lower():
-                        build_systems.append("setuptools")
-                    elif "requirements.txt" in path.lower():
-                        build_systems.append("pip")
-                    elif "poetry.lock" in path.lower():
-                        build_systems.append("poetry")
-                    elif "Pipfile" in path.lower():
-                        build_systems.append("pipenv")
-
-                elif name in ("package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml"):
-                    config_files.append(path)
-                    build_systems.append("npm/yarn/pnpm")
-                    try:
-                        import json
-                        pkg = json.loads(pi.files[path])
-                        if "framework" in pkg or "framework" in pkg.get("scripts", {}):
-                            pass  # Could parse more
-                        deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
-                        if "next" in deps: frameworks.append("Next.js")
-                        if "react" in deps: frameworks.append("React")
-                        if "vue" in deps: frameworks.append("Vue")
-                        if "svelte" in deps: frameworks.append("Svelte")
-                        if "express" in deps: frameworks.append("Express")
-                        if "fastapi" in deps: frameworks.append("FastAPI")
-                        if "django" in deps: frameworks.append("Django")
-                        if "flask" in deps: frameworks.append("Flask")
-                    except Exception:
-                        pass
-
-                elif name in ("Cargo.toml", "Cargo.lock"):
-                    config_files.append(path)
-                    build_systems.append("cargo")
-
-                elif name in ("go.mod", "go.sum"):
-                    config_files.append(path)
-                    build_systems.append("go modules")
-
-                elif name in ("pom.xml", "build.gradle", "build.gradle.kts"):
-                    config_files.append(path)
-                    if name == "pom.xml": build_systems.append("maven")
-                    else: build_systems.append("gradle")
-
-            info.config_files = list(set(config_files))
-            info.build_system = ", ".join(set(build_systems)) if build_systems else "unknown"
-            info.framework = ", ".join(set(frameworks)) if frameworks else "none detected"
-
-            # Detect entry points
-            entry_points = []
-            for path in pi.files.keys():
-                name = Path(path).name
-                if name in ("main.py", "app.py", "server.py", "cli.py", "__main__.py",
-                           "index.js", "main.js", "server.js", "app.js",
-                           "index.ts", "main.ts", "server.ts", "app.ts",
-                           "main.go", "main.rs", "Main.java", "Program.cs"):
-                    entry_points.append(path)
-            info.entry_points = entry_points[:10]  # Limit
+            # Entry points from metadata
+            info.entry_points = meta.entry_points[:10] if meta.entry_points else []
 
         except Exception as e:
             logger.warning(f"[WorldModel] Error collecting project info: {e}")

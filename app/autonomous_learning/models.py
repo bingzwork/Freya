@@ -103,11 +103,18 @@ class LearningPipelineResult:
     # Gap detection
     gaps_detected: int = 0
     gaps_resolved: int = 0
+    goal_gaps_detected: int = 0
 
     # Research
     research_tasks_started: int = 0
     research_tasks_completed: int = 0
     research_tasks_failed: int = 0
+
+    # Consolidation
+    consolidation_runs: int = 0
+    experiences_promoted: int = 0
+    lessons_promoted: int = 0
+    entries_archived: int = 0
 
     # Errors and warnings
     errors: list[str] = field(default_factory=list)
@@ -115,6 +122,31 @@ class LearningPipelineResult:
 
     # Performance metrics
     duration_seconds: float = 0.0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "pipeline_id": self.pipeline_id,
+            "timestamp": self.timestamp.isoformat(),
+            "experiences_processed": self.experiences_processed,
+            "experiences_analyzed": self.experiences_analyzed,
+            "knowledge_objects_extracted": self.knowledge_objects_extracted,
+            "knowledge_objects_validated": self.knowledge_objects_validated,
+            "knowledge_objects_stored": self.knowledge_objects_stored,
+            "knowledge_objects_rejected": self.knowledge_objects_rejected,
+            "gaps_detected": self.gaps_detected,
+            "gaps_resolved": self.gaps_resolved,
+            "goal_gaps_detected": self.goal_gaps_detected,
+            "research_tasks_started": self.research_tasks_started,
+            "research_tasks_completed": self.research_tasks_completed,
+            "research_tasks_failed": self.research_tasks_failed,
+            "consolidation_runs": self.consolidation_runs,
+            "experiences_promoted": self.experiences_promoted,
+            "lessons_promoted": self.lessons_promoted,
+            "entries_archived": self.entries_archived,
+            "errors": self.errors,
+            "warnings": self.warnings,
+            "duration_seconds": self.duration_seconds,
+        }
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -428,6 +460,14 @@ class AutonomousLearningConfig:
     use_forgetting_engine: bool = True
     use_knowledge_validator: bool = True
 
+    # Multi-agent learning
+    multi_agent_enabled: bool = False
+    shared_knowledge_dir: str = "data/multi_agent_learning"
+    instance_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+
+    # Goal-driven learning
+    goal_driven_learning_enabled: bool = False
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "enabled": self.enabled,
@@ -453,6 +493,10 @@ class AutonomousLearningConfig:
             "use_consolidation_engine": self.use_consolidation_engine,
             "use_forgetting_engine": self.use_forgetting_engine,
             "use_knowledge_validator": self.use_knowledge_validator,
+            "multi_agent_enabled": self.multi_agent_enabled,
+            "shared_knowledge_dir": self.shared_knowledge_dir,
+            "instance_id": self.instance_id,
+            "goal_driven_learning_enabled": self.goal_driven_learning_enabled,
         }
 
     @classmethod
@@ -484,4 +528,8 @@ class AutonomousLearningConfig:
             use_consolidation_engine=data.get("use_consolidation_engine", True),
             use_forgetting_engine=data.get("use_forgetting_engine", True),
             use_knowledge_validator=data.get("use_knowledge_validator", True),
+            multi_agent_enabled=data.get("multi_agent_enabled", False),
+            shared_knowledge_dir=data.get("shared_knowledge_dir", "data/multi_agent_learning"),
+            instance_id=data.get("instance_id", str(uuid.uuid4())),
+            goal_driven_learning_enabled=data.get("goal_driven_learning_enabled", False),
         )

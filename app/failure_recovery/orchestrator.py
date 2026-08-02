@@ -9,6 +9,7 @@ Integrates with existing systems:
 - RepairLoop: For code repair attempts
 - VerificationRunner: For verification
 - Memory systems: For recording lessons and experiences
+- Shared Infrastructure: EventBus, BackgroundJobService, ObservabilityHub
 """
 
 import logging
@@ -16,12 +17,18 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from app.failure_recovery.detector import (
     FailureDetector, FailureEvent, FailureType, FailureSeverity, Recoverability
 )
 from app.failure_recovery.analyzer import RootCauseAnalyzer, RootCause, CauseCategory
+
+# Shared infrastructure imports
+from app.core.events import get_event_bus, EventBus, Event
+from app.core.background_jobs import get_job_service, BackgroundJobService, JobTriggerConfig, JobTriggerType, JobPriority
+from app.core.observability import get_observability_hub, ObservabilityHub, ComponentInfo, ComponentType
 
 logger = logging.getLogger(__name__)
 
@@ -234,6 +241,10 @@ class RecoveryOrchestrator:
         decision_callback: Optional[DecisionCallback] = None,
         max_recovery_attempts: int = 3,
         workspace: str = ".",
+        # Shared infrastructure
+        event_bus: Optional[EventBus] = None,
+        job_service: Optional[BackgroundJobService] = None,
+        observability: Optional[ObservabilityHub] = None,
     ):
         self.failure_detector = failure_detector or FailureDetector()
         self.root_cause_analyzer = root_cause_analyzer or RootCauseAnalyzer()
@@ -243,6 +254,11 @@ class RecoveryOrchestrator:
         self.decision_callback = decision_callback
         self.max_recovery_attempts = min(max_recovery_attempts, MAX_RECOVERY_ATTEMPTS)
         self.workspace = workspace
+
+        # Shared infrastructure
+        self.event_bus = event_bus or get_event_bus()
+        self.job_service = job_service or get_job_service()
+        self.observability = observability or get_observability_hub()
 
         # Recovery event log
         self._recovery_events: List[RecoveryEvent] = []
@@ -262,7 +278,127 @@ class RecoveryOrchestrator:
             "by_failure_type": {},
         }
 
+        # Register with observability
+        self._register_with_observability()
+
+        # Schedule periodic history cleanup
+        self._schedule_history_cleanup()
+
         logger.info(f"[RecoveryOrchestrator] Initialized (max_attempts={self.max_recovery_attempts})")
+
+    def _register_with_observability(self) -> None:
+        """Register this subsystem with the shared ObservabilityHub."""
+        if self.observability:
+            # Register health check
+            from app.core.observability import HealthCheck
+            self.observability.add_health_check(HealthCheck(
+                name="failure_recovery_health",
+                component="failure_recovery",
+                check_func=self._health_check,
+                interval_seconds=60.0,
+            ))
+
+            # Register component
+            self.observability.register_component(ComponentInfo(
+                name="RecoveryOrchestrator",
+                component_type=ComponentType.SERVICE,
+                version="1.0.0",
+                description="Failure recovery orchestration with detection, analysis, strategy, execution, verification, and learning",
+                metadata={},
+            ))
+
+    def _health_check(self):
+        """Health check for RecoveryOrchestrator."""
+        from app.core.observability import HealthResult, HealthStatus
+        try:
+            success_rate = self._stats["successful"] / max(1, self._stats["total_recoveries"])
+            return HealthResult(
+                name="failure_recovery_health",
+                component="failure_recovery",
+                status=HealthStatus.HEALTHY if success_rate > 0.5 else HealthStatus.DEGRADED,
+                message=f"RecoveryOrchestrator operational (success_rate={success_rate:.2f})",
+                metadata={
+                    "total_recoveries": self._stats["total_recoveries"],
+                    "success_rate": success_rate,
+                    "recovery_history_size": len(self._recovery_history),
+                    "recovery_events_size": len(self._recovery_events),
+                }
+            )
+        except Exception as e:
+            return HealthResult(
+                name="failure_recovery_health",
+                component="failure_recovery",
+                status=HealthStatus.UNHEALTHY,
+                message=f"Health check failed: {e}",
+                metadata={"error": str(e)}
+            )
+
+    def _publish_event(self, event_name: str, data: Dict[str, Any]) -> None:
+        """Publish an event to the shared EventBus."""
+        try:
+            self.event_bus.emit(
+                name=event_name,
+                data=data,
+                source="RecoveryOrchestrator"
+            )
+        except Exception as e:
+            logger.warning(f"[RecoveryOrchestrator] Failed to publish event {event_name}: {e}")
+
+    def _schedule_history_cleanup(self, interval_hours: int = 24) -> str:
+        """Schedule periodic cleanup of old recovery history using shared BackgroundJobService.
+
+        Args:
+            interval_hours: Interval between cleanups (default 24 hours)
+
+        Returns:
+            Job ID of the scheduled cleanup job
+        """
+        job_id = "recovery_orchestrator_cleanup_history"
+        self.job_service.schedule(
+            job_id=job_id,
+            func=self._cleanup_old_history,
+            trigger=JobTriggerConfig(type=JobTriggerType.RECURRING, interval_seconds=interval_hours * 3600),
+            priority=JobPriority.LOW,
+            max_retries=3,
+            replace_existing=True,
+        )
+        logger.info(f"[RecoveryOrchestrator] Scheduled history cleanup (interval: {interval_hours}h)")
+        return job_id
+
+    def _cleanup_old_history(self, max_age_days: int = 30, max_entries: int = 1000) -> None:
+        """Clean up old recovery history entries.
+
+        Args:
+            max_age_days: Maximum age of entries to keep
+            max_entries: Maximum number of entries to keep
+        """
+        try:
+            from datetime import timedelta
+            cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+
+            # Filter history by age
+            original_count = len(self._recovery_history)
+            self._recovery_history = [
+                r for r in self._recovery_history
+                if any(
+                    datetime.fromisoformat(a.timestamp.replace("Z", "+00:00")) >= cutoff
+                    for a in r.attempts
+                )
+            ][-max_entries:]
+
+            # Also filter events
+            original_event_count = len(self._recovery_events)
+            self._recovery_events = [
+                e for e in self._recovery_events
+                if datetime.fromisoformat(e.timestamp.replace("Z", "+00:00")) >= cutoff
+            ][-max_entries:]
+
+            removed = original_count - len(self._recovery_history)
+            if removed > 0:
+                logger.info(f"[RecoveryOrchestrator] Cleaned up {removed} old history entries, "
+                          f"{original_event_count - len(self._recovery_events)} old events")
+        except Exception as e:
+            logger.warning(f"[RecoveryOrchestrator] History cleanup failed: {e}")
 
     def register_stage_callback(
         self, stage: RecoveryStage, callback: Callable[[RecoveryEvent], None]
@@ -1061,6 +1197,15 @@ class RecoveryOrchestrator:
             details=details,
         )
         self._recovery_events.append(event)
+
+        # Also publish to shared EventBus for system-wide visibility
+        self._publish_event(f"recovery.{stage.value}", {
+            "stage": stage.value,
+            "failure_event_id": failure_event_id,
+            "message": message,
+            "details": details,
+            "timestamp": event.timestamp,
+        })
 
         # Call stage callbacks
         for callback in self._stage_callbacks.get(stage, []):

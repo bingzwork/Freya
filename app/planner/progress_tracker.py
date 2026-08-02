@@ -11,6 +11,13 @@ from collections import defaultdict
 
 from app.planner.task import Task, TaskStatus
 
+# Shared infrastructure imports
+from app.core.events import get_event_bus
+from app.core.background_jobs import get_job_service
+from app.core.background_jobs import JobTriggerConfig, JobTriggerType, JobPriority
+from app.core.observability import get_observability_hub
+from app.core.observability import HealthStatus, HealthResult
+
 
 @dataclass
 class ProgressSnapshot:
@@ -108,8 +115,19 @@ class ProgressTracker:
     Emits ProgressSnapshot objects on task state transitions.
     """
 
-    def __init__(self):
-        """Initialize the progress tracker."""
+    def __init__(
+        self,
+        event_bus: Optional[object] = None,
+        job_service: Optional[object] = None,
+        observability: Optional[object] = None,
+    ):
+        """Initialize the progress tracker.
+
+        Args:
+            event_bus: Optional EventBus instance (uses global if not provided)
+            job_service: Optional BackgroundJobService instance (uses global if not provided)
+            observability: Optional ObservabilityHub instance (uses global if not provided)
+        """
         # Task ID -> Task
         self._tasks: Dict[str, Task] = {}
 
@@ -130,6 +148,79 @@ class ProgressTracker:
 
         # Track last known status for each task to detect transitions
         self._last_status: Dict[str, TaskStatus] = {}
+
+        # Shared infrastructure
+        self._event_bus = event_bus or get_event_bus()
+        self._job_service = job_service or get_job_service()
+        self._observability = observability or get_observability_hub()
+
+        # Register with observability
+        self._register_with_observability()
+
+        # Schedule periodic snapshot
+        self._schedule_periodic_snapshots()
+
+    def _register_with_observability(self) -> None:
+        """Register health check with observability hub."""
+        if self._observability:
+            from app.core.observability import HealthCheck, ComponentInfo, ComponentType
+            self._observability.add_health_check(HealthCheck(
+                name="progress_tracker_health",
+                component="progress",
+                check_func=self._health_check,
+                interval_seconds=60.0,
+            ))
+
+            # Register component
+            self._observability.register_component(ComponentInfo(
+                name="ProgressTracker",
+                component_type=ComponentType.SERVICE,
+                version="1.0.0",
+                description="Task progress tracking and metrics",
+                metadata={},
+            ))
+
+    def _health_check(self) -> HealthResult:
+        """Health check for ProgressTracker."""
+        task_count = len(self._tasks)
+        snapshot_count = len(self._snapshots)
+
+        return HealthResult(
+            name="progress_tracker",
+            status=HealthStatus.HEALTHY,
+            message=f"Tracking {task_count} tasks, {snapshot_count} snapshots",
+            details={
+                "task_count": task_count,
+                "snapshot_count": snapshot_count,
+                "completion_count": len(self._completion_history),
+            }
+        )
+
+    def _publish_event(self, event_type: str, data: Dict[str, Any]) -> None:
+        """Publish an event to the EventBus."""
+        try:
+            self._event_bus.emit(event_type, data)
+        except Exception as e:
+            # Don't let event publishing break the tracker
+            pass
+
+    def _schedule_periodic_snapshots(self, interval_seconds: int = 60) -> None:
+        """Schedule periodic progress snapshots."""
+        # Guard against duplicate scheduling (e.g., in tests where multiple instances created)
+        if self._job_service.get_job("progress_tracker_snapshot") is not None:
+            return
+
+        trigger = JobTriggerConfig(
+            type=JobTriggerType.RECURRING,
+            interval_seconds=interval_seconds,
+        )
+        self._job_service.schedule(
+            job_id="progress_tracker_snapshot",
+            func=self.take_snapshot,
+            trigger=trigger,
+            name="Progress Tracker Periodic Snapshot",
+            priority=JobPriority.LOW,
+        )
 
     def add_task(self, task: Task) -> None:
         """Add a task to the tracker."""
@@ -161,6 +252,14 @@ class ProgressTracker:
         snapshot = ProgressSnapshot.create(list(self._tasks.values()), trigger_task_id=trigger_task_id, trigger_transition=trigger_transition)
         self._snapshots.append(snapshot)
         self._notify_callbacks(snapshot)
+
+        # Publish progress snapshot event
+        self._publish_event("progress.snapshot", {
+            "snapshot": snapshot.to_dict(),
+            "trigger_task_id": trigger_task_id,
+            "trigger_transition": trigger_transition,
+        })
+
         return snapshot
 
     def get_current_snapshot(self) -> ProgressSnapshot:
@@ -441,6 +540,15 @@ class ProgressTracker:
         # If completed or failed, track completion
         if task.status in (TaskStatus.COMPLETED, TaskStatus.FAILED):
             self.track_completion(task.id)
+
+        # Publish task status change event
+        self._publish_event("progress.task_status_changed", {
+            "task_id": task.id,
+            "task_title": task.title,
+            "old_status": self._last_status.get(task.id, TaskStatus.PENDING).value if task.id in self._last_status else "UNKNOWN",
+            "new_status": task.status.value,
+            "transition": transition,
+        })
 
         return snapshot
 

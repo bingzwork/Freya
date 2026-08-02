@@ -31,6 +31,11 @@ from app.knowledge_retrieval.sources import (
     create_adapters_from_agent,
 )
 
+# Shared infrastructure imports
+from app.core.events import get_event_bus
+from app.core.background_jobs import get_job_service, JobTriggerConfig, JobTriggerType, JobPriority
+from app.core.observability import get_observability_hub, HealthCheck, HealthResult, HealthStatus, ComponentInfo, ComponentType
+
 logger = logging.getLogger(__name__)
 
 
@@ -72,11 +77,20 @@ class KnowledgeRetrievalPipeline:
         analytics_storage: Optional[Path] = None,
         adaptive_ranking: bool = True,
         analytics_enabled: bool = True,
+        # Shared infrastructure
+        event_bus: Optional[object] = None,
+        job_service: Optional[object] = None,
+        observability: Optional[object] = None,
     ):
         """Initialize the pipeline."""
         self.config = config or RankingConfig()
         self.config.adaptation_enabled = adaptive_ranking
         self.config.analytics_enabled = analytics_enabled
+
+        # Shared infrastructure
+        self.event_bus = event_bus or get_event_bus()
+        self.job_service = job_service or get_job_service()
+        self.observability = observability or get_observability_hub()
 
         # Initialize components
         self.calibration = CalibrationManager(
@@ -96,6 +110,60 @@ class KnowledgeRetrievalPipeline:
 
         # Statistics
         self._stats = PipelineStats()
+
+        # Register with observability
+        self._register_with_observability()
+
+    def _register_with_observability(self) -> None:
+        """Register this subsystem with the shared ObservabilityHub."""
+        if self.observability:
+            self.observability.add_health_check(HealthCheck(
+                name="knowledge_retrieval_pipeline_health",
+                component="knowledge_retrieval",
+                check_func=self._health_check,
+                interval_seconds=60.0,
+            ))
+
+            # Register component
+            self.observability.register_component(ComponentInfo(
+                name="KnowledgeRetrievalPipeline",
+                component_type=ComponentType.SERVICE,
+                version="1.0.0",
+                description="Knowledge retrieval, calibration, and ranking pipeline",
+                metadata={},
+            ))
+
+    def _health_check(self) -> HealthResult:
+        """Health check for KnowledgeRetrievalPipeline."""
+        try:
+            success_rate = self._stats.successful_queries / max(1, self._stats.total_queries)
+            return HealthResult(
+                name="knowledge_retrieval_pipeline_health",
+                component="knowledge_retrieval",
+                status=HealthStatus.HEALTHY,
+                message="KnowledgeRetrievalPipeline operational",
+                metadata={
+                    "total_queries": self._stats.total_queries,
+                    "success_rate": success_rate,
+                    "avg_retrieval_time": self._stats.avg_retrieval_time,
+                    "registered_adapters": len(self._adapters),
+                }
+            )
+        except Exception as e:
+            return HealthResult(
+                name="knowledge_retrieval_pipeline_health",
+                component="knowledge_retrieval",
+                status=HealthStatus.UNHEALTHY,
+                message=f"Health check failed: {e}",
+                metadata={"error": str(e)}
+            )
+
+    def _publish_event(self, event_type: str, data: Dict[str, Any]) -> None:
+        """Publish an event to the shared EventBus."""
+        try:
+            self.event_bus.emit(event_type, data)
+        except Exception as e:
+            logger.warning(f"Failed to publish event {event_type}: {e}")
 
     def register_adapter(self, adapter: KnowledgeSourceAdapter) -> None:
         """Register a knowledge source adapter."""
@@ -153,6 +221,16 @@ class KnowledgeRetrievalPipeline:
 
         # Update stats
         self._update_stats(query, ranked_results, retrieval_time, decision)
+
+        # Publish retrieval event
+        self._publish_event("knowledge.retrieved", {
+            "query": query.query,
+            "total_candidates": len(all_candidates),
+            "results_returned": len(ranked_results),
+            "decision": decision.value,
+            "retrieval_time": retrieval_time,
+            "top_score": ranked_results[0].rank_score if ranked_results else 0,
+        })
 
         return RetrievalResponse(
             results=ranked_results,
@@ -376,6 +454,27 @@ class KnowledgeRetrievalPipeline:
         self.calibration.save()
         if self.analytics:
             self.analytics.save()
+
+    def schedule_state_persistence(self, interval_seconds: int = 300) -> str:
+        """Schedule periodic state persistence using shared BackgroundJobService.
+
+        Args:
+            interval_seconds: Interval between saves (default 5 minutes)
+
+        Returns:
+            Job ID of the scheduled persistence job
+        """
+        job_id = "knowledge_retrieval_persist_state"
+        self.job_service.schedule(
+            job_id=job_id,
+            func=self.save_state,
+            trigger=JobTriggerConfig(type=JobTriggerType.RECURRING, interval_seconds=interval_seconds),
+            priority=JobPriority.LOW,
+            max_retries=3,
+            replace_existing=True,
+        )
+        logger.info(f"Scheduled knowledge retrieval state persistence (interval: {interval_seconds}s)")
+        return job_id
 
     def get_available_sources(self) -> List[str]:
         """Get list of available source names."""

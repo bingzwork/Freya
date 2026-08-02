@@ -5,8 +5,10 @@ It searches trusted sources, extracts information, validates it, and stores it
 to fill identified knowledge gaps.
 """
 
+import asyncio
+import httpx
+import json
 import time
-import threading
 from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional
 from urllib.parse import quote_plus
@@ -27,6 +29,7 @@ from app.autonomous_learning.models import (
     AutonomousLearningConfig
 )
 from app.autonomous_learning.gap_detection import KnowledgeGapDetector
+from app.software_engineering_knowledge.external_import import ExternalKnowledgeImporter, EXTERNAL_SOURCES
 
 
 class AutonomousResearchLoop:
@@ -73,8 +76,11 @@ class AutonomousResearchLoop:
         self.gap_detector = gap_detector
         self.config = config or AutonomousLearningConfig()
 
+        # Initialize external importers
+        self.external_importer = ExternalKnowledgeImporter()
+
         # Research state
-        self._lock = threading.RLock()
+        self._lock = asyncio.Lock()
         self._active_research: Dict[str, ResearchTask] = {}
         self._research_history: List[ResearchTask] = []
 
@@ -87,7 +93,12 @@ class AutonomousResearchLoop:
         Returns:
             List of ResearchTask objects representing research efforts
         """
-        with self._lock:
+        # Use asyncio.run for synchronous interface (can be called from sync code)
+        return asyncio.run(self._research_knowledge_gaps_async(gaps))
+
+    async def _research_knowledge_gaps_async(self, gaps: Optional[List[KnowledgeGap]] = None) -> List[ResearchTask]:
+        """Async version of research knowledge gaps."""
+        async with self._lock:
             try:
                 logger.info("Starting autonomous research loop")
 
@@ -125,11 +136,11 @@ class AutonomousResearchLoop:
                         self._active_research[task.id] = task
                         research_tasks.append(task)
 
-                # Execute research tasks (simplified - in reality would be async)
+                # Execute research tasks asynchronously
                 completed_tasks = []
                 for task in research_tasks:
                     try:
-                        completed_task = self._execute_research_task(task)
+                        completed_task = await self._execute_research_task_async(task)
                         completed_tasks.append(completed_task)
                         # Move to history
                         if task.id in self._active_research:
@@ -139,6 +150,7 @@ class AutonomousResearchLoop:
                         logger.error(f"Error executing research task {task.id}: {e}")
                         task.status = ResearchStatus.FAILED
                         task.error_message = str(e)
+                        task.completed_at = datetime.now(timezone.utc)
                         completed_tasks.append(task)
 
                 logger.info(f"Completed research on {len(completed_tasks)} gaps")
@@ -478,21 +490,48 @@ class AutonomousResearchLoop:
         Returns:
             List of search result dictionaries
         """
+        # Run async search synchronously
+        return asyncio.run(self._search_trusted_sources_async(task))
+
+    async def _search_trusted_sources_async(self, task: ResearchTask) -> List[Dict[str, Any]]:
+        """Async version of search trusted sources."""
         search_results = []
 
         try:
-            # In a real implementation, this would call actual search APIs
-            # For now, we'll simulate search results based on the query
-            # This is a placeholder that would be replaced with actual search integration
-
             query = task.query
-            logger.debug(f"Searching for: {query}")
+            logger.debug(f"Searching trusted sources for: {query}")
 
-            # Simulate search results from each target source
+            # Search each trusted source
             for source in task.target_sources:
-                # Create mock search results (in reality, this would call Google, GitHub API, etc.)
-                mock_results = self._create_mock_search_results(query, source)
-                search_results.extend(mock_results)
+                # Map ResearchSource to search strategy
+                if source == ResearchSource.OFFICIAL_DOCUMENTATION:
+                    # Try official documentation sources
+                    results = await self._search_official_docs(query)
+                    search_results.extend(results)
+                elif source == ResearchSource.GITHUB_REPOSITORY:
+                    # Search GitHub repositories
+                    results = await self._search_github(query)
+                    search_results.extend(results)
+                elif source == ResearchSource.STACKOVERFLOW:
+                    # Search StackOverflow
+                    results = await self._search_stackoverflow(query)
+                    search_results.extend(results)
+                elif source == ResearchSource.TECHNICAL_BLOG:
+                    # Search technical blogs via general search
+                    results = await self._search_general_web(query)
+                    search_results.extend(results)
+                elif source == ResearchSource.VENDOR_DOCUMENTATION:
+                    # Search vendor documentation
+                    results = await self._search_vendor_docs(query)
+                    search_results.extend(results)
+                elif source == ResearchSource.STANDARDS_SPECIFICATIONS:
+                    # Search standards/specifications
+                    results = await self._search_standards(query)
+                    search_results.extend(results)
+                elif source == ResearchSource.PACKAGE_DOCUMENTATION:
+                    # Search package documentation
+                    results = await self._search_package_docs(query)
+                    search_results.extend(results)
 
                 # Respect max results per source
                 if len(search_results) >= task.max_results_per_source * len(task.target_sources):
@@ -501,7 +540,7 @@ class AutonomousResearchLoop:
         except Exception as e:
             logger.error(f"Error searching trusted sources: {e}")
 
-        return search_results
+        return search_results[:task.max_results_per_source * len(task.target_sources)]  # Limit results
 
     def _create_mock_search_results(self, query: str, source: ResearchSource) -> List[Dict[str, Any]]:
         """Create mock search results for demonstration purposes.
@@ -550,6 +589,218 @@ class AutonomousResearchLoop:
             logger.error(f"Error creating mock search results: {e}")
 
         return mock_results
+
+    async def _search_official_docs(self, query: str) -> List[Dict[str, Any]]:
+        """Search official documentation sources."""
+        results = []
+
+        # Use our external importer to search documentation sources
+        try:
+            # Try multiple documentation sources
+            doc_sources = ["python_docs", "mdn", "rust_docs", "go_docs"]
+
+            for source_name in doc_sources:
+                if source_name in EXTERNAL_SOURCES:
+                    # Use the external importer to search this source
+                    importer = ExternalKnowledgeImporter()
+                    try:
+                        # For now, we'll fetch the search results and extract URLs
+                        result = await importer.import_from_source(source_name, query, max_results=3)
+                        if result.success and result.items:
+                            # Convert knowledge items to search result format
+                            for item in result.items:
+                                results.append({
+                                    "title": item.title,
+                                    "url": item.source_uri,
+                                    "snippet": item.summary,
+                                    "source": source_name,
+                                    "relevance_score": item.confidence,
+                                    "content": item.content[:1000] + "..." if len(item.content) > 1000 else item.content
+                                })
+                    finally:
+                        await importer.close()
+        except Exception as e:
+            logger.error(f"Error searching official docs: {e}")
+
+        return results
+
+    async def _search_github(self, query: str) -> List[Dict[str, Any]]:
+        """Search GitHub repositories."""
+        results = []
+
+        try:
+            # GitHub search API (public, no auth needed for basic search)
+            url = f"https://api.github.com/search/repositories?q={quote_plus(query)}&sort=stars&order=desc"
+
+            # Use a simple HTTP client for this
+            async with httpx.AsyncClient() as client:
+                response = await client.get(url, headers={"Accept": "application/vnd.github.v3+json"})
+                if response.status_code == 200:
+                    data = response.json()
+                    for item in data.get("items", [])[:5]:  # Limit to top 5
+                        results.append({
+                            "title": item["full_name"],
+                            "url": item["html_url"],
+                            "snippet": item.get("description", ""),
+                            "source": "github",
+                            "relevance_score": min(item["stargazers_count"] / 1000.0, 1.0),  # Normalize stars
+                            "content": f"Repository: {item['full_name']}\nDescription: {item.get('description', '')}\nLanguage: {item.get('language', 'Unknown')}\nStars: {item['stargazers_count']}"
+                        })
+        except Exception as e:
+            logger.error(f"Error searching GitHub: {e}")
+
+        return results
+
+    async def _search_stackoverflow(self, query: str) -> List[Dict[str, Any]]:
+        """Search StackOverflow questions."""
+        results = []
+
+        try:
+            # StackExchange API
+            url = f"https://api.stackexchange.com/2.3/search/advanced?order=desc&sort=relevance&q={quote_plus(query)}&site=stackoverflow&pagesize=5"
+
+            async with httpx.AsyncClient() as client:
+                response = await client.get(url)
+                if response.status_code == 200:
+                    data = response.json()
+                    for item in data.get("items", []):
+                        results.append({
+                            "title": item["title"],
+                            "url": item["link"],
+                            "snippet": item.get("excerpt", ""),
+                            "source": "stackoverflow",
+                            "relevance_score": min(item["score"] / 10.0, 1.0),  # Normalize score
+                            "content": f"Question: {item['title']}\nTags: {', '.join([tag['name'] for tag in item.get('tags', [])])}\nScore: {item['score']}\nAnswers: {item.get('answer_count', 0)}"
+                        })
+        except Exception as e:
+            logger.error(f"Error searching StackOverflow: {e}")
+
+        return results
+
+    async def _search_general_web(self, query: str) -> List[Dict[str, Any]]:
+        """Search general web using DuckDuckGo."""
+        results = []
+
+        try:
+            # DuckDuckGo HTML search
+            url = f"https://html.duckduckgo.com/html/?q={quote_plus(query)}"
+
+            async with httpx.AsyncClient() as client:
+                response = await client.get(url, headers={"User-Agent": "Mozilla/5.0"})
+                if response.status_code == 200:
+                    from bs4 import BeautifulSoup
+                    soup = BeautifulSoup(response.text, 'html.parser')
+
+                    # Extract results
+                    for result in soup.select('.result__body')[:5]:
+                        title_elem = result.select_one('.result__title')
+                        snippet_elem = result.select_one('.result__snippet')
+                        link_elem = result.select_one('.result__url')
+
+                        if title_elem and link_elem:
+                            title = title_elem.get_text(strip=True)
+                            url_elem = link_elem.get('href', '')
+                            snippet = snippet_elem.get_text(strip=True) if snippet_elem else ""
+
+                            results.append({
+                                "title": title,
+                                "url": url_elem,
+                                "snippet": snippet,
+                                "source": "duckduckgo",
+                                "relevance_score": 0.7,  # Default relevance for web search
+                                "content": f"Title: {title}\nSnippet: {snippet}\nURL: {url_elem}"
+                            })
+        except Exception as e:
+            logger.error(f"Error searching general web: {e}")
+
+        return results
+
+    async def _search_vendor_docs(self, query: str) -> List[Dict[str, Any]]:
+        """Search vendor documentation (AWS, Azure, GCP, etc.)."""
+        results = []
+
+        try:
+            # Try major cloud provider documentation
+            vendors = [
+                ("aws", "https://docs.aws.amazon.com/"),
+                ("azure", "https://learn.microsoft.com/en-us/azure/"),
+                ("gcp", "https://cloud.google.com/docs/")
+            ]
+
+            for vendor, base_url in vendors:
+                try:
+                    # Try to search within the vendor docs (this is simplified)
+                    search_url = f"{base_url}search/{quote_plus(query)}"
+                    async with httpx.AsyncClient() as client:
+                        response = await client.get(search_url, follow_redirects=True)
+                        if response.status_code == 200 and len(response.text) > 1000:  # Basic validity check
+                            results.append({
+                                "title": f"{vendor.upper()} Documentation: {query}",
+                                "url": str(response.url),
+                                "snippet": f"Documentation from {vendor.upper()} about {query}",
+                                "source": vendor,
+                                "relevance_score": 0.8,
+                                "content": f"Documentation from {vendor.upper()} regarding {query}. Content extracted from {response.url}"
+                            })
+                except:
+                    continue  # Try next vendor
+        except Exception as e:
+            logger.error(f"Error searching vendor docs: {e}")
+
+        return results
+
+    async def _search_standards(self, query: str) -> List[Dict[str, Any]]:
+        """Search standards and specifications (RFC, W3C, etc.)."""
+        results = []
+
+        try:
+            # Try RFC search
+            if "rfc" in query.lower() or "request for comments" in query.lower():
+                # Extract potential RFC number
+                import re
+                rfc_match = re.search(r'rfc\s*(\d+)', query.lower())
+                if rfc_match:
+                    rfc_num = rfc_match.group(1)
+                    url = f"https://www.rfc-editor.org/rfc/rfc{rfc_num}.txt"
+                    results.append({
+                        "title": f"RFC {rfc_num}",
+                        "url": url,
+                        "snippet": f"Request for Comments {rfc_num}",
+                        "source": "rfc-editor",
+                        "relevance_score": 0.9,
+                        "content": f"RFC {rfc_num} document from RFC Editor"
+                    })
+
+            # Add more standards sources as needed
+        except Exception as e:
+            logger.error(f"Error searching standards: {e}")
+
+        return results
+
+    async def _search_package_docs(self, query: str) -> List[Dict[str, Any]]:
+        """Search package documentation (PyPI, npm, crates.io, etc.)."""
+        results = []
+
+        try:
+            # Try PyPI for Python packages
+            url = f"https://pypi.org/pypi/{quote_plus(query)}/json"
+            async with httpx.AsyncClient() as client:
+                response = await client.get(url)
+                if response.status_code == 200:
+                    data = response.json()
+                    info = data.get("info", {})
+                    results.append({
+                        "title": info.get("name", query),
+                        "url": info.get("home_page", f"https://pypi.org/project/{query}/"),
+                        "snippet": info.get("summary", ""),
+                        "source": "pypi",
+                        "relevance_score": 0.8,
+                        "content": f"Package: {info.get('name')}\nVersion: {info.get('version')}\nSummary: {info.get('summary')}\nAuthor: {info.get('author')}\nLicense: {info.get('license')}"
+                    })
+        except Exception as e:
+            logger.error(f"Error searching package docs: {e}")
+
+        return results
 
     def _extract_knowledge_from_results(self, search_results: List[Dict[str, Any]]) -> List[KnowledgeObject]:
         """Extract knowledge objects from search results.
@@ -704,21 +955,35 @@ class AutonomousResearchLoop:
                         })()
                         validation_sources.append(validation_source)
 
-                    # Validate the knowledge
-                    # Note: In real implementation, would call self.knowledge_validator.validate()
-                    # For now, we'll simulate validation based on confidence and source reliability
-                    validation_passed = self._simulate_validation(ko)
+                    # Validate the knowledge using the actual validator
+                    # Create a temporary knowledge item for validation
+                    from app.software_engineering_knowledge.models import EngineeringKnowledgeItem, ValidationStatus
+                    temp_item = EngineeringKnowledgeItem(
+                        title=ko.title,
+                        summary=ko.summary,
+                        content=ko.content,
+                        domain=ko.category.value if hasattr(ko.category, 'value') else str(ko.category),
+                        sub_category="research",
+                        knowledge_type=ko.category.value if hasattr(ko.category, 'value') else str(ko.category),
+                        source=KnowledgeSource.EXPERIENCE_MEMORY,  # Using experience memory as source for research
+                        source_uri=ko.source or "",
+                        source_metadata=ko.metadata,
+                        tags=ko.tags,
+                        confidence=ko.confidence
+                    )
 
-                    if validation_passed:
+                    validation_result = self.knowledge_validator.validate(temp_item)
+
+                    if validation_result.is_valid:
                         # Add validation metadata
                         ko.metadata["validation"] = {
                             "passed": True,
-                            "confidence": ko.confidence,
+                            "confidence": validation_result.confidence,
                             "validated_at": datetime.now(timezone.utc).isoformat()
                         }
                         validated_knowledge.append(ko)
                     else:
-                        logger.debug(f"Knowledge object {ko.id} failed validation")
+                        logger.debug(f"Knowledge object {ko.id} failed validation: {validation_result.notes}")
 
                 except Exception as e:
                     logger.error(f"Error validating knowledge object {ko.id}: {e}")
@@ -728,46 +993,6 @@ class AutonomousResearchLoop:
             logger.error(f"Error validating extracted knowledge: {e}")
 
         return validated_knowledge
-
-    def _simulate_validation(self, ko: KnowledgeObject) -> bool:
-        """Simulate knowledge validation (placeholder for real validation).
-
-        Args:
-            ko: Knowledge object to validate
-
-        Returns:
-            bool: True if validation passes
-        """
-        try:
-            # Simple validation based on confidence and source type
-            min_confidence = 0.6  # Minimum confidence for validation pass
-
-            # Source reliability factors
-            source_reliability = {
-                SourceType.OFFICIAL_DOCUMENTATION: 0.95,
-                SourceType.STANDARDS_SPECIFICATIONS: 0.93,
-                SourceType.VENDOR_DOCUMENTATION: 0.85,
-                SourceType.PACKAGE_DOCUMENTATION: 0.80,
-                SourceType.GITHUB_REPOSITORY: 0.75,
-                SourceType.TECHNICAL_BLOG: 0.60,
-                SourceType.ARTICLE: 0.50,
-                SourceType.COMMUNITY: 0.40,
-                SourceType.USER_INPUT: 0.70,
-                SourceType.SOURCE_CODE: 0.90,
-                SourceType.UNKNOWN: 0.30
-            }
-
-            source_type = self._map_source_to_source_type(ko.source) if ko.source else SourceType.UNKNOWN
-            source_score = source_reliability.get(source_type, 0.30)
-
-            # Combined score
-            combined_score = (ko.confidence * 0.6) + (source_score * 0.4)
-
-            return combined_score >= min_confidence
-
-        except Exception as e:
-            logger.error(f"Error simulating validation: {e}")
-            return False
 
     def _store_research_knowledge(self, validated_knowledge: List[KnowledgeObject], task: ResearchTask) -> List[str]:
         """Store validated knowledge from research.

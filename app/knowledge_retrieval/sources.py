@@ -8,7 +8,7 @@ import logging
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 from app.knowledge_retrieval.models import (
     KnowledgeRetrievalResult,
@@ -845,6 +845,314 @@ class DocumentationAdapter(KnowledgeSourceAdapter):
         return 0.85
 
 
+class VectorSearchAdapter(KnowledgeSourceAdapter):
+    """Adapter for Vector Search (FAISS-based semantic search)."""
+
+    def __init__(
+        self,
+        vector_db,
+        embedder: Optional[callable] = None,
+        index_path: Optional[str] = None,
+    ):
+        """
+        Initialize the vector search adapter.
+
+        Args:
+            vector_db: VectorDB instance or path to index file
+            embedder: Callable that converts text to embeddings (text -> np.array)
+            index_path: Path to FAISS index (if vector_db is a string path)
+        """
+        from app.vector_db import VectorDB, get_vector_db
+
+        if isinstance(vector_db, str) or isinstance(vector_db, Path):
+            self.vector_db = get_vector_db(
+                name=vector_db if isinstance(vector_db, str) else vector_db.name,
+                workspace=Path(vector_db).parent.parent if isinstance(vector_db, Path) else None,
+            )
+        elif isinstance(vector_db, VectorDB):
+            self.vector_db = vector_db
+        else:
+            # Try to get default vector DB
+            self.vector_db = get_vector_db()
+
+        self.embedder = embedder
+        self._embedder_cache: Dict[str, List[float]] = {}
+
+    @property
+    def source_type(self) -> KnowledgeSourceType:
+        return KnowledgeSourceType.VECTOR_SEARCH
+
+    def is_available(self) -> bool:
+        return self.vector_db is not None and not self.vector_db.is_empty()
+
+    def _get_embedding(self, text: str) -> Optional[List[float]]:
+        """Get embedding for text, using cache."""
+        if text in self._embedder_cache:
+            return self._embedder_cache[text]
+
+        if self.embedder:
+            try:
+                embedding = self.embedder(text)
+                if hasattr(embedding, 'tolist'):
+                    embedding = embedding.tolist()
+                self._embedder_cache[text] = embedding
+                return embedding
+            except Exception as e:
+                logger.warning(f"Embedding failed: {e}")
+                return None
+
+        # Default: use simple hash-based embedding (not recommended for production)
+        import hashlib
+        hash_bytes = hashlib.md5(text.encode()).digest()
+        embedding = [float(b) / 255.0 for b in hash_bytes]
+        # Pad or truncate to expected dimension
+        dim = self.vector_db.embedding_dim
+        if len(embedding) < dim:
+            embedding.extend([0.0] * (dim - len(embedding)))
+        elif len(embedding) > dim:
+            embedding = embedding[:dim]
+        self._embedder_cache[text] = embedding
+        return embedding
+
+    def retrieve_candidates(
+        self,
+        query: RetrievalQuery,
+        max_results: int = 50,
+    ) -> List[KnowledgeRetrievalResult]:
+        if not self.is_available() or not query.query:
+            return []
+
+        try:
+            # Get query embedding
+            query_embedding = self._get_embedding(query.query)
+            if not query_embedding:
+                return []
+
+            # Search vector database
+            threshold = query.min_score if query.min_score is not None else 0.1
+            results = self.vector_db.search(
+                query_embedding,
+                limit=max_results,
+                threshold=threshold,
+            )
+
+            retrieval_results = []
+            for phys_id, similarity, metadata in results:
+                content = metadata.get("content", "")
+                title = metadata.get("title", f"Vector Result {phys_id}")
+
+                result = KnowledgeRetrievalResult(
+                    content=content,
+                    title=title,
+                    summary=metadata.get("summary", content[:200]),
+                    source_type=self.source_type,
+                    source_id=str(phys_id),
+                    raw_confidence=similarity,
+                    calibrated_confidence=similarity,
+                    category=metadata.get("category"),
+                    tags=metadata.get("tags", []),
+                    language=metadata.get("language"),
+                    related_concepts=metadata.get("related_concepts", []),
+                    last_updated=metadata.get("timestamp"),
+                    access_count=metadata.get("access_count", 0),
+                    source_metadata=metadata,
+                )
+                retrieval_results.append(result)
+
+            return retrieval_results
+
+        except Exception as e:
+            logger.warning(f"Vector search retrieval failed: {e}")
+            return []
+
+    def get_source_quality(self) -> float:
+        return 0.85
+
+    def add_documents(
+        self,
+        documents: List[Dict[str, Any]],
+        embeddings: Optional[List[List[float]]] = None,
+    ) -> List[int]:
+        """Add documents to the vector database."""
+        if not self.is_available():
+            return []
+
+        if embeddings is None and self.embedder:
+            embeddings = [self.embedder(doc.get("content", "")) for doc in documents]
+
+        if embeddings:
+            return self.vector_db.add_batch(embeddings, documents)
+        else:
+            # Add without embeddings (will need to be embedded later)
+            return []
+
+
+class GraphTraversalAdapter(KnowledgeSourceAdapter):
+    """Adapter for Knowledge Graph Traversal (cross-memory references)."""
+
+    def __init__(
+        self,
+        cross_memory_references,
+        memory_sources: Optional[Dict[str, Any]] = None,
+    ):
+        """
+        Initialize the graph traversal adapter.
+
+        Args:
+            cross_memory_references: CrossMemoryReferences instance
+            memory_sources: Dict of memory_type -> memory instance for fetching content
+        """
+        self.cross_refs = cross_memory_references
+        self.memory_sources = memory_sources or {}
+
+    @property
+    def source_type(self) -> KnowledgeSourceType:
+        return KnowledgeSourceType.KNOWLEDGE_GRAPH
+
+    def is_available(self) -> bool:
+        return self.cross_refs is not None and self.cross_refs.graph.get_stats()["nodes"] > 0
+
+    def retrieve_candidates(
+        self,
+        query: RetrievalQuery,
+        max_results: int = 50,
+    ) -> List[KnowledgeRetrievalResult]:
+        if not self.is_available() or not query.query:
+            return []
+
+        try:
+            # First, try to find relevant entry points via keyword matching
+            entry_points = self._find_entry_points(query.query, max_results)
+
+            if not entry_points:
+                return []
+
+            # Traverse graph from entry points
+            all_results = []
+            visited: Set[str] = set()
+
+            for memory_type, entry_id, initial_score in entry_points:
+                full_id = f"{memory_type}:{entry_id}"
+                if full_id in visited:
+                    continue
+                visited.add(full_id)
+
+                # Get the source entry
+                source_entry = self._get_entry_content(memory_type, entry_id)
+                if source_entry:
+                    all_results.append(source_entry)
+
+                # Traverse connected entries up to depth 2
+                connected = self.cross_refs.get_connected_entries(
+                    memory_type=memory_type,
+                    entry_id=entry_id,
+                    max_depth=2,
+                )
+
+                for ref, node in connected:
+                    target_full = f"{node.memory_type}:{node.entry_id}"
+                    if target_full in visited:
+                        continue
+                    visited.add(target_full)
+
+                    # Score decays with distance from entry point
+                    distance_score = initial_score / (1 + ref.metadata.get("depth", 1) * 0.3)
+
+                    target_entry = self._get_entry_content(node.memory_type, node.entry_id)
+                    if target_entry:
+                        target_entry.raw_confidence *= distance_score
+                        target_entry.calibrated_confidence *= distance_score
+                        all_results.append(target_entry)
+
+            # Sort by score and limit
+            all_results.sort(key=lambda r: r.raw_confidence, reverse=True)
+            return all_results[:max_results]
+
+        except Exception as e:
+            logger.warning(f"Graph traversal retrieval failed: {e}")
+            return []
+
+    def _find_entry_points(
+        self,
+        query: str,
+        max_results: int,
+    ) -> List[Tuple[str, str, float]]:
+        """Find initial entry points by keyword matching node content."""
+        entry_points = []
+        query_lower = query.lower()
+        query_words = set(query_lower.split())
+
+        for full_id, node in self.cross_refs.graph._nodes.items():
+            if not node.title and not node.summary:
+                continue
+
+            # Simple keyword matching
+            node_text = f"{node.title} {node.summary}".lower()
+            node_words = set(node_text.split())
+            intersection = query_words & node_words
+            if intersection:
+                # Score based on Jaccard similarity
+                union = query_words | node_words
+                similarity = len(intersection) / len(union) if union else 0
+                if similarity > 0.05:  # Minimum threshold
+                    entry_points.append((node.memory_type, node.entry_id, similarity))
+
+        # Sort by similarity and limit
+        entry_points.sort(key=lambda x: x[2], reverse=True)
+        return entry_points[:max_results]
+
+    def _get_entry_content(
+        self,
+        memory_type: str,
+        entry_id: str,
+    ) -> Optional[KnowledgeRetrievalResult]:
+        """Fetch full content for a graph node from its memory source."""
+        # Check if we have a direct memory source
+        if memory_type in self.memory_sources:
+            memory = self.memory_sources[memory_type]
+            try:
+                result = self._fetch_from_memory(memory, memory_type, entry_id)
+                if result is not None:
+                    return result
+            except Exception:
+                pass
+
+        # Fallback: create result from graph node info
+        node = self.cross_refs.graph._nodes.get(f"{memory_type}:{entry_id}")
+        if node:
+            return KnowledgeRetrievalResult(
+                content=node.summary or node.title,
+                title=node.title or f"{memory_type}:{entry_id}",
+                summary=node.summary,
+                source_type=self.source_type,
+                source_id=entry_id,
+                raw_confidence=0.5,
+                calibrated_confidence=0.5,
+                category=memory_type,
+                last_updated=node.timestamp,
+                source_metadata={
+                    "graph_node": True,
+                    "memory_type": memory_type,
+                    "metadata": node.metadata,
+                },
+            )
+        return None
+
+    def _fetch_from_memory(
+        self,
+        memory: Any,
+        memory_type: str,
+        entry_id: str,
+    ) -> Optional[KnowledgeRetrievalResult]:
+        """Fetch content from a specific memory instance."""
+        # This is a generic fallback - specific memory types would have specific fetch logic
+        # For now, return a basic result
+        return None
+
+    def get_source_quality(self) -> float:
+        return 0.80
+
+
 # Factory function
 def create_adapters_from_agent(agent) -> List[KnowledgeSourceAdapter]:
     """Create all available adapters from a Freya agent."""
@@ -871,5 +1179,34 @@ def create_adapters_from_agent(agent) -> List[KnowledgeSourceAdapter]:
 
     if hasattr(agent, 'engineering_lessons') and agent.engineering_lessons:
         adapters.append(EngineeringLessonsAdapter(agent.engineering_lessons))
+
+    # Vector Search adapter
+    if hasattr(agent, 'vector_db') and agent.vector_db:
+        from app.vector_db import VectorDB
+        if isinstance(agent.vector_db, VectorDB):
+            adapters.append(VectorSearchAdapter(agent.vector_db))
+        else:
+            # Try to get default vector DB
+            try:
+                from app.vector_db import get_vector_db
+                vdb = get_vector_db()
+                if vdb and not vdb.is_empty():
+                    adapters.append(VectorSearchAdapter(vdb))
+            except Exception:
+                pass
+
+    # Graph Traversal adapter
+    if hasattr(agent, 'cross_memory_references') and agent.cross_memory_references:
+        # Collect memory sources for content fetching
+        memory_sources = {}
+        for attr in ['semantic_memory', 'episodic_memory', 'memory', 'working_memory',
+                     'long_term_memory', 'experience_memory', 'engineering_lessons',
+                     'goal_storage']:
+            if hasattr(agent, attr):
+                memory_sources[attr] = getattr(agent, attr)
+        adapters.append(GraphTraversalAdapter(
+            agent.cross_memory_references,
+            memory_sources=memory_sources,
+        ))
 
     return adapters

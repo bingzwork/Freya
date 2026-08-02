@@ -31,6 +31,11 @@ from app.decision.models import (
 from app.decision.workflow import DecisionWorkflow, WorkflowStep
 from app.decision.history import DecisionHistory
 
+# Shared infrastructure imports
+from app.core.events import get_event_bus, EventBus, Event
+from app.core.background_jobs import get_job_service, BackgroundJobService
+from app.core.observability import get_observability_hub, ObservabilityHub, ComponentInfo, ComponentType
+
 # Optional imports for integration with existing systems
 try:
     from app.confidence.confidence_model import ConfidenceModel, DecisionConfidence, ActionConfidence
@@ -108,6 +113,10 @@ class DecisionManager:
         planner: Optional[Any] = None,
         plan_manager: Optional[Any] = None,
         decision_history: Optional[DecisionHistory] = None,
+        # Shared infrastructure
+        event_bus: Optional[EventBus] = None,
+        job_service: Optional[BackgroundJobService] = None,
+        observability: Optional[ObservabilityHub] = None,
     ):
         """Initialize the Decision Manager.
 
@@ -122,9 +131,17 @@ class DecisionManager:
             planner: Optional Planner instance
             plan_manager: Optional PlanManager instance
             decision_history: Optional DecisionHistory instance
+            event_bus: Optional shared EventBus instance
+            job_service: Optional shared BackgroundJobService instance
+            observability: Optional shared ObservabilityHub instance
         """
         self.workspace = workspace
         self.config = config or DecisionManagerConfig()
+
+        # Shared infrastructure
+        self.event_bus = event_bus or get_event_bus()
+        self.job_service = job_service or get_job_service()
+        self.observability = observability or get_observability_hub()
 
         # Injected dependencies (use provided or create defaults)
         self._confidence_calculator = confidence_calculator
@@ -163,6 +180,9 @@ class DecisionManager:
         # Initialize Phase 2+ capabilities
         self._init_phase2_capabilities()
 
+        # Register with observability
+        self._register_with_observability()
+
         logger.info(f"DecisionManager initialized with workspace: {workspace}")
 
     def _register_default_handlers(self) -> None:
@@ -172,6 +192,54 @@ class DecisionManager:
         self._handlers[DecisionCategory.PLANNING] = self._handle_planning_decision
         self._handlers[DecisionCategory.RECOVERY] = self._handle_recovery_decision
         self._handlers[DecisionCategory.LEARNING] = self._handle_learning_decision
+
+    def _register_with_observability(self) -> None:
+        """Register this subsystem with the shared ObservabilityHub."""
+        if self.observability and hasattr(self.observability, 'health_monitor'):
+            self.observability.health_monitor.register_check(
+                "decision_manager",
+                self._health_check,
+                interval_seconds=30.0,
+            )
+
+            # Register component
+            self.observability.register_component(ComponentInfo(
+                name="DecisionManager",
+                component_type=ComponentType.AGENT,
+                version="1.0.0",
+                description="Central decision orchestration",
+                metadata={"workspace": self.workspace},
+            ))
+
+    def _health_check(self):
+        """Health check for DecisionManager."""
+        from app.core.observability import HealthCheckResult, HealthStatus
+        try:
+            return HealthCheckResult(
+                component="decision_manager",
+                status=HealthStatus.HEALTHY,
+                message="DecisionManager operational",
+                metadata={"total_decisions": self._stats["total_decisions"]}
+            )
+        except Exception as e:
+            return HealthCheckResult(
+                component="decision_manager",
+                status=HealthStatus.CRITICAL,
+                message=f"Health check failed: {e}",
+                metadata={"error": str(e)}
+            )
+
+    def _publish_event(self, event_name: str, data: Dict[str, Any]) -> None:
+        """Publish an event to the shared EventBus."""
+        try:
+            event = Event(
+                name=event_name,
+                data=data,
+                source="DecisionManager"
+            )
+            self.event_bus.publish(event)
+        except Exception as e:
+            logger.warning(f"Failed to publish event {event_name}: {e}")
 
     # -------------------------------------------------------------------------
     # Public API
@@ -230,6 +298,19 @@ class DecisionManager:
 
         # Update statistics
         self._update_stats(result)
+
+        # Publish decision event
+        self._publish_event("decision.made", {
+            "decision_id": result.decision_id,
+            "type": result.decision_type.value,
+            "category": result.category.value,
+            "chosen_option": result.chosen_option.name if result.chosen_option else None,
+            "confidence": result.confidence,
+            "risk_level": result.risk_level,
+            "should_execute": result.should_execute,
+            "requires_approval": result.requires_approval,
+            "component": context.component,
+        })
 
         logger.info(
             f"[DecisionManager] Decision complete: {result.chosen_option.name if result.chosen_option else 'none'} "
@@ -978,6 +1059,7 @@ class DecisionManager:
                 decision_manager=self,
                 decision_history=self.history,
                 check_interval_seconds=30.0,
+                job_service=self.job_service,
             )
             logger.info("[DecisionManager] Adaptive Decision Revision initialized")
         except ImportError:

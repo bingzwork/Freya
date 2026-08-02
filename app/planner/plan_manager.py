@@ -2,6 +2,8 @@
 
 This module provides high-level management of project plans,
 including creation, modification, saving, and loading plans.
+
+Shared infrastructure: EventBus, BackgroundJobService, ObservabilityHub
 """
 
 import json
@@ -17,6 +19,13 @@ from app.planner.scheduler import Scheduler, Schedule, SchedulingStrategy
 from app.planner.resource_allocator import ResourceAllocator, Resource, ResourceType
 from app.planner.progress_tracker import ProgressTracker, ProgressSnapshot
 from app.planner.plan_visualizer import PlanVisualizer, VisualizationOptions
+
+from app.core.logger import logger
+
+# Shared infrastructure imports
+from app.core.events import get_event_bus, EventBus, Event
+from app.core.background_jobs import get_job_service, BackgroundJobService, JobTriggerConfig, JobTriggerType, JobPriority
+from app.core.observability import get_observability_hub, ObservabilityHub, ComponentInfo, ComponentType, HealthResult, HealthStatus
 
 
 @dataclass
@@ -423,12 +432,27 @@ class PlanManager:
     and executing project plans.
     """
 
-    def __init__(self, workspace: str = "."):
+    def __init__(
+        self,
+        workspace: str = ".",
+        # Shared infrastructure
+        event_bus: Optional[EventBus] = None,
+        job_service: Optional[BackgroundJobService] = None,
+        observability: Optional[ObservabilityHub] = None,
+    ):
         """Initialize the plan manager.
 
         Args:
             workspace: The project workspace directory.
+            event_bus: Optional shared EventBus instance
+            job_service: Optional shared BackgroundJobService instance
+            observability: Optional shared ObservabilityHub instance
         """
+        # Shared infrastructure
+        self.event_bus = event_bus or get_event_bus()
+        self.job_service = job_service or get_job_service()
+        self.observability = observability or get_observability_hub()
+
         self.workspace = Path(workspace).resolve()
         self.plans_dir = self.workspace / ".plans"
         self.plans_dir.mkdir(parents=True, exist_ok=True)
@@ -439,8 +463,101 @@ class PlanManager:
         # Active plan
         self._active_plan: Optional[Plan] = None
 
+        # Register with observability
+        self._register_with_observability()
+
+        # Schedule periodic plan persistence
+        self._schedule_plan_persistence()
+
         # Load existing plans
         self._load_plans()
+
+    def _register_with_observability(self) -> None:
+        """Register this subsystem with the shared ObservabilityHub."""
+        if self.observability:
+            from app.core.observability import HealthCheck
+            self.observability.add_health_check(HealthCheck(
+                name="plan_manager_health",
+                component="planner",
+                check_func=self._health_check,
+                interval_seconds=60.0,
+            ))
+
+            # Register component
+            self.observability.register_component(ComponentInfo(
+                name="PlanManager",
+                component_type=ComponentType.SERVICE,
+                version="1.0.0",
+                description="High-level management of project plans including creation, modification, saving, and loading",
+                metadata={},
+            ))
+
+    def _health_check(self) -> HealthResult:
+        """Health check for PlanManager."""
+        try:
+            plan_count = len(self._plans)
+            has_active = self._active_plan is not None
+            return HealthResult(
+                name="plan_manager_health",
+                component="planner",
+                status=HealthStatus.HEALTHY,
+                message=f"PlanManager operational (plans={plan_count}, active={'yes' if has_active else 'no'})",
+                metadata={
+                    "total_plans": plan_count,
+                    "has_active_plan": has_active,
+                    "active_plan_id": self._active_plan.id if self._active_plan else None,
+                }
+            )
+        except Exception as e:
+            return HealthResult(
+                name="plan_manager_health",
+                component="planner",
+                status=HealthStatus.UNHEALTHY,
+                message=f"Health check failed: {e}",
+                metadata={"error": str(e)}
+            )
+
+    def _publish_event(self, event_name: str, data: Dict[str, Any]) -> None:
+        """Publish an event to the shared EventBus."""
+        try:
+            self.event_bus.emit(
+                name=event_name,
+                data=data,
+                source="PlanManager"
+            )
+        except Exception as e:
+            logger.warning(f"[PlanManager] Failed to publish event {event_name}: {e}")
+
+    def _schedule_plan_persistence(self, interval_seconds: int = 300) -> str:
+        """Schedule periodic plan persistence using shared BackgroundJobService.
+
+        Args:
+            interval_seconds: Interval between saves (default 5 minutes)
+
+        Returns:
+            Job ID of the scheduled persistence job
+        """
+        job_id = "plan_manager_persist_plans"
+        self.job_service.schedule(
+            job_id=job_id,
+            func=self._persist_all_plans,
+            trigger=JobTriggerConfig(type=JobTriggerType.RECURRING, interval_seconds=interval_seconds),
+            priority=JobPriority.LOW,
+            max_retries=3,
+            replace_existing=True,
+        )
+        logger.info(f"[PlanManager] Scheduled plan persistence (interval: {interval_seconds}s)")
+        return job_id
+
+    def _persist_all_plans(self) -> None:
+        """Persist all plans to disk."""
+        try:
+            for plan in self._plans.values():
+                self._save_plan(plan)
+            logger.debug(f"[PlanManager] Persisted {len(self._plans)} plans")
+        except Exception as e:
+            logger.warning(f"[PlanManager] Failed to persist plans: {e}")
+
 
     def create_plan(self, name: str, description: str = "") -> Plan:
         """Create a new plan.
@@ -457,6 +574,14 @@ class PlanManager:
         self._plans[plan.id] = plan
         self._active_plan = plan
         self._save_plan(plan)
+
+        # Publish event
+        self._publish_event("plan.created", {
+            "plan_id": plan.id,
+            "name": plan.config.name,
+            "description": plan.config.description,
+        })
+
         return plan
 
     def load_plan(self, plan_id: str) -> Optional[Plan]:
@@ -510,6 +635,11 @@ class PlanManager:
             plan_file = self.plans_dir / f"{plan_id}.json"
             if plan_file.exists():
                 plan_file.unlink()
+
+            # Publish event
+            self._publish_event("plan.deleted", {
+                "plan_id": plan_id,
+            })
 
             return True
         return False

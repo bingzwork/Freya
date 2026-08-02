@@ -9,10 +9,12 @@ Automatically extracts and stores engineering knowledge after:
 """
 
 import json
+import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
+from app.core.logger import logger
 
 from app.software_engineering_knowledge.models import (
     EngineeringDomain,
@@ -24,6 +26,7 @@ from app.software_engineering_knowledge.models import (
 from app.software_engineering_knowledge.extraction import KnowledgeExtractor
 from app.software_engineering_knowledge.import_experience import KnowledgeImporter
 from app.software_engineering_knowledge.validation import KnowledgeValidator
+from app.core.logger import logger
 
 
 @dataclass
@@ -495,3 +498,133 @@ class ExpansionEventHandler:
             "notes": notes,
         }
         return self.handle_event("deployment_completed", context)
+
+
+# === Background Scheduler for Autonomous Expansion ===
+
+class AutonomousExpansionScheduler:
+    """Background scheduler that runs autonomous knowledge expansion on a schedule."""
+
+    def __init__(
+        self,
+        expander: AutonomousExpander,
+        event_handler: ExpansionEventHandler,
+        check_interval_seconds: int = 300,  # 5 minutes default
+    ):
+        """Initialize the scheduler.
+
+        Args:
+            expander: The AutonomousExpander instance
+            event_handler: The ExpansionEventHandler instance
+            check_interval_seconds: How often to check for triggers (default 5 minutes)
+        """
+        self.expander = expander
+        self.event_handler = event_handler
+        self.check_interval = check_interval_seconds
+        self._running = False
+        self._task: Optional[asyncio.Task] = None
+        self._lock = asyncio.Lock()
+
+    async def start(self) -> None:
+        """Start the background scheduler."""
+        async with self._lock:
+            if self._running:
+                logger.warning("Scheduler already running")
+                return
+
+            self._running = True
+            self._task = asyncio.create_task(self._run_loop())
+            logger.info(f"Autonomous expansion scheduler started (interval: {self.check_interval}s)")
+
+    async def stop(self) -> None:
+        """Stop the background scheduler."""
+        async with self._lock:
+            if not self._running:
+                return
+
+            self._running = False
+            if self._task:
+                self._task.cancel()
+                try:
+                    await self._task
+                except asyncio.CancelledError:
+                    pass
+            logger.info("Autonomous expansion scheduler stopped")
+
+    async def _run_loop(self) -> None:
+        """Main scheduler loop."""
+        while self._running:
+            try:
+                # Check for scheduled triggers (periodic_full_scan, etc.)
+                await self._check_scheduled_triggers()
+
+                # Sleep until next check
+                await asyncio.sleep(self.check_interval)
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Error in scheduler loop: {e}")
+                await asyncio.sleep(self.check_interval)
+
+    async def _check_scheduled_triggers(self) -> None:
+        """Check for time-based triggers that should fire."""
+        context = {"event": "scheduled_scan"}
+
+        triggers = self.expander.check_triggers(context)
+        for trigger in triggers:
+            if trigger.name == "periodic_full_scan":
+                logger.info("Running scheduled full knowledge expansion scan")
+                try:
+                    result = self.expander.run_expansion(trigger, context)
+                    logger.info(f"Scheduled expansion completed: {result.items_created} items created, {result.items_validated} validated")
+                except Exception as e:
+                    logger.error(f"Scheduled expansion failed: {e}")
+
+    def trigger_manual_expansion(self, trigger_name: str, context: Dict[str, Any]) -> List[ExpansionResult]:
+        """Manually trigger an expansion (synchronous - for testing/CLI).
+
+        Args:
+            trigger_name: Name of the trigger to fire
+            context: Context for the expansion
+
+        Returns:
+            List of ExpansionResult objects
+        """
+        # Find the trigger
+        trigger = next((t for t in self.expander.triggers if t.name == trigger_name), None)
+        if not trigger:
+            logger.warning(f"Unknown trigger: {trigger_name}")
+            return []
+
+        # Override cooldown for manual triggers
+        context["manual_trigger"] = True
+        original_cooldown = trigger.cooldown_hours
+        trigger.cooldown_hours = 0
+
+        try:
+            result = self.expander.run_expansion(trigger, context)
+            return [result]
+        finally:
+            trigger.cooldown_hours = original_cooldown
+
+
+def create_expansion_system(
+    project_root: Path,
+    storage_path: Optional[str] = None,
+    scheduler_interval: int = 300,
+) -> tuple[AutonomousExpander, ExpansionEventHandler, AutonomousExpansionScheduler]:
+    """Factory function to create the complete expansion system.
+
+    Args:
+        project_root: Root path of the project
+        storage_path: Path for knowledge storage
+        scheduler_interval: Scheduler check interval in seconds
+
+    Returns:
+        Tuple of (expander, event_handler, scheduler)
+    """
+    expander = AutonomousExpander(project_root, storage_path)
+    event_handler = ExpansionEventHandler(expander)
+    scheduler = AutonomousExpansionScheduler(expander, event_handler, scheduler_interval)
+    return expander, event_handler, scheduler

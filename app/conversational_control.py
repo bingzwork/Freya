@@ -13,6 +13,7 @@ Key features:
 - Race condition handling
 - Preserves conversation context after interruption
 - Automatic state persistence and restoration
+- Shared infrastructure: EventBus, BackgroundJobService, ObservabilityHub
 """
 
 import json
@@ -27,7 +28,11 @@ from typing import Any, Callable, Dict, List, Optional, Set
 from app.core.logger import logger
 from app.memory.conversation_memory import ConversationMemory, ConversationTurn
 from app.planner.plan_manager import Plan, PlanManager, Task, TaskStatus
-from app.planner.task_graph import TaskGraph
+
+# Shared infrastructure imports
+from app.core.events import get_event_bus, EventBus, Event
+from app.core.background_jobs import get_job_service, BackgroundJobService, JobTriggerConfig, JobTriggerType, JobPriority
+from app.core.observability import get_observability_hub, ObservabilityHub, ComponentInfo, ComponentType, HealthResult, HealthStatus
 
 
 class ControlCommand(Enum):
@@ -96,10 +101,19 @@ class ConversationControlHandler:
         conversation_memory: Optional[ConversationMemory] = None,
         workspace: str = ".",
         storage_path: str = "data/memory/conversation_control.json",
+        # Shared infrastructure
+        event_bus: Optional[EventBus] = None,
+        job_service: Optional[BackgroundJobService] = None,
+        observability: Optional[ObservabilityHub] = None,
     ):
         self.plan_manager = plan_manager
         self.executor = executor
         self.conversation_memory = conversation_memory
+
+        # Shared infrastructure
+        self.event_bus = event_bus or get_event_bus()
+        self.job_service = job_service or get_job_service()
+        self.observability = observability or get_observability_hub()
 
         self._workspace = Path(workspace).resolve()
         self._storage_path = self._workspace / storage_path
@@ -112,21 +126,100 @@ class ConversationControlHandler:
         self._stop_event = threading.Event()
         self._resume_event = threading.Event()
 
+        # Register with observability
+        self._register_with_observability()
+
+        # Schedule periodic state persistence
+        self._schedule_state_persistence()
+
         # Load persisted state on initialization
         self._load_persisted_state()
 
-        logger.info("[ConversationControl] Handler initialized")
+        logger.info("[ConversationControl] Handler initialized with shared infrastructure")
 
-    def set_executor(self, executor: Any) -> None:
-        """Set the executor reference."""
-        self.executor = executor
+    def _register_with_observability(self) -> None:
+        """Register this subsystem with the shared ObservabilityHub."""
+        if self.observability:
+            from app.core.observability import HealthCheck
+            self.observability.add_health_check(HealthCheck(
+                name="conversation_control_health",
+                component="conversation_control",
+                check_func=self._health_check,
+                interval_seconds=60.0,
+            ))
 
-    def register_execution_callback(self, callback: Callable[[], None]) -> None:
-        """Register a callback to be called when execution should stop."""
-        self._execution_callback = callback
+            # Register component
+            self.observability.register_component(ComponentInfo(
+                name="ConversationControlHandler",
+                component_type=ComponentType.SERVICE,
+                version="1.0.0",
+                description="Centralized handler for all conversational control commands (stop, cancel, pause, resume, undo, redo, status)",
+                metadata={},
+            ))
 
-    # =========================================================================
-    # Public Control Command Methods
+    def _health_check(self) -> HealthResult:
+        """Health check for ConversationControlHandler."""
+        try:
+            is_executing = self._state.is_executing
+            is_paused = self._state.is_paused
+            has_plan = self._state.active_plan is not None
+            return HealthResult(
+                name="conversation_control_health",
+                component="conversation_control",
+                status=HealthStatus.HEALTHY,
+                message=f"ConversationControl operational (executing={is_executing}, paused={is_paused}, has_plan={has_plan})",
+                metadata={
+                    "is_executing": is_executing,
+                    "is_paused": is_paused,
+                    "has_active_plan": has_plan,
+                    "active_plan_id": self._state.active_plan_id,
+                    "completed_tasks_count": len(self._state.completed_tasks),
+                    "undo_stack_size": len(self._state.undo_stack),
+                    "redo_stack_size": len(self._state.redo_stack),
+                }
+            )
+        except Exception as e:
+            return HealthResult(
+                name="conversation_control_health",
+                component="conversation_control",
+                status=HealthStatus.UNHEALTHY,
+                message=f"Health check failed: {e}",
+                metadata={"error": str(e)}
+            )
+
+    def _publish_event(self, event_name: str, data: Dict[str, Any]) -> None:
+        """Publish an event to the shared EventBus."""
+        try:
+            self.event_bus.emit(
+                name=event_name,
+                data=data,
+                source="ConversationControlHandler"
+            )
+        except Exception as e:
+            logger.warning(f"[ConversationControl] Failed to publish event {event_name}: {e}")
+
+    def _schedule_state_persistence(self, interval_seconds: int = 60) -> str:
+        """Schedule periodic state persistence using shared BackgroundJobService.
+
+        Args:
+            interval_seconds: Interval between saves (default 60s)
+
+        Returns:
+            Job ID of the scheduled persistence job
+        """
+        job_id = "conversation_control_persist_state"
+        self.job_service.schedule(
+            job_id=job_id,
+            func=self._save_persisted_state,
+            trigger=JobTriggerConfig(type=JobTriggerType.RECURRING, interval_seconds=interval_seconds),
+            priority=JobPriority.LOW,
+            max_retries=3,
+            replace_existing=True,
+        )
+        logger.info(f"[ConversationControl] Scheduled state persistence (interval: {interval_seconds}s)")
+        return job_id
+
+
     # =========================================================================
 
     def handle_stop(self, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -175,6 +268,12 @@ class ConversationControlHandler:
 
             # Save state after stop
             self._save_persisted_state()
+
+            # Publish event
+            self._publish_event("conversation.control.stop", {
+                "was_executing": was_executing,
+                "preserved_completed_tasks": len(self._state.completed_tasks),
+            })
 
             if was_executing:
                 return {
@@ -233,6 +332,11 @@ class ConversationControlHandler:
             # Save state after cancel
             self._save_persisted_state()
 
+            # Publish event
+            self._publish_event("conversation.control.cancel", {
+                "was_executing": was_executing,
+            })
+
             if was_executing:
                 return {
                     "success": True,
@@ -289,6 +393,12 @@ class ConversationControlHandler:
             # Save state after pause
             self._save_persisted_state()
 
+            # Publish event
+            self._publish_event("conversation.control.pause", {
+                "paused_at_task": self._state.current_task_title,
+                "completed_so_far": len(self._state.completed_tasks),
+            })
+
             return {
                 "success": True,
                 "command": "pause",
@@ -330,6 +440,11 @@ class ConversationControlHandler:
 
             # Save state after resume
             self._save_persisted_state()
+
+            # Publish event
+            self._publish_event("conversation.control.resume", {
+                "resuming_at_task": self._state.current_task_title,
+            })
 
             return {
                 "success": True,
@@ -400,6 +515,12 @@ class ConversationControlHandler:
             # Save state after undo
             self._save_persisted_state()
 
+            # Publish event
+            self._publish_event("conversation.control.undo", {
+                "undone_action": action_type,
+                "remaining_undos": len(self._state.undo_stack),
+            })
+
             return {
                 "success": True,
                 "command": "undo",
@@ -459,6 +580,12 @@ class ConversationControlHandler:
 
             # Save state after redo
             self._save_persisted_state()
+
+            # Publish event
+            self._publish_event("conversation.control.redo", {
+                "redone_action": action_type,
+                "remaining_redos": len(self._state.redo_stack),
+            })
 
             return {
                 "success": True,

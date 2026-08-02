@@ -39,6 +39,8 @@ from app.evaluation.pipeline import (
     CodeQualityReviewer,
     DocumentationVerifier,
 )
+from app.evaluation.patch_generator import PatchGenerator
+from app.verification.repair_loop import RepairLoop
 from app.core.logger import logger
 
 if TYPE_CHECKING:
@@ -808,10 +810,28 @@ class EvaluationManager:
         if not unsatisfied:
             return False
 
-        # For now, just log that improvement would be needed
-        # In a real implementation, this would trigger a repair loop
-        logger.info(f"[ImprovementLoop] Would fix {len(unsatisfied)} requirement gaps")
-        return False  # Return False to indicate no automatic fix applied
+        # Create context for patch generation
+        context = {
+            "work_output": getattr(eval_result, 'work_output', ''),
+            "work_context": getattr(eval_result, 'work_context', {}),
+            "requirement_verification": unsatisfied[0] if unsatisfied else None,
+        }
+
+        # Generate patch for the first unsatisfied requirement
+        patch_generator = PatchGenerator(agent=agent)
+        patch = patch_generator.generate_patch_from_requirement_gap(
+            requirement_verification=unsatisfied[0],
+            work_output=context.get("work_output", ""),
+            work_context=context.get("work_context", {}),
+        )
+
+        if patch:
+            # Apply the patch using the helper method
+            return self._apply_patch_via_repair_loop(patch, agent)
+        else:
+            logger.warning("[ImprovementLoop] Failed to generate patch for requirement gap")
+
+        return False
 
     def _fix_validation_failures(
         self,
@@ -826,8 +846,67 @@ class EvaluationManager:
         if not failed:
             return False
 
-        logger.info(f"[ImprovementLoop] Would fix {len(failed)} validation failures")
-        return False  # Would trigger repair in real implementation
+        # Group failures by type for better patch generation
+        test_failures = [r for r in failed if r.check_type in ["unit_test", "integration_test", "functional_test"]]
+        build_failures = [r for r in failed if r.check_type == "build"]
+        lint_failures = [r for r in failed if r.check_type in ["lint", "format", "style"]]
+
+        # Try to fix test failures first
+        if test_failures:
+            for failure in test_failures[:1]:  # Fix one at a time
+                patch_generator = PatchGenerator(agent=agent)
+                patch = patch_generator.generate_patch_from_test_failure(
+                    validation_result=failure,
+                    work_context=getattr(eval_result, 'work_context', {}),
+                )
+
+                if patch:
+                    # Apply the patch using the helper method
+                    if self._apply_patch_via_repair_loop(patch, agent):
+                        logger.info(f"[ImprovementLoop] Successfully fixed test failure: {failure.check_name}")
+                        return True
+                    else:
+                        logger.warning(f"[ImprovementLoop] Failed to apply patch for test failure: {failure.check_name}")
+
+        # Try to fix build failures
+        if build_failures:
+            for failure in build_failures[:1]:
+                patch_generator = PatchGenerator(agent=agent)
+                patch = patch_generator.generate_patch(
+                    issue_description=f"Build failed: {failure.stderr}",
+                    issue_type="build_failure",
+                    context={"work_output": getattr(eval_result, 'work_output', '')},
+                    file_paths=[failure.file_path] if hasattr(failure, 'file_path') and failure.file_path else [],
+                )
+
+                if patch:
+                    # Apply the patch using the helper method
+                    if self._apply_patch_via_repair_loop(patch, agent):
+                        logger.info(f"[ImprovementLoop] Successfully fixed build failure")
+                        return True
+                    else:
+                        logger.warning(f"[ImprovementLoop] Failed to apply patch for build failure")
+
+        # Try to fix lint failures
+        if lint_failures:
+            for failure in lint_failures[:1]:
+                patch_generator = PatchGenerator(agent=agent)
+                patch = patch_generator.generate_patch(
+                    issue_description=f"Lint failed: {failure.stderr}",
+                    issue_type="lint_failure",
+                    context={"file_content": getattr(failure, 'stdout', '')},
+                    file_paths=[failure.file_path] if hasattr(failure, 'file_path') and failure.file_path else [],
+                )
+
+                if patch:
+                    # Apply the patch using the helper method
+                    if self._apply_patch_via_repair_loop(patch, agent):
+                        logger.info(f"[ImprovementLoop] Successfully fixed lint failure: {failure.check_name}")
+                        return True
+                    else:
+                        logger.warning(f"[ImprovementLoop] Failed to apply patch for lint failure: {failure.check_name}")
+
+        return False
 
     def _fix_regressions(
         self,
@@ -842,7 +921,42 @@ class EvaluationManager:
         if not regressions:
             return False
 
-        logger.info(f"[ImprovementLoop] Would fix {len(regressions)} regressions")
+        # For regressions, we typically need to revert changes or fix the introduced bug
+        # For now, we'll try to generate a patch based on the regression details
+        regression = regressions[0]
+        patch_generator = PatchGenerator(agent=agent)
+
+        # Create issue description from regression details
+        issue_desc = f"""
+        Regression detected: {regression.description}
+        Previous value: {regression.previous_value}
+        Current value: {regression.current_value}
+        Change: {regression.change_amount}
+        """
+
+        patch = patch_generator.generate_patch(
+            issue_description=issue_desc,
+            issue_type="regression",
+            context={
+                "regression_details": {
+                    "test_name": regression.test_name,
+                    "metric_name": regression.metric_name,
+                    "previous_value": regression.previous_value,
+                    "current_value": regression.current_value,
+                },
+                "work_output": getattr(eval_result, 'work_output', ''),
+            },
+            file_paths=getattr(regression, 'related_files', []),
+        )
+
+        if patch:
+            # Apply the patch using the helper method
+            if self._apply_patch_via_repair_loop(patch, agent):
+                logger.info(f"[ImprovementLoop] Successfully fixed regression: {regression.test_name}")
+                return True
+            else:
+                logger.warning(f"[ImprovementLoop] Failed to apply patch for regression: {regression.test_name}")
+
         return False
 
     def _fix_quality_issues(
@@ -851,13 +965,173 @@ class EvaluationManager:
         agent: Optional["FreyaAgent"],
     ) -> bool:
         """Attempt to fix code quality issues."""
-        if not agent or not quality_review:
+        if not agent or not quality_review or quality_review.issue_count == 0:
             return False
 
-        if quality_review.issue_count == 0:
+        # Get the most severe issue to fix first
+        if not quality_review.issues:
             return False
 
-        logger.info(f"[ImprovementLoop] Would fix {quality_review.issue_count} quality issues")
+        # Sort by severity (assuming issues have a severity field)
+        sorted_issues = sorted(quality_review.issues, key=lambda x: getattr(x, 'severity', 0), reverse=True)
+        issue = sorted_issues[0]
+
+        # Delegate to specific fix methods based on issue category
+        category = getattr(issue, 'category', '').lower()
+        if category == 'complexity':
+            return self._fix_complexity(issue, agent)
+        elif category == 'style':
+            return self._fix_style(issue, agent)
+        elif category == 'documentation':
+            return self._fix_docs(issue, agent)
+        elif category == 'testing':
+            return self._fix_tests(issue, agent)
+        else:
+            # Generic quality issue fix (architecture, security, performance, maintainability)
+            patch_generator = PatchGenerator(agent=agent)
+            patch = patch_generator.generate_patch_from_quality_issue(
+                quality_issue=issue,
+                file_content=getattr(issue, 'file_content', ''),
+            )
+
+            if patch:
+                # Apply the patch using the helper method
+                if self._apply_patch_via_repair_loop(patch, agent):
+                    logger.info(f"[ImprovementLoop] Successfully fixed quality issue: {issue.title}")
+                    return True
+                else:
+                    logger.warning(f"[ImprovementLoop] Failed to apply patch for quality issue: {issue.title}")
+
+            return False
+
+    def _fix_complexity(
+        self,
+        quality_issue: Any,  # QualityIssue object
+        agent: Optional["FreyaAgent"],
+    ) -> bool:
+        """Attempt to fix code complexity issues (high cyclomatic complexity, long functions).
+
+        This method generates a patch to refactor complex functions into smaller,
+        more manageable pieces or reduce branching complexity.
+        """
+        if not agent or not quality_issue:
+            return False
+
+        logger.info(f"[ImprovementLoop] Attempting to fix complexity issue: {quality_issue.title}")
+
+        patch_generator = PatchGenerator(agent=agent)
+        patch = patch_generator.generate_patch_from_quality_issue(
+            quality_issue=quality_issue,
+            file_content=getattr(quality_issue, 'file_content', ''),
+        )
+
+        if patch:
+            if self._apply_patch_via_repair_loop(patch, agent):
+                logger.info(f"[ImprovementLoop] Successfully fixed complexity issue: {quality_issue.title}")
+                return True
+            else:
+                logger.warning(f"[ImprovementLoop] Failed to apply patch for complexity issue: {quality_issue.title}")
+
+        return False
+
+    def _fix_style(
+        self,
+        quality_issue: Any,  # QualityIssue object
+        agent: Optional["FreyaAgent"],
+    ) -> bool:
+        """Attempt to fix code style issues (formatting, naming conventions, unused imports, etc.).
+
+        This method generates a patch to fix style violations such as:
+        - Unused imports
+        - Missing type hints
+        - Bare except clauses
+        - Formatting issues
+        - Naming convention violations
+        """
+        if not agent or not quality_issue:
+            return False
+
+        logger.info(f"[ImprovementLoop] Attempting to fix style issue: {quality_issue.title}")
+
+        patch_generator = PatchGenerator(agent=agent)
+        patch = patch_generator.generate_patch_from_quality_issue(
+            quality_issue=quality_issue,
+            file_content=getattr(quality_issue, 'file_content', ''),
+        )
+
+        if patch:
+            if self._apply_patch_via_repair_loop(patch, agent):
+                logger.info(f"[ImprovementLoop] Successfully fixed style issue: {quality_issue.title}")
+                return True
+            else:
+                logger.warning(f"[ImprovementLoop] Failed to apply patch for style issue: {quality_issue.title}")
+
+        return False
+
+    def _fix_docs(
+        self,
+        quality_issue: Any,  # QualityIssue object
+        agent: Optional["FreyaAgent"],
+    ) -> bool:
+        """Attempt to fix documentation issues (missing docstrings, incomplete docs, etc.).
+
+        This method generates a patch to add or improve documentation such as:
+        - Missing function/class docstrings
+        - Missing module docstrings
+        - Incomplete parameter documentation
+        - Missing return value documentation
+        """
+        if not agent or not quality_issue:
+            return False
+
+        logger.info(f"[ImprovementLoop] Attempting to fix documentation issue: {quality_issue.title}")
+
+        patch_generator = PatchGenerator(agent=agent)
+        patch = patch_generator.generate_patch_from_quality_issue(
+            quality_issue=quality_issue,
+            file_content=getattr(quality_issue, 'file_content', ''),
+        )
+
+        if patch:
+            if self._apply_patch_via_repair_loop(patch, agent):
+                logger.info(f"[ImprovementLoop] Successfully fixed documentation issue: {quality_issue.title}")
+                return True
+            else:
+                logger.warning(f"[ImprovementLoop] Failed to apply patch for documentation issue: {quality_issue.title}")
+
+        return False
+
+    def _fix_tests(
+        self,
+        quality_issue: Any,  # QualityIssue object
+        agent: Optional["FreyaAgent"],
+    ) -> bool:
+        """Attempt to fix test-related issues (missing tests, flaky tests, test coverage).
+
+        This method generates a patch to address testing issues such as:
+        - Missing test cases
+        - Flaky test stabilization
+        - Low test coverage
+        - Test organization improvements
+        """
+        if not agent or not quality_issue:
+            return False
+
+        logger.info(f"[ImprovementLoop] Attempting to fix test issue: {quality_issue.title}")
+
+        patch_generator = PatchGenerator(agent=agent)
+        patch = patch_generator.generate_patch_from_quality_issue(
+            quality_issue=quality_issue,
+            file_content=getattr(quality_issue, 'file_content', ''),
+        )
+
+        if patch:
+            if self._apply_patch_via_repair_loop(patch, agent):
+                logger.info(f"[ImprovementLoop] Successfully fixed test issue: {quality_issue.title}")
+                return True
+            else:
+                logger.warning(f"[ImprovementLoop] Failed to apply patch for test issue: {quality_issue.title}")
+
         return False
 
     def _fix_documentation(
@@ -869,8 +1143,54 @@ class EvaluationManager:
         if not agent or not failed_docs:
             return False
 
-        logger.info(f"[ImprovementLoop] Would fix {len(failed_docs)} documentation issues")
+        # Try to fix each failed documentation check
+        for doc_check in failed_docs[:1]:  # Fix one at a time
+            patch_generator = PatchGenerator(agent=agent)
+            patch = patch_generator.generate_patch_from_documentation_issue(
+                doc_check_result=doc_check,
+            )
+
+            if patch:
+                # Apply the patch using the helper method
+                if self._apply_patch_via_repair_loop(patch, agent):
+                    logger.info(f"[ImprovementLoop] Successfully fixed documentation issue: {doc_check.check_name}")
+                    return True
+                else:
+                    logger.warning(f"[ImprovementLoop] Failed to apply patch for documentation issue: {doc_check.check_name}")
+
         return False
+
+    def _apply_patch_via_repair_loop(
+        self,
+        patch: Any,
+        agent: Optional["FreyaAgent"] = None,
+    ) -> bool:
+        """Apply a patch using the RepairLoop infrastructure.
+
+        Args:
+            patch: The Patch object to apply
+            agent: Optional agent instance for accessing verifier
+
+        Returns:
+            bool: True if patch was applied successfully, False otherwise
+        """
+        if not agent:
+            logger.warning("[ImprovementLoop] No agent available for repair loop")
+            return False
+
+        try:
+            repair_loop = RepairLoop(agent=agent)
+            result = repair_loop.apply_patch(patch)
+
+            if result.status.value == "success":
+                logger.info(f"[ImprovementLoop] Patch applied successfully via repair loop")
+                return True
+            else:
+                logger.warning(f"[ImprovementLoop] Patch application failed: {result.message}")
+                return False
+        except Exception as e:
+            logger.error(f"[ImprovementLoop] Error applying patch via repair loop: {e}")
+            return False
 
 
 # Convenience function for easy access

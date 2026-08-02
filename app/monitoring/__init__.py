@@ -1,16 +1,18 @@
 """System Monitoring for Freya.
 
 This module provides comprehensive system monitoring capabilities including:
-- Resource monitoring (CPU, memory, disk)
+- Resource monitoring (CPU, memory, disk, GPU)
 - Process monitoring
 - System health tracking
 - Alerting for threshold breaches
 - Historical metrics collection
+- Network/service health monitoring
 """
 
 from app.monitoring.system_monitor import (
     SystemMonitor,
     ResourceMetrics,
+    GPUMetrics,
     SystemHealthStatus,
     MonitorConfig,
     AlertThreshold,
@@ -34,6 +36,16 @@ from app.monitoring.alert_manager import (
     AlertSeverity,
     AlertStatus,
 )
+from app.monitoring.network_monitor import (
+    NetworkMonitor,
+    NetworkHealthChecker,
+    ServiceConfig,
+    EndpointConfig,
+    ServiceHealth,
+    HealthCheckResult,
+    CheckType,
+    ServiceStatus,
+)
 from app.monitoring.monitoring_report import (
     MonitoringReport,
 )
@@ -41,6 +53,7 @@ from app.monitoring.monitoring_report import (
 __all__ = [
     "SystemMonitor",
     "ResourceMetrics",
+    "GPUMetrics",
     "SystemHealthStatus",
     "MonitorConfig",
     "AlertThreshold",
@@ -57,5 +70,13 @@ __all__ = [
     "SystemAlert",
     "AlertSeverity",
     "AlertStatus",
+    "NetworkMonitor",
+    "NetworkHealthChecker",
+    "ServiceConfig",
+    "EndpointConfig",
+    "ServiceHealth",
+    "HealthCheckResult",
+    "CheckType",
+    "ServiceStatus",
     "MonitoringReport",
 ]

@@ -23,6 +23,18 @@ from app.world_model.retrieval import (
     list_supported_task_types,
     get_task_type_description,
 )
+from app.world_model.project_metadata import (
+    ProjectMetadata,
+    DependencyInfo,
+    DependencySet,
+    ProjectDependencies,
+    ProjectMetadataParser,
+    DependencyParser,
+    detect_project_metadata,
+    detect_dependencies,
+    detect_full_project,
+    enhance_world_model_with_project_data,
+)
 
 __all__ = [
     "EnvironmentSnapshot",
@@ -40,4 +52,14 @@ __all__ = [
     "get_relevant_summary",
     "list_supported_task_types",
     "get_task_type_description",
+    "ProjectMetadata",
+    "DependencyInfo",
+    "DependencySet",
+    "ProjectDependencies",
+    "ProjectMetadataParser",
+    "DependencyParser",
+    "detect_project_metadata",
+    "detect_dependencies",
+    "detect_full_project",
+    "enhance_world_model_with_project_data",
 ]

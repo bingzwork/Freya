@@ -44,6 +44,12 @@ from app.memory.cross_references import (
 from app.knowledge_retrieval.models import KnowledgeSourceType
 from app.knowledge_retrieval.sources import create_adapters_from_agent
 
+# Shared infrastructure imports
+from app.core.events import get_event_bus
+from app.core.background_jobs import get_job_service
+from app.core.background_jobs import JobTriggerConfig, JobTriggerType, JobPriority
+from app.core.observability import get_observability_hub, HealthCheck, HealthResult, HealthStatus, ComponentInfo, ComponentType
+
 
 class ValidationSourceType(Enum):
     """Types of knowledge sources for validation."""
@@ -302,6 +308,9 @@ class KnowledgeValidator:
         experience_memory: Optional[ExperienceMemory] = None,
         engineering_lessons: Optional[EngineeringLessonStorage] = None,
         long_term_memory: Optional[LongTermMemory] = None,
+        event_bus: Optional[object] = None,
+        job_service: Optional[object] = None,
+        observability: Optional[object] = None,
     ):
         self.config = config or ValidationConfig()
         self.storage_path = Path(storage_path)
@@ -314,9 +323,91 @@ class KnowledgeValidator:
         self.engineering_lessons = engineering_lessons
         self.long_term_memory = long_term_memory
 
+        # Shared infrastructure
+        self._event_bus = event_bus or get_event_bus()
+        self._job_service = job_service or get_job_service()
+        self._observability = observability or get_observability_hub()
+
         # State
         self._validation_results: Dict[str, ValidationResult] = {}
         self._load()
+
+        # Register with observability
+        self._register_with_observability()
+
+        # Schedule periodic persistence
+        self._schedule_persistence()
+
+    def _register_with_observability(self) -> None:
+        """Register this subsystem with the shared ObservabilityHub."""
+        if self._observability:
+            self._observability.add_health_check(HealthCheck(
+                name="knowledge_validator_health",
+                component="memory",
+                check_func=self._health_check,
+                interval_seconds=60.0,
+            ))
+
+            # Register component
+            self._observability.register_component(ComponentInfo(
+                name="KnowledgeValidator",
+                component_type=ComponentType.SERVICE,
+                version="1.0.0",
+                description="Validates knowledge before storage with conflict detection and confidence scoring",
+                metadata={},
+            ))
+
+    def _health_check(self) -> HealthResult:
+        """Health check for KnowledgeValidator."""
+        try:
+            return HealthResult(
+                name="knowledge_validator_health",
+                component="memory",
+                status=HealthStatus.HEALTHY,
+                message="KnowledgeValidator operational",
+                metadata={
+                    "validation_count": len(self._validation_results),
+                    "auto_store_threshold": self.config.auto_store_min_confidence,
+                },
+            )
+        except Exception as e:
+            return HealthResult(
+                name="knowledge_validator_health",
+                component="memory",
+                status=HealthStatus.UNHEALTHY,
+                message=f"Health check failed: {e}",
+                metadata={"error": str(e)}
+            )
+
+    def _publish_event(self, event_type: str, data: Dict[str, Any]) -> None:
+        """Publish an event to the EventBus."""
+        try:
+            self._event_bus.emit(event_type, data)
+        except Exception:
+            # Don't let event publishing break the system
+            pass
+
+    def _schedule_persistence(self, interval_seconds: int = 300) -> None:
+        """Schedule periodic persistence using BackgroundJobService."""
+        if not self._job_service:
+            return
+
+        # Check if job already exists to avoid duplicate scheduling
+        existing_job = self._job_service.get_job("knowledge_validator_persist")
+        if existing_job:
+            return
+
+        trigger = JobTriggerConfig(
+            type=JobTriggerType.RECURRING,
+            interval_seconds=interval_seconds,
+        )
+        self._job_service.schedule(
+            job_id="knowledge_validator_persist",
+            func=lambda: self._save(),
+            trigger=trigger,
+            name="Knowledge Validator Persistence",
+            priority=JobPriority.LOW,
+        )
 
     def _generate_validation_id(self) -> str:
         return f"val_{hashlib.md5(f'{datetime.now().isoformat()}'.encode()).hexdigest()[:12]}"
@@ -454,6 +545,18 @@ class KnowledgeValidator:
             # If auto-store, also add cross-references
             if storage_decision == StorageDecision.AUTO_STORE and self.cross_refs:
                 self._record_cross_references(knowledge_id, title, content, category, cross_refs, sources)
+
+            # Publish event
+            self._publish_event("memory.validation_completed", {
+                "validation_id": validation_id,
+                "knowledge_id": knowledge_id,
+                "title": title,
+                "validation_status": validation_status.value,
+                "storage_decision": storage_decision.value,
+                "overall_confidence": overall_confidence,
+                "conflicts_count": len(conflicts),
+                "cross_references_count": len(cross_refs),
+            })
 
             return result
 

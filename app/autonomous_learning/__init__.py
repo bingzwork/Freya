@@ -14,6 +14,7 @@ Components:
 - KnowledgeGapDetector: Detects missing knowledge categories, concepts, tools, frameworks
 - AutonomousResearchLoop: Automatically searches, extracts, validates, and stores knowledge for gaps
 - AutonomousLearningScheduler: Background scheduler for periodic autonomous learning runs
+- UnifiedKnowledgeAcquisitionPipeline: Unified orchestration of internal + external knowledge acquisition
 """
 
 from .models import (
@@ -32,6 +33,15 @@ from .pipeline import AutonomousLearningPipeline
 from .gap_detection import KnowledgeGapDetector
 from .research_loop import AutonomousResearchLoop
 from .scheduler import AutonomousLearningScheduler
+from .unified_acquisition import (
+    UnifiedKnowledgeAcquisitionPipeline,
+    AcquisitionMode,
+    AcquisitionPriority,
+    AcquisitionTask,
+    AcquisitionResult,
+    UnifiedAcquisitionConfig,
+    create_unified_acquisition_pipeline,
+)
 
 __all__ = [
     "LearningPipelineResult",
@@ -48,4 +58,11 @@ __all__ = [
     "KnowledgeGapDetector",
     "AutonomousResearchLoop",
     "AutonomousLearningScheduler",
+    "UnifiedKnowledgeAcquisitionPipeline",
+    "AcquisitionMode",
+    "AcquisitionPriority",
+    "AcquisitionTask",
+    "AcquisitionResult",
+    "UnifiedAcquisitionConfig",
+    "create_unified_acquisition_pipeline",
 ]

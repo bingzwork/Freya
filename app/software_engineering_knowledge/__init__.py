@@ -1,7 +1,8 @@
 """Software Engineering Knowledge - Unified capability for Freya.
 
 This package provides a complete system for managing software engineering knowledge
-across all projects, including extraction, validation, ranking, and expertise building.
+across all projects, including extraction, validation, ranking, expertise building,
+and maintenance.
 
 Main Components:
 - models: Core data models (EngineeringKnowledgeItem, domains, types, etc.)
@@ -15,6 +16,8 @@ Main Components:
 - external_import: Import from official docs, internet, packages
 - autonomous_expansion: Auto-extract knowledge after tasks/events
 - expertise: Build higher-level expertise from accumulated knowledge
+- maintenance: Knowledge maintenance (consolidation, ranking, validation, scheduling)
+- consolidation: Duplicate detection and merging
 """
 
 from typing import Any, Dict, List, Optional
@@ -107,6 +110,29 @@ from app.software_engineering_knowledge.expertise import (
     create_expertise_from_items,
 )
 
+from app.software_engineering_knowledge.consolidation import (
+    ConsolidationEngine,
+    ConsolidationConfig,
+    ConsolidationResult,
+    DuplicateGroup,
+)
+
+from app.software_engineering_knowledge.maintenance import (
+    MaintenanceOrchestrator,
+    MaintenanceConfig,
+    MaintenanceResult,
+    create_maintenance_system,
+    create_maintenance_scheduler,
+)
+
+from app.software_engineering_knowledge.update_detector import (
+    UpdateDetector,
+    UpdateCheckConfig,
+    UpdateAssessment,
+    UpdateDetectionResult,
+    create_update_detector,
+)
+
 
 __version__ = "1.0.0"
 
@@ -167,14 +193,25 @@ __all__ = [
     "ExpansionResult",
     "TaskCompletionExpander",
     "ExpansionEventHandler",
-    # Expertise
-    "ExpertiseBuilder",
-    "ExpertiseQueryEngine",
-    "ExpertiseBasedRecommendation",
-    "ExpertiseEnhancedRetrieval",
-    "build_domain_expertise",
-    "get_task_recommendations",
-    "create_expertise_from_items",
+    # Maintenance
+    "ConsolidationEngine",
+    "ConsolidationConfig",
+    "ConsolidationResult",
+    "DuplicateGroup",
+    "MaintenanceOrchestrator",
+    "MaintenanceConfig",
+    "MaintenanceResult",
+    "MaintenanceScheduler",
+    # Update Detection
+    "UpdateDetector",
+    "UpdateCheckConfig",
+    "UpdateAssessment",
+    "UpdateDetectionResult",
+    # Factory functions
+    "create_consolidation_engine",
+    "create_maintenance_system",
+    "create_maintenance_scheduler",
+    "create_update_detector",
 ]
 
 
@@ -189,9 +226,15 @@ def create_knowledge_system(
     Returns a dictionary with all major components initialized.
     """
     from pathlib import Path
+    from app.software_engineering_knowledge.consolidation import create_consolidation_engine
+    from app.software_engineering_knowledge.maintenance import create_maintenance_system, create_maintenance_scheduler
+    from app.software_engineering_knowledge.update_detector import create_update_detector
 
     project_path = Path(project_root)
     storage = get_knowledge_storage(storage_path)
+
+    # Create maintenance orchestrator once to reuse
+    maintenance_orchestrator = create_maintenance_system(storage_path=storage_path)
 
     return {
         "storage": storage,
@@ -206,6 +249,10 @@ def create_knowledge_system(
         "expertise_builder": ExpertiseBuilder(storage_path),
         "expertise_query": ExpertiseQueryEngine(storage_path),
         "recommender": ExpertiseBasedRecommendation(storage_path),
+        "maintenance_orchestrator": maintenance_orchestrator,
+        "maintenance_scheduler": create_maintenance_scheduler(maintenance_orchestrator),
+        "consolidation_engine": create_consolidation_engine(storage_path=storage_path),
+        "update_detector": create_update_detector(storage_path=storage_path),
     }
 
 

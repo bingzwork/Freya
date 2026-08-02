@@ -21,6 +21,13 @@ from enum import Enum
 from collections import defaultdict
 import hashlib
 
+# Shared infrastructure imports
+from app.core.events import get_event_bus
+from app.core.background_jobs import get_job_service
+from app.core.background_jobs import JobTriggerConfig, JobTriggerType, JobPriority
+from app.core.observability import get_observability_hub
+from app.core.observability import HealthStatus, HealthResult, HealthCheck, ComponentInfo, ComponentType
+
 
 class ReferenceType(Enum):
     """Types of cross-memory references."""
@@ -283,12 +290,18 @@ class CrossMemoryReferences:
         self,
         storage_path: str = "data/memory/cross_references.json",
         auto_infer: bool = True,
+        event_bus: Optional[object] = None,
+        job_service: Optional[object] = None,
+        observability: Optional[object] = None,
     ):
         """Initialize cross-memory references.
 
         Args:
             storage_path: Path to persist references
             auto_infer: Automatically infer references from content overlap
+            event_bus: Optional EventBus instance (uses global if not provided)
+            job_service: Optional BackgroundJobService instance (uses global if not provided)
+            observability: Optional ObservabilityHub instance (uses global if not provided)
         """
         self.storage_path = Path(storage_path)
         self.auto_infer = auto_infer
@@ -298,7 +311,78 @@ class CrossMemoryReferences:
         self._references: Dict[str, CrossReference] = {}  # reference_id -> ref
         self._entry_to_refs: Dict[str, Set[str]] = defaultdict(set)  # full_id -> set of ref_ids
 
+        # Shared infrastructure
+        self._event_bus = event_bus or get_event_bus()
+        self._job_service = job_service or get_job_service()
+        self._observability = observability or get_observability_hub()
+
+        # Register with observability
+        self._register_with_observability()
+
+        # Schedule periodic save
+        self._schedule_persistence()
+
         self._load()
+
+    def _register_with_observability(self) -> None:
+        """Register this subsystem with the shared ObservabilityHub."""
+        if self._observability:
+            self._observability.add_health_check(HealthCheck(
+                name="cross_references_health",
+                component="memory",
+                check_func=self._health_check,
+                interval_seconds=60.0,
+            ))
+
+            # Register component
+            self._observability.register_component(ComponentInfo(
+                name="CrossMemoryReferences",
+                component_type=ComponentType.SERVICE,
+                version="1.0.0",
+                description="Cross-memory reference management and graph traversal",
+                metadata={},
+            ))
+
+    def _health_check(self) -> HealthResult:
+        """Health check for CrossMemoryReferences."""
+        stats = self.get_stats()
+        return HealthResult(
+            name="cross_references_health",
+            component="memory",
+            status=HealthStatus.HEALTHY,
+            message=f"{stats['nodes']} nodes, {stats['edges']} edges",
+            details=stats,
+        )
+
+    def _publish_event(self, event_type: str, data: Dict[str, Any]) -> None:
+        """Publish an event to the EventBus."""
+        try:
+            self._event_bus.emit(event_type, data)
+        except Exception:
+            # Don't let event publishing break the system
+            pass
+
+    def _schedule_persistence(self, interval_seconds: int = 300) -> None:
+        """Schedule periodic persistence."""
+        # Guard against duplicate scheduling (e.g., in tests where multiple instances created)
+        if self._job_service.get_job("cross_references_persist") is not None:
+            return
+
+        trigger = JobTriggerConfig(
+            type=JobTriggerType.RECURRING,
+            interval_seconds=interval_seconds,
+        )
+        self._job_service.schedule(
+            job_id="cross_references_persist",
+            func=self._save,
+            trigger=trigger,
+            name="Cross References Persistence",
+            priority=JobPriority.LOW,
+        )
+
+    def is_available(self) -> bool:
+        """Check if the cross-memory references system is available."""
+        return self.graph.get_stats()["nodes"] > 0
 
     def _generate_ref_id(self) -> str:
         return f"ref_{hashlib.md5(f'{datetime.now().isoformat()}'.encode()).hexdigest()[:12]}"
@@ -351,6 +435,18 @@ class CrossMemoryReferences:
                     break
 
             self._save()
+
+            # Publish event
+            self._publish_event("memory.cross_reference_added", {
+                "reference_id": ref.reference_id,
+                "source_memory": source_memory,
+                "source_id": source_id,
+                "target_memory": target_memory,
+                "target_id": target_id,
+                "reference_type": reference_type,
+                "confidence": confidence,
+            })
+
             return ref
 
     def add_node(
@@ -373,6 +469,14 @@ class CrossMemoryReferences:
                 metadata=metadata or {},
             )
             self.graph.add_node(node)
+
+            # Publish event
+            self._publish_event("memory.node_added", {
+                "memory_type": memory_type,
+                "entry_id": entry_id,
+                "title": title,
+            })
+
             return node
 
     def get_references(
@@ -525,6 +629,16 @@ class CrossMemoryReferences:
             self._entry_to_refs[target_full].discard(reference_id)
 
             self._save()
+
+            # Publish event
+            self._publish_event("memory.cross_reference_removed", {
+                "reference_id": reference_id,
+                "source_memory": ref.source_memory,
+                "source_id": ref.source_id,
+                "target_memory": ref.target_memory,
+                "target_id": ref.target_id,
+            })
+
             return True
 
     def get_entry_references(self, memory_type: str, entry_id: str) -> List[str]:

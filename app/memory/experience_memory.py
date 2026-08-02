@@ -17,6 +17,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Union
 
+from app.core.file_allowlist import FileAllowlist, get_file_allowlist, FileOperation, AccessRule
+
+# Shared infrastructure imports
+from app.core.events import get_event_bus
+from app.core.background_jobs import get_job_service
+from app.core.background_jobs import JobTriggerConfig, JobTriggerType, JobPriority
+from app.core.observability import get_observability_hub
+from app.core.observability import HealthStatus, HealthResult, HealthCheck, ComponentInfo, ComponentType
+
 
 @dataclass
 class ExperienceEntry:
@@ -79,6 +88,10 @@ class ExperienceMemory:
         workspace: str = ".",
         storage_path: str = "data/memory/experience_memory.json",
         max_entries: int = 1000,
+        file_allowlist: Optional[FileAllowlist] = None,
+        event_bus: Optional[object] = None,
+        job_service: Optional[object] = None,
+        observability: Optional[object] = None,
     ):
         """Initialize Experience Memory.
 
@@ -86,10 +99,15 @@ class ExperienceMemory:
             workspace: Project workspace directory
             storage_path: Relative path to storage file within workspace
             max_entries: Maximum number of entries to keep (oldest removed first)
+            file_allowlist: Optional FileAllowlist for access validation
+            event_bus: Optional EventBus instance (uses global if not provided)
+            job_service: Optional BackgroundJobService instance (uses global if not provided)
+            observability: Optional ObservabilityHub instance (uses global if not provided)
         """
         self.workspace = Path(workspace).resolve()
         self.storage_path = self.workspace / storage_path
         self.max_entries = max_entries
+        self.file_allowlist = file_allowlist or get_file_allowlist()
         self._lock = threading.RLock()
         self._entries: Dict[str, ExperienceEntry] = {}
         self._index: Dict[str, List[str]] = {
@@ -98,7 +116,124 @@ class ExperienceMemory:
             "outcome": [],
         }
         self._sequence_counter = 0
+
+        # Shared infrastructure
+        self._event_bus = event_bus or get_event_bus()
+        self._job_service = job_service or get_job_service()
+        self._observability = observability or get_observability_hub()
+
+        # Configure allowlist for this workspace
+        self._configure_allowlist_for_workspace()
+
         self._load()
+
+        # Register with observability
+        self._register_with_observability()
+
+        # Schedule periodic persistence
+        self._schedule_persistence()
+
+    def _register_with_observability(self) -> None:
+        """Register this subsystem with the shared ObservabilityHub."""
+        if self._observability:
+            self._observability.add_health_check(HealthCheck(
+                name="experience_memory_health",
+                component="memory",
+                check_func=self._health_check,
+                interval_seconds=60.0,
+            ))
+
+            # Register component
+            self._observability.register_component(ComponentInfo(
+                name="ExperienceMemory",
+                component_type=ComponentType.SERVICE,
+                version="1.0.0",
+                description="Experience memory storage for lessons learned and historical context",
+                metadata={},
+            ))
+
+    def _health_check(self) -> HealthResult:
+        """Health check for ExperienceMemory."""
+        entry_count = len(self._entries)
+        categories = len(set(self._index["category"]))
+        tags = len(set(self._index["tags"]))
+
+        return HealthResult(
+            name="experience_memory_health",
+            component="memory",
+            status=HealthStatus.HEALTHY,
+            message=f"{entry_count} entries, {categories} categories, {tags} tags",
+            details={
+                "entry_count": entry_count,
+                "categories": categories,
+                "tags": tags,
+            },
+        )
+
+    def _publish_event(self, event_type: str, data: Dict[str, Any]) -> None:
+        """Publish an event to the EventBus."""
+        try:
+            self._event_bus.emit(event_type, data)
+        except Exception:
+            # Don't let event publishing break the system
+            pass
+
+    def _schedule_persistence(self, interval_seconds: int = 300) -> None:
+        """Schedule periodic persistence."""
+        # Check if job already exists to avoid duplicate scheduling
+        existing_job = self._job_service.get_job("experience_memory_persist")
+        if existing_job:
+            return
+
+        trigger = JobTriggerConfig(
+            type=JobTriggerType.RECURRING,
+            interval_seconds=interval_seconds,
+        )
+        self._job_service.schedule(
+            job_id="experience_memory_persist",
+            func=self._save,
+            trigger=trigger,
+            name="Experience Memory Persistence",
+            priority=JobPriority.LOW,
+        )
+
+    def _configure_allowlist_for_workspace(self):
+        """Configure the file allowlist with workspace-specific rules."""
+        workspace_str = str(self.workspace)
+
+        # Add rule for workspace root directory
+        self.file_allowlist.add_rule(AccessRule(
+            pattern=workspace_str,
+            operations={FileOperation.LIST, FileOperation.READ},
+            description=f"Workspace root directory: {workspace_str}",
+            tags={"type": "workspace_root", "workspace": workspace_str},
+        ))
+
+        # Add rules for workspace directory contents
+        self.file_allowlist.add_rule(AccessRule(
+            pattern=f"{workspace_str}/**",
+            operations={FileOperation.READ, FileOperation.WRITE, FileOperation.CREATE, FileOperation.MODIFY, FileOperation.DELETE, FileOperation.LIST},
+            description=f"Full access to workspace contents: {workspace_str}",
+            tags={"type": "workspace", "workspace": workspace_str},
+        ))
+
+        # Add rules for common project directories
+        common_dirs = [
+            "data/**",
+            "logs/**",
+            "cache/**",
+            "tmp/**",
+            "temp/**",
+            ".freya/**",
+        ]
+        for dir_pattern in common_dirs:
+            full_pattern = f"{workspace_str}/{dir_pattern}"
+            self.file_allowlist.add_rule(AccessRule(
+                pattern=full_pattern,
+                operations={FileOperation.READ, FileOperation.WRITE, FileOperation.CREATE, FileOperation.MODIFY, FileOperation.DELETE, FileOperation.LIST},
+                description=f"Project directory: {dir_pattern}",
+                tags={"type": "project_dir", "workspace": workspace_str},
+            ))
 
     def _ensure_storage_dir(self) -> None:
         """Ensure the storage directory exists."""
@@ -115,6 +250,9 @@ class ExperienceMemory:
 
     def _load(self) -> None:
         """Load entries from storage file."""
+        # Validate read access
+        self.file_allowlist.require_allowed(self.storage_path, FileOperation.READ, "ExperienceMemory._load")
+
         if not self.storage_path.exists():
             return
 
@@ -141,6 +279,9 @@ class ExperienceMemory:
 
     def _save(self) -> None:
         """Save entries to storage file."""
+        # Validate write access
+        self.file_allowlist.require_allowed(self.storage_path, FileOperation.WRITE, "ExperienceMemory._save")
+
         self._ensure_storage_dir()
 
         # Write to temporary file first, then rename for atomicity
@@ -222,6 +363,15 @@ class ExperienceMemory:
 
             # Save to disk
             self._save()
+
+            # Publish event
+            self._publish_event("memory.experience_stored", {
+                "entry_id": entry.id,
+                "title": entry.title,
+                "category": entry.category,
+                "outcome": entry.outcome,
+                "confidence": entry.confidence,
+            })
 
             return entry
 

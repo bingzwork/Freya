@@ -26,6 +26,8 @@ class KnowledgeSourceType(Enum):
     DOCUMENTATION = "documentation"
     EXTERNAL_KNOWLEDGE = "external_knowledge"
     USER_KNOWLEDGE = "user_knowledge"
+    VECTOR_SEARCH = "vector_search"
+    KNOWLEDGE_GRAPH = "knowledge_graph"
     UNKNOWN = "unknown"
 
 
@@ -235,6 +237,8 @@ class RankingConfig:
         KnowledgeSourceType.CONVERSATION_MEMORY: 0.65,
         KnowledgeSourceType.WORKING_MEMORY: 0.75,
         KnowledgeSourceType.EXTERNAL_KNOWLEDGE: 0.60,
+        KnowledgeSourceType.VECTOR_SEARCH: 0.85,
+        KnowledgeSourceType.KNOWLEDGE_GRAPH: 0.80,
         KnowledgeSourceType.UNKNOWN: 0.50,
     })
 

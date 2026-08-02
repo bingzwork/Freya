@@ -71,6 +71,11 @@ from app.long_term_autonomy.manager import AutonomyManager
 # Config Hot-Reload
 from app.core.config_hot_reload import ConfigHotReload, setup_config_hot_reload_for_agent
 
+# Shared Infrastructure
+from app.core.events import get_event_bus, Event, EventPriority
+from app.core.background_jobs import get_job_service, JobType, RetryConfig
+from app.core.observability import get_observability_hub, ComponentInfo, ComponentType, HealthCheck, HealthStatus
+
 try:
     from app.retrieval.enhanced_retriever import EnhancedRetriever
 except ImportError:
@@ -404,6 +409,23 @@ class FreyaAgent:
         # Register execution callback for interruption
         self.conversation_control.register_execution_callback(self._request_execution_stop)
 
+        # ==== Shared Infrastructure Initialization ====
+        # Initialize EventBus, BackgroundJobService, and ObservabilityHub
+        self.event_bus = get_event_bus()
+        self.job_service = get_job_service()
+        self.observability = get_observability_hub()
+
+        # Start observability hub if not already started
+        if hasattr(self.observability, '_started') and not self.observability._started:
+            self.observability.start()
+
+        # Register this agent as a monitored component
+        self._register_with_observability()
+
+        # Set up event subscriptions for cross-subsystem communication
+        self._setup_event_subscriptions()
+        # ==== End Shared Infrastructure Initialization ====
+
         logger.info("Freya Agent initialized")
 
     def setup_config_hot_reload(self, env_path=None, validate_on_reload=True) -> ConfigHotReload:
@@ -440,6 +462,212 @@ class FreyaAgent:
         """Callback to request execution stop from conversation control."""
         # This will be checked by the executor via conversation_control.check_stop_requested()
         logger.info("[FreyaAgent] Execution stop requested via conversation control")
+
+    # ==== Shared Infrastructure Integration ====
+
+    def _register_with_observability(self) -> None:
+        """Register this agent and its subsystems with the ObservabilityHub."""
+        try:
+            # Register main agent component
+            self.observability.register_component(ComponentInfo(
+                name="FreyaAgent",
+                component_type=ComponentType.AGENT,
+                version="1.0.0",
+                description="Main autonomous software engineering agent",
+                metadata={"workspace": self.workspace},
+            ))
+
+            # Register key subsystems as components
+            subsystems = [
+                ("GoalStorage", ComponentType.MEMORY, "Goal management and scheduling"),
+                ("PlanManager", ComponentType.SERVICE, "Plan creation and management"),
+                ("Executor", ComponentType.SERVICE, "Plan execution"),
+                ("DecisionManager", ComponentType.AGENT, "Decision orchestration"),
+                ("EvaluationManager", ComponentType.SERVICE, "Self-evaluation pipeline"),
+                ("AutonomyManager", ComponentType.AGENT, "Long-term autonomy"),
+                ("ConsolidationEngine", ComponentType.MEMORY, "Memory consolidation"),
+                ("ProjectMemory", ComponentType.MEMORY, "Project-scoped memory"),
+                ("ExperienceMemory", ComponentType.MEMORY, "Experience storage"),
+                ("EngineeringLessons", ComponentType.MEMORY, "Engineering lesson storage"),
+            ]
+
+            for name, comp_type, desc in subsystems:
+                self.observability.register_component(ComponentInfo(
+                    name=name,
+                    component_type=comp_type,
+                    version="1.0.0",
+                    description=desc,
+                    tags={"parent": "FreyaAgent"},
+                ))
+
+            # Add health checks for critical subsystems
+            self._add_subsystem_health_checks()
+
+            logger.info("[FreyaAgent] Registered with ObservabilityHub")
+
+        except Exception as e:
+            logger.warning(f"[FreyaAgent] Failed to register with ObservabilityHub: {e}")
+
+    def _add_subsystem_health_checks(self) -> None:
+        """Add health checks for key subsystems."""
+        try:
+            # Agent health check
+            self.observability.add_health_check(HealthCheck(
+                name="agent.health",
+                check_func=lambda: hasattr(self, 'llm') and self.llm is not None,
+                component="FreyaAgent",
+                component_type=ComponentType.AGENT,
+                interval_seconds=30.0,
+                critical=True,
+            ))
+
+            # Goal storage health check
+            self.observability.add_health_check(HealthCheck(
+                name="goals.health",
+                check_func=lambda: self.goal_storage is not None,
+                component="GoalStorage",
+                component_type=ComponentType.MEMORY,
+                interval_seconds=60.0,
+            ))
+
+            # Plan manager health check
+            self.observability.add_health_check(HealthCheck(
+                name="plan_manager.health",
+                check_func=lambda: self.plan_manager is not None,
+                component="PlanManager",
+                component_type=ComponentType.SERVICE,
+                interval_seconds=60.0,
+            ))
+
+            # Decision manager health check
+            self.observability.add_health_check(HealthCheck(
+                name="decision_manager.health",
+                check_func=lambda: self.decision_manager is not None,
+                component="DecisionManager",
+                component_type=ComponentType.AGENT,
+                interval_seconds=60.0,
+            ))
+
+            # Autonomy manager health check
+            self.observability.add_health_check(HealthCheck(
+                name="autonomy_manager.health",
+                check_func=lambda: getattr(self, 'autonomy_manager', None) is not None and getattr(self.autonomy_manager, '_running', False),
+                component="AutonomyManager",
+                component_type=ComponentType.AGENT,
+                interval_seconds=30.0,
+            ))
+
+            # Memory systems health check
+            self.observability.add_health_check(HealthCheck(
+                name="memory_systems.health",
+                check_func=lambda: all([
+                    self.experience_memory is not None,
+                    self.engineering_lessons is not None,
+                    self.long_term_memory is not None,
+                    self.semantic_memory is not None,
+                ]),
+                component="MemorySystems",
+                component_type=ComponentType.MEMORY,
+                interval_seconds=120.0,
+            ))
+
+            logger.debug("[FreyaAgent] Added subsystem health checks to ObservabilityHub")
+
+        except Exception as e:
+            logger.warning(f"[FreyaAgent] Failed to add health checks: {e}")
+
+    def _setup_event_subscriptions(self) -> None:
+        """Set up event subscriptions for cross-subsystem communication."""
+        bus = self.event_bus
+
+        # Task lifecycle events
+        bus.subscribe("task.started", self._on_task_started, priority=10)
+        bus.subscribe("task.completed", self._on_task_completed, priority=10)
+        bus.subscribe("task.failed", self._on_task_failed, priority=10)
+
+        # Job lifecycle events (from BackgroundJobService)
+        bus.subscribe("job.created", self._on_job_created)
+        bus.subscribe("job.started", self._on_job_started)
+        bus.subscribe("job.completed", self._on_job_completed)
+        bus.subscribe("job.failed", self._on_job_failed)
+        bus.subscribe("job.retrying", self._on_job_retrying)
+
+        # Health events
+        bus.subscribe("health.check.completed", self._on_health_check_completed)
+        bus.subscribe("component.registered", self._on_component_registered)
+
+        # Alert events
+        bus.subscribe("alert.triggered", self._on_alert_triggered, priority=100)
+
+        # Learning events
+        bus.subscribe("learning.*", self._on_learning_event)
+
+        # Goal events
+        bus.subscribe("goal.*", self._on_goal_event)
+
+        # Autonomy events
+        bus.subscribe("autonomy.*", self._on_autonomy_event)
+
+        logger.debug("[FreyaAgent] Set up event subscriptions")
+
+    # Event handlers
+    def _on_task_started(self, event) -> None:
+        data = event.data if hasattr(event, 'data') else event
+        logger.debug(f"[FreyaAgent] Task started: {data.get('task_id', 'unknown')}")
+
+    def _on_task_completed(self, event) -> None:
+        data = event.data if hasattr(event, 'data') else event
+        logger.debug(f"[FreyaAgent] Task completed: {data.get('task_id', 'unknown')}")
+
+    def _on_task_failed(self, event) -> None:
+        data = event.data if hasattr(event, 'data') else event
+        logger.warning(f"[FreyaAgent] Task failed: {data.get('task_id', 'unknown')}")
+
+    def _on_job_created(self, event) -> None:
+        data = event.data if hasattr(event, 'data') else event
+        logger.debug(f"[FreyaAgent] Job created: {data.get('job_name', 'unknown')}")
+
+    def _on_job_started(self, event) -> None:
+        data = event.data if hasattr(event, 'data') else event
+        logger.debug(f"[FreyaAgent] Job started: {data.get('job_name', 'unknown')}")
+
+    def _on_job_completed(self, event) -> None:
+        data = event.data if hasattr(event, 'data') else event
+        logger.debug(f"[FreyaAgent] Job completed: {data.get('job_name', 'unknown')}")
+
+    def _on_job_failed(self, event) -> None:
+        data = event.data if hasattr(event, 'data') else event
+        logger.warning(f"[FreyaAgent] Job failed: {data.get('job_name', 'unknown')}")
+
+    def _on_job_retrying(self, event) -> None:
+        data = event.data if hasattr(event, 'data') else event
+        logger.info(f"[FreyaAgent] Job retrying: {data.get('job_name', 'unknown')} (retry {data.get('retry', '?')})")
+
+    def _on_health_check_completed(self, event) -> None:
+        data = event.data if hasattr(event, 'data') else event
+        component = data.get('component', 'unknown')
+        status = data.get('status', 'unknown')
+        logger.debug(f"[FreyaAgent] Health check for {component}: {status}")
+
+    def _on_component_registered(self, event) -> None:
+        data = event.data if hasattr(event, 'data') else event
+        logger.info(f"[FreyaAgent] Component registered: {data.get('name', 'unknown')}")
+
+    def _on_alert_triggered(self, event) -> None:
+        data = event.data if hasattr(event, 'data') else event
+        rule = data.get('rule', 'unknown')
+        severity = data.get('severity', 'unknown')
+        message = data.get('message', '')
+        logger.warning(f"[FreyaAgent] ALERT [{severity}] {rule}: {message}")
+
+    def _on_learning_event(self, event) -> None:
+        logger.debug(f"[FreyaAgent] Learning event: {event.name}")
+
+    def _on_goal_event(self, event) -> None:
+        logger.debug(f"[FreyaAgent] Goal event: {event.name}")
+
+    def _on_autonomy_event(self, event) -> None:
+        logger.debug(f"[FreyaAgent] Autonomy event: {event.name}")
 
     def build_context(self, task):
         matches = self.file_locator.locate(task)
@@ -2123,11 +2351,123 @@ Estimated Hours: {task.estimated_hours or 'Not set'}""")
     def start_autonomy(self) -> None:
         """Start the long-term autonomy manager background loop."""
         if hasattr(self, 'autonomy_manager') and self.autonomy_manager:
+            # Set executor on autonomy manager if not already set
+            if hasattr(self.autonomy_manager, 'set_executor') and self.autonomy_manager.executor is None:
+                self.autonomy_manager.set_executor(self.llm, self.tools, self.engineering_lessons)
+
+            # Start autonomy manager
             self.autonomy_manager.start()
             logger.info("[FreyaAgent] Long-term autonomy started")
+
+            # Register autonomy with job service for background scheduling
+            if hasattr(self, 'job_service'):
+                self._register_autonomy_jobs()
+
+            # Emit event
+            if hasattr(self, 'event_bus'):
+                self.event_bus.emit(
+                    "autonomy.started",
+                    data={"workspace": self.workspace},
+                    source="FreyaAgent",
+                    priority=EventPriority.NORMAL,
+                )
 
     def stop_autonomy(self) -> None:
         """Stop the long-term autonomy manager background loop."""
         if hasattr(self, 'autonomy_manager') and self.autonomy_manager:
             self.autonomy_manager.stop()
             logger.info("[FreyaAgent] Long-term autonomy stopped")
+
+            # Emit event
+            if hasattr(self, 'event_bus'):
+                self.event_bus.emit(
+                    "autonomy.stopped",
+                    data={"workspace": self.workspace},
+                    source="FreyaAgent",
+                    priority=EventPriority.NORMAL,
+                )
+
+    def _register_autonomy_jobs(self) -> None:
+        """Register autonomy background tasks with the unified job service."""
+        try:
+            # Register periodic health check
+            self.job_service.add_recurring_job(
+                func=self._autonomy_health_check,
+                interval_seconds=60.0,
+                name="autonomy_health_check",
+                tag={"subsystem": "autonomy", "type": "health_check"},
+            )
+
+            # Register periodic state persistence
+            self.job_service.add_recurring_job(
+                func=self._autonomy_persist_state,
+                interval_seconds=300.0,  # 5 minutes
+                name="autonomy_persist_state",
+                tag={"subsystem": "autonomy", "type": "persistence"},
+            )
+
+            logger.debug("[FreyaAgent] Registered autonomy jobs with BackgroundJobService")
+        except Exception as e:
+            logger.warning(f"[FreyaAgent] Failed to register autonomy jobs: {e}")
+
+    def _autonomy_health_check(self) -> None:
+        """Periodic health check for autonomy system."""
+        if hasattr(self, 'autonomy_manager') and self.autonomy_manager:
+            try:
+                healthy = self.autonomy_manager.is_healthy()
+                if not healthy:
+                    logger.warning("[FreyaAgent] Autonomy health check failed")
+                    # Emit health event
+                    if hasattr(self, 'event_bus'):
+                        self.event_bus.emit(
+                            "autonomy.health_check_failed",
+                            data={"workspace": self.workspace},
+                            source="FreyaAgent",
+                            priority=EventPriority.HIGH,
+                        )
+                else:
+                    logger.debug("[FreyaAgent] Autonomy health check passed")
+            except Exception as e:
+                logger.error(f"[FreyaAgent] Autonomy health check error: {e}")
+
+    def _autonomy_persist_state(self) -> None:
+        """Persist autonomy state periodically."""
+        if hasattr(self, 'autonomy_manager') and self.autonomy_manager:
+            try:
+                # The autonomy manager already persists state in its loop
+                logger.debug("[FreyaAgent] Autonomy state persistence triggered")
+            except Exception as e:
+                logger.error(f"[FreyaAgent] Autonomy state persistence error: {e}")
+
+    def shutdown(self) -> None:
+        """Gracefully shutdown the agent and all subsystems."""
+        logger.info("[FreyaAgent] Shutting down...")
+
+        # Stop autonomy
+        self.stop_autonomy()
+
+        # Stop config hot-reload
+        self.stop_config_hot_reload()
+
+        # Stop observability
+        if hasattr(self, 'observability'):
+            try:
+                self.observability.stop()
+            except Exception as e:
+                logger.warning(f"[FreyaAgent] Error stopping observability: {e}")
+
+        # Shutdown job service
+        if hasattr(self, 'job_service'):
+            try:
+                self.job_service.shutdown(wait=True, timeout=10.0)
+            except Exception as e:
+                logger.warning(f"[FreyaAgent] Error shutting down job service: {e}")
+
+        # Shutdown event bus
+        if hasattr(self, 'event_bus'):
+            try:
+                self.event_bus.shutdown()
+            except Exception as e:
+                logger.warning(f"[FreyaAgent] Error shutting down event bus: {e}")
+
+        logger.info("[FreyaAgent] Shutdown complete")

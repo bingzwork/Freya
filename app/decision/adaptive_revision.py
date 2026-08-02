@@ -25,6 +25,9 @@ from app.decision.models import (
 from app.decision.history import DecisionHistory
 from app.decision.manager import DecisionManager
 
+# Shared infrastructure imports
+from app.core.background_jobs import get_job_service, BackgroundJobService, JobTriggerConfig, JobTriggerType, JobPriority
+
 logger = logging.getLogger(__name__)
 
 
@@ -101,6 +104,7 @@ class AdaptiveDecisionRevision:
         decision_manager: DecisionManager,
         decision_history: Optional[DecisionHistory] = None,
         check_interval_seconds: float = 30.0,
+        job_service: Optional[BackgroundJobService] = None,
     ):
         """Initialize the adaptive revision monitor.
 
@@ -108,10 +112,12 @@ class AdaptiveDecisionRevision:
             decision_manager: The DecisionManager to use for re-evaluation
             decision_history: Optional DecisionHistory for querying past decisions
             check_interval_seconds: How often to check for context changes
+            job_service: Optional shared BackgroundJobService instance
         """
         self.decision_manager = decision_manager
         self.decision_history = decision_history
         self.check_interval = check_interval_seconds
+        self.job_service = job_service or get_job_service()
 
         self._lock = threading.RLock()
         self._triggers: Dict[str, RevisionTrigger] = {}
@@ -119,7 +125,8 @@ class AdaptiveDecisionRevision:
         self._context_snapshots: Dict[str, Dict[str, Any]] = {}
         self._change_detectors: List[Callable[[DecisionContext], List[ContextChange]]] = []
         self._running = False
-        self._monitor_thread: Optional[threading.Thread] = None
+        self._monitor_job_id = "adaptive_revision_monitor"
+        self._context_provider: Optional[Callable[[], DecisionContext]] = None
 
         # Register default change detectors
         self._register_default_detectors()
@@ -320,7 +327,7 @@ class AdaptiveDecisionRevision:
             self._change_detectors.append(detector)
 
     def start_monitoring(self, context_provider: Callable[[], DecisionContext]) -> None:
-        """Start background monitoring thread.
+        """Start background monitoring using shared BackgroundJobService.
 
         Args:
             context_provider: Function that returns current DecisionContext
@@ -329,20 +336,42 @@ class AdaptiveDecisionRevision:
             return
 
         self._running = True
-        self._monitor_thread = threading.Thread(
-            target=self._monitor_loop,
-            args=(context_provider,),
-            daemon=True,
+        self._context_provider = context_provider
+
+        # Schedule recurring job using shared BackgroundJobService
+        self.job_service.schedule(
+            job_id=self._monitor_job_id,
+            func=self._check_and_revise_job,
+            trigger=JobTriggerConfig(type=JobTriggerType.RECURRING, interval_seconds=self.check_interval),
+            priority=JobPriority.NORMAL,
+            max_retries=1,
+            replace_existing=True,
         )
-        self._monitor_thread.start()
-        logger.info("[AdaptiveRevision] Started background monitoring")
+        logger.info("[AdaptiveRevision] Started background monitoring via shared BackgroundJobService")
 
     def stop_monitoring(self) -> None:
-        """Stop background monitoring thread."""
+        """Stop background monitoring."""
         self._running = False
-        if self._monitor_thread:
-            self._monitor_thread.join(timeout=5.0)
+        self._context_provider = None
+
+        # Cancel the monitoring job
+        try:
+            self.job_service.cancel(self._monitor_job_id)
+        except Exception as e:
+            logger.warning(f"[AdaptiveRevision] Error cancelling monitor job: {e}")
+
         logger.info("[AdaptiveRevision] Stopped background monitoring")
+
+    def _check_and_revise_job(self) -> None:
+        """Background job to check for context changes and revise decisions."""
+        if not self._running or self._context_provider is None:
+            return
+
+        try:
+            current_context = self._context_provider()
+            self.check_and_revise(current_context)
+        except Exception as e:
+            logger.warning(f"[AdaptiveRevision] Monitor job error: {e}")
 
     # -------------------------------------------------------------------------
     # Built-in Change Detectors
@@ -595,29 +624,17 @@ class AdaptiveDecisionRevision:
             component=record.component,
         )
 
-    def _monitor_loop(self, context_provider: Callable[[], DecisionContext]) -> None:
-        """Background monitoring loop."""
-        while self._running:
-            try:
-                current_context = context_provider()
-                self.check_and_revise(current_context)
-            except Exception as e:
-                logger.warning(f"[AdaptiveRevision] Monitor loop error: {e}")
-
-            # Sleep for check interval
-            import time
-            time.sleep(self.check_interval)
-
-
-# Convenience function
+    # Convenience function
 def create_adaptive_revision(
     decision_manager: DecisionManager,
     decision_history: Optional[DecisionHistory] = None,
     check_interval_seconds: float = 30.0,
+    job_service: Optional[BackgroundJobService] = None,
 ) -> AdaptiveDecisionRevision:
     """Create an AdaptiveDecisionRevision instance with standard configuration."""
     return AdaptiveDecisionRevision(
         decision_manager=decision_manager,
         decision_history=decision_history,
         check_interval_seconds=check_interval_seconds,
+        job_service=job_service,
     )

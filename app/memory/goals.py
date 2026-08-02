@@ -12,6 +12,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
+# Shared infrastructure imports
+from app.core.events import get_event_bus
+from app.core.background_jobs import get_job_service
+from app.core.background_jobs import JobTriggerConfig, JobTriggerType, JobPriority
+from app.core.observability import get_observability_hub, ComponentInfo, ComponentType, HealthCheck, HealthResult, HealthStatus
+
 
 @dataclass
 class Goal:
@@ -77,13 +83,91 @@ class GoalStorage:
         self,
         workspace: str = ".",
         storage_path: str = "data/memory/goals.json",
+        event_bus: Optional[object] = None,
+        job_service: Optional[object] = None,
+        observability: Optional[object] = None,
     ):
         self.workspace = Path(workspace).resolve()
         self.storage_path = self.workspace / storage_path
         self._lock = threading.RLock()
         self._goals: Dict[str, Goal] = {}
         self._active_goal_id: Optional[str] = None
+
+        # Shared infrastructure
+        self.event_bus = event_bus or get_event_bus()
+        self.job_service = job_service or get_job_service()
+        self.observability = observability or get_observability_hub()
+
         self._load()
+        self._register_with_observability()
+
+        # Schedule periodic persistence
+        self._schedule_persistence()
+
+    def _register_with_observability(self) -> None:
+        """Register this subsystem with the shared ObservabilityHub."""
+        if self.observability:
+            self.observability.add_health_check(HealthCheck(
+                name="goal_storage_health",
+                component="memory",
+                check_func=self._health_check,
+                interval_seconds=30.0,
+            ))
+
+            # Register component
+            self.observability.register_component(ComponentInfo(
+                name="GoalStorage",
+                component_type=ComponentType.SERVICE,
+                version="1.0.0",
+                description="Goal data model and persistence",
+                metadata={"storage_path": str(self.storage_path)},
+            ))
+
+    def _health_check(self) -> HealthResult:
+        """Health check for GoalStorage."""
+        try:
+            return HealthResult(
+                name="goal_storage_health",
+                component="memory",
+                status=HealthStatus.HEALTHY,
+                message="GoalStorage operational",
+                metadata={"goal_count": len(self._goals), "storage_exists": self.storage_path.exists()}
+            )
+        except Exception as e:
+            return HealthResult(
+                name="goal_storage_health",
+                component="memory",
+                status=HealthStatus.UNHEALTHY,
+                message=f"Health check failed: {e}",
+                metadata={"error": str(e)}
+            )
+
+    def _publish_event(self, event_name: str, data: Dict[str, Any]) -> None:
+        """Publish an event to the shared EventBus."""
+        try:
+            self.event_bus.emit(event_name, data)
+        except Exception as e:
+            from app.core.logger import logger
+            logger.warning(f"Failed to publish event {event_name}: {e}")
+
+    def _schedule_persistence(self, interval_seconds: int = 300) -> None:
+        """Schedule periodic persistence."""
+        # Check if job already exists to avoid duplicate scheduling
+        existing_job = self.job_service.get_job("goal_storage_persist")
+        if existing_job:
+            return
+
+        trigger = JobTriggerConfig(
+            type=JobTriggerType.RECURRING,
+            interval_seconds=interval_seconds,
+        )
+        self.job_service.schedule(
+            job_id="goal_storage_persist",
+            func=self._save_file,
+            trigger=trigger,
+            name="Goal Storage Persistence",
+            priority=JobPriority.LOW,
+        )
 
     # --- internals -------------------------------------------------------
 
@@ -190,6 +274,7 @@ class GoalStorage:
             )
             self._goals[goal.id] = goal
             self._save_file()
+            self._publish_event("goal.created", {"goal_id": goal.id, "name": goal.name, "status": goal.status, "priority": goal.priority})
             return goal
 
     def update(
@@ -234,6 +319,8 @@ class GoalStorage:
             if changed:
                 goal.updated_at = self._now()
             self._save_file()
+            if changed:
+                self._publish_event("goal.updated", {"goal_id": goal_id, "name": goal.name, "status": goal.status, "priority": goal.priority})
             return goal
 
     def delete(self, goal_id: str) -> bool:
@@ -241,8 +328,10 @@ class GoalStorage:
         with self._lock:
             if goal_id not in self._goals:
                 return False
+            goal_name = self._goals[goal_id].name
             del self._goals[goal_id]
             self._save_file()
+            self._publish_event("goal.deleted", {"goal_id": goal_id, "name": goal_name})
             return True
 
     def list(self) -> List[Goal]:
@@ -325,6 +414,7 @@ class GoalStorage:
 
             goal.status = "completed"
             self._save_file()
+            self._publish_event("goal.completed", {"goal_id": goal_id, "name": goal.name})
 
             current = goal
             while current.parent_goal_id:
@@ -345,6 +435,7 @@ class GoalStorage:
                 ):
                     parent.status = "completed"
                     self._save_file()
+                    self._publish_event("goal.completed", {"goal_id": parent.id, "name": parent.name})
                     current = parent
                 else:
                     break
@@ -830,6 +921,7 @@ class GoalStorage:
             goal.status = self._PAUSED_STATUS
             goal.updated_at = self._now()
             self._save_file()
+            self._publish_event("goal.paused", {"goal_id": goal_id, "name": goal.name, "reason": reason})
             return goal
 
     def pause_inactive(
@@ -888,6 +980,7 @@ class GoalStorage:
             goal.status = previous
             goal.updated_at = self._now()
             self._save_file()
+            self._publish_event("goal.resumed", {"goal_id": goal_id, "name": goal.name, "previous_status": previous})
             return goal
 
     def is_paused(self, goal_id: str) -> bool:

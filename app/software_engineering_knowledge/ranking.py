@@ -22,6 +22,12 @@ from app.software_engineering_knowledge.models import (
 )
 from app.software_engineering_knowledge.storage import get_knowledge_storage
 
+# Shared infrastructure imports
+from app.core.events import get_event_bus
+from app.core.background_jobs import get_job_service
+from app.core.background_jobs import JobTriggerConfig, JobTriggerType, JobPriority
+from app.core.observability import get_observability_hub, HealthCheck, HealthResult, HealthStatus, ComponentInfo, ComponentType
+
 
 class EngineeringRankingEngine:
     """Ranking engine specialized for software engineering knowledge.
@@ -29,9 +35,21 @@ class EngineeringRankingEngine:
     Extends the unified ranking engine with engineering-specific signals.
     """
 
-    def __init__(self, storage_path: Optional[str] = None, adaptive: bool = True):
+    def __init__(
+        self,
+        storage_path: Optional[str] = None,
+        adaptive: bool = True,
+        event_bus: Optional[object] = None,
+        job_service: Optional[object] = None,
+        observability: Optional[object] = None,
+    ):
         self.storage = get_knowledge_storage(storage_path) if storage_path else get_knowledge_storage()
         self.adaptive = adaptive
+
+        # Shared infrastructure
+        self._event_bus = event_bus or get_event_bus()
+        self._job_service = job_service or get_job_service()
+        self._observability = observability or get_observability_hub()
 
         # Create ranking config with engineering-specific weights
         config = RankingConfig(
@@ -73,6 +91,65 @@ class EngineeringRankingEngine:
 
         # Register engineering-specific calculators
         self._register_engineering_calculators()
+
+        # Register with observability
+        self._register_with_observability()
+
+        # Schedule periodic persistence
+        self._schedule_persistence()
+
+    def _register_with_observability(self) -> None:
+        """Register this subsystem with the shared ObservabilityHub."""
+        if self._observability:
+            self._observability.add_health_check(HealthCheck(
+                name="engineering_ranking_engine_health",
+                component="software_engineering_knowledge",
+                check_func=self._health_check,
+                interval_seconds=60.0,
+            ))
+
+            # Register component
+            self._observability.register_component(ComponentInfo(
+                name="EngineeringRankingEngine",
+                component_type=ComponentType.SERVICE,
+                version="1.0.0",
+                description="Engineering-specific knowledge ranking engine",
+                metadata={"adaptive": self.adaptive},
+            ))
+
+    def _health_check(self) -> HealthResult:
+        """Health check for EngineeringRankingEngine."""
+        try:
+            return HealthResult(
+                name="engineering_ranking_engine_health",
+                component="software_engineering_knowledge",
+                status=HealthStatus.HEALTHY,
+                message="EngineeringRankingEngine operational",
+                metadata={
+                    "adaptive": self.adaptive,
+                    "engine_type": type(self.engine).__name__,
+                },
+            )
+        except Exception as e:
+            return HealthResult(
+                name="engineering_ranking_engine_health",
+                component="software_engineering_knowledge",
+                status=HealthStatus.UNHEALTHY,
+                message=f"Health check failed: {e}",
+                metadata={"error": str(e)}
+            )
+
+    def _publish_event(self, event_type: str, data: Dict[str, Any]) -> None:
+        """Publish an event to the EventBus."""
+        try:
+            self._event_bus.emit(event_type, data)
+        except Exception:
+            # Don't let event publishing break the system
+            pass
+
+    def _schedule_persistence(self, interval_seconds: int = 300) -> None:
+        """Schedule periodic persistence (calibration handles its own persistence)."""
+        pass
 
     def _register_engineering_calculators(self) -> None:
         """Register engineering-specific signal calculators."""
