@@ -45,6 +45,8 @@ from app.verification.repair_loop import RepairLoop
 from app.verification.runner import VerificationRunner
 from app.rag import SimpleRetriever
 
+from app.software_engineering_knowledge.reflection import ReflectionEngine, ReflectionContext
+
 # Decision Management (Phase 1)
 from app.decision.manager import DecisionManager, DecisionManagerConfig, decide_planning_strategy
 from app.decision.models import (
@@ -62,6 +64,12 @@ from app.failure_recovery.orchestrator import RecoveryOrchestrator, RecoveryStra
 # Self-Evaluation
 from app.evaluation.manager import EvaluationManager, evaluate_before_delivery
 from app.evaluation.models import EvaluationType
+
+# Long-Term Autonomy
+from app.long_term_autonomy.manager import AutonomyManager
+
+# Config Hot-Reload
+from app.core.config_hot_reload import ConfigHotReload, setup_config_hot_reload_for_agent
 
 try:
     from app.retrieval.enhanced_retriever import EnhancedRetriever
@@ -359,6 +367,15 @@ class FreyaAgent:
             verifier=self.verifier,
         )
 
+        # Long-Term Autonomy
+        self.autonomy_manager = AutonomyManager(workspace=workspace)
+
+        # Config Hot-Reload - watches .env file for changes and reloads configuration
+        self.config_hot_reload: Optional[ConfigHotReload] = None
+
+        # Reflection engine for post-task learning
+        self.reflection_engine = ReflectionEngine()
+
         # Progress tracking - stores the last execution's progress snapshot
         self.last_execution_progress: Optional[Dict[str, Any]] = None
 
@@ -389,6 +406,36 @@ class FreyaAgent:
 
         logger.info("Freya Agent initialized")
 
+    def setup_config_hot_reload(self, env_path=None, validate_on_reload=True) -> ConfigHotReload:
+        """
+        Set up configuration hot-reload for the agent.
+
+        This watches the .env file for changes and automatically reloads
+        configuration with validation and rollback support.
+
+        Args:
+            env_path: Path to .env file (default: BASE_DIR / .env)
+            validate_on_reload: Whether to validate config before applying
+
+        Returns:
+            ConfigHotReload instance
+        """
+        if self.config_hot_reload is not None:
+            logger.warning("Config hot-reload already set up")
+            return self.config_hot_reload
+
+        self.config_hot_reload = setup_config_hot_reload_for_agent(self)
+        if self.config_hot_reload:
+            logger.info("Config hot-reload enabled for FreyaAgent")
+        return self.config_hot_reload
+
+    def stop_config_hot_reload(self) -> None:
+        """Stop the configuration hot-reload watcher."""
+        if self.config_hot_reload:
+            self.config_hot_reload.stop()
+            self.config_hot_reload = None
+            logger.info("Config hot-reload stopped")
+
     def _request_execution_stop(self) -> None:
         """Callback to request execution stop from conversation control."""
         # This will be checked by the executor via conversation_control.check_stop_requested()
@@ -413,6 +460,8 @@ class FreyaAgent:
 
     def run(self, task, allow_mutations=True):
         """Plan, execute bounded workspace actions, and summarize the result. Mutating tools will prompt for confirmation before each use."""
+        # Start long-term autonomy on first run if not already running
+        self.start_autonomy()
         classification = classify_intent(
             task,
             context={
@@ -608,6 +657,23 @@ Tool results:
 
         # Trigger memory consolidation and forgetting after task completion
         # Record that a task was completed (could trigger consolidation)
+        # Generate reflection for self-learning
+        try:
+            reflection_context = ReflectionContext(
+                task_description=task,
+                original_request=task,
+                outcome="failure" if eval_result.requires_rework else "success",
+                eval_result=eval_result,
+                goal_id=None,
+                plan_id=plan.id if hasattr(plan, 'id') else None,
+                task_id=f"reflection_{task[:30]}",
+                metadata={}
+            )
+            reflection_record = self.reflection_engine.create_reflection(reflection_context)
+            self.reflection_engine.store_reflection(reflection_record)
+            logger.info(f"[Reflection] Generated reflection {reflection_record.id} for task '{task[:30]}...'")
+        except Exception as e:
+            logger.warning(f"[Reflection] Failed to generate reflection: {e}")
         self.consolidation_engine.record_new_entries(1)
         if self.consolidation_engine.should_run():
             logger.info("[Memory] Running consolidation...")
@@ -679,6 +745,8 @@ Tool results:
                 'replanning_count': int,
             }
         """
+        # Start long-term autonomy on first solve if not already running
+        self.start_autonomy()
         if not allow_mutations:
             raise PermissionError("Autonomous solving requires allow_mutations=True.")
         context = self.build_context(task)
@@ -2047,3 +2115,19 @@ Estimated Hours: {task.estimated_hours or 'Not set'}""")
         Returns None if no engineering task has been executed yet.
         """
         return self.last_execution_progress
+
+    # ------------------------------------------------------------------
+    # Long-Term Autonomy lifecycle methods
+    # ------------------------------------------------------------------
+
+    def start_autonomy(self) -> None:
+        """Start the long-term autonomy manager background loop."""
+        if hasattr(self, 'autonomy_manager') and self.autonomy_manager:
+            self.autonomy_manager.start()
+            logger.info("[FreyaAgent] Long-term autonomy started")
+
+    def stop_autonomy(self) -> None:
+        """Stop the long-term autonomy manager background loop."""
+        if hasattr(self, 'autonomy_manager') and self.autonomy_manager:
+            self.autonomy_manager.stop()
+            logger.info("[FreyaAgent] Long-term autonomy stopped")
