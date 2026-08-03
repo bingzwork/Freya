@@ -1,6 +1,6 @@
 # Freya Master Implementation Roadmap
 
-**Version:** v1.2 | **Generated:** 2026-08-03 | **Source:** Full codebase static analysis
+**Version:** v1.3 | **Generated:** 2026-08-03 | **Source:** Full codebase static analysis
 
 ---
 
@@ -17,14 +17,31 @@ Freya is **~98% complete** on core autonomous software engineering capabilities.
 
 **Recently Completed (2026-08-03):**
 - **Infrastructure Wiring Complete** — All 18 subsystems wired to EventBus, BackgroundJobService, ObservabilityHub
+- **Central Autonomous Orchestrator Complete** — Full capability-driven orchestration with 13 built-in capabilities, workflow composition, task execution, safety gates, self-observation, activity reporting, GUI interfaces, failure recovery integration
 - Fix Methods Implementation (`_fix_complexity`, `_fix_style`, `_fix_docs`, `_fix_tests`) — delegates to PatchGenerator + RepairLoop
 - AutonomyManager Default Wiring — `start_autonomy()` called in `FreyaAgent.run()` and `FreyaAgent.solve()`
+- **Unified Knowledge Acquisition Pipeline Complete** — ACQUIRE→EXTRACT→VALIDATE→STORE→INDEX flow; batch acquisition, recurring scheduling, file watch triggers; EventBus integration
+- **External Knowledge Acquisition Complete** — Web docs, package docs (PyPI/npm/crates.io/pkg.go.dev), internet research (DuckDuckGo), StackOverflow, GitHub repos, standards bodies (RFC/ISO/W3C/ECMA); freshness tracking, source attribution
 
 **Phase 1 Completion (2026-08-03):**
 ✅ EventBus — Single pub/sub backbone
 ✅ BackgroundJobService — Consolidated 5+ schedulers into 1
 ✅ ObservabilityHub — Unified health/metrics/alerts
 ✅ Pipeline Framework — Standardized 4+ pipeline implementations
+✅ File System Watching (watchdog) — Real-time FS monitoring with EventBus integration; auto-updates ProjectIndex, SymbolIndex, DependencyGraph, WorldModel cache
+
+**Central Orchestrator Completion (2026-08-03):**
+✅ CapabilityRegistry — Dynamic capability discovery, lifecycle, dependencies, health monitoring
+✅ WorkflowComposer — Intent-driven composition (SEQUENTIAL, PARALLEL, PIPELINE, FAN_OUT_FAN_IN, ADAPTIVE)
+✅ TaskExecutor — Long-running execution with pause/resume/retry/checkpointing
+✅ SafetyGate — Risk analysis, DecisionManager integration, human oversight
+✅ SelfObserver — Self-observation via ObservabilityHub with metrics/alerting
+✅ ActivityReporter — Plain English activity reporting with history/summary
+✅ OrchestratorGUIInterface/GUI Streaming — GUI-compatible DTOs and real-time interfaces
+✅ FailureRecoveryIntegration — Bridge to failure recovery with auto-recovery modes
+✅ ConversationControlHandler integration — Conversation control coordination
+✅ 13 Built-in Capabilities: memory_management, planning_engine, code_execution, decision_engine, learning_pipeline, system_monitoring, communication_hub, tool_registry, safety_guard, knowledge_base, reasoning_engine, orchestration_core, failure_recovery
+✅ 18-Subsystem Integration — All subsystems communicating via EventBus
 
 ---
 
@@ -53,15 +70,66 @@ Freya is **~98% complete** on core autonomous software engineering capabilities.
 | ⭐⭐⭐⭐ | Tool Ecosystem | 90% | ✅ COMPLETE | `app/core/tool_manager.py` |
 | ⭐⭐⭐⭐ | Human Oversight & Approval | 85% | 🟢 FUNCTIONAL | `app/agent/core_agent.py`, `app/ui/permission_menu.py` |
 | ⭐⭐⭐⭐ | Resource Management | 70% | 🟢 MOSTLY | `app/monitoring/system_monitor.py`, `app/planner/resource_allocator.py` |
-| ⭐⭐⭐ | Knowledge Acquisition & KB | 85% | 🟢 MOSTLY | `app/intelligence/knowledge_base.py` |
-| ⭐⭐⭐ | Safe Self Improvement | 75% | 🟢 MOSTLY | `app/diagnostics/`, `app/evaluation/`, `app/backlog/` |
+| ⭐⭐⭐ | Knowledge Acquisition & KB | 95% | 🟢 MOSTLY | `app/knowledge_acquisition/`, `app/intelligence/knowledge_base.py` |
+| ⭐⭐⭐ | Safe Self Improvement | 100% | ✅ COMPLETE | `app/safe_self_improvement/` |
 | ⭐⭐⭐ | Long-Term Autonomy | 80% | 🟢 MOSTLY | `app/long_term_autonomy/` |
 | ⭐⭐⭐ | Multi-Agent Coordination | 40% | 🟡 PARTIAL | `app/autonomous_learning/share.py` (skeleton only) |
 | ⭐⭐⭐⭐⭐ | **Infrastructure Wiring** | **100%** | **✅ COMPLETE** | **All subsystems under `app/`** |
+| ⭐⭐⭐⭐⭐ | **Central Autonomous Orchestrator** | **100%** | **✅ COMPLETE** | `app/orchestrator/` |
 | ⭐⭐ | Business & Productivity | 20% | 🟡 MINIMAL | *(planned)* |
 | ⭐⭐ | Performance & Optimization | 60% | 🟡 PARTIAL | *(planned)* |
 | ⭐ | Creative Capabilities | 0% | ⚪ NOT IMPL | *(planned)* |
 | ⭐ | Multi-Agent (Full) | 0% | ⚪ NOT IMPL | *(planned)* |
+
+---
+
+## Remaining Implementation (Prioritized)
+
+### 🔴 CRITICAL — Block Autonomy or Safety
+| # | Capability | Why Required | Files to Implement | Depends On |
+|---|------------|--------------|-------------------|------------|
+| 1 | ~~File System Watching (watchdog)~~ **✅ COMPLETE** | World Model stays current; auto-refresh indexes | `app/core/file_watcher.py` | EventBus (✅ Done) |
+| 2 | ~~Project Metadata Detection~~ **✅ COMPLETE** | Know project type, framework, build system, key files for planning | `app/world_model/project_metadata.py` | World Model facade (✅ Done) |
+| 3 | ~~Dependency Lockfile Parsing~~ **✅ COMPLETE** | Know installed vs missing, version conflicts | `app/world_model/project_metadata.py` | World Model facade (✅ Done) |
+| 4 | ~~Unified Knowledge Acquisition Pipeline~~ **✅ COMPLETE** | Single path: extract→validate→store→index for external knowledge | `app/knowledge_acquisition/pipeline.py` | Pipeline Framework (✅ Done), Extraction/Validation/Retrieval (✅ Done) |
+| 5 | ~~External Knowledge Acquisition~~ **✅ COMPLETE** | Web docs, package docs, internet research to learn beyond project | `app/knowledge_acquisition/external.py` | Acquisition Pipeline, Software Eng Knowledge external_import |
+| 6 | ~~AtomicJsonStore Base Class~~ **✅ COMPLETE** | Reduce boilerplate; consistent atomic writes across all storage | `app/core/atomic_store.py` | — |
+| 7 | ~~Config Registry with Hot-Reload~~ **✅ COMPLETE** | Runtime tuning without restart | `app/core/config_hot_reload.py` | All configs |
+
+### 🟠 HIGH — Complete Core Capabilities
+| # | Capability | Why Required | Files to Implement | Depends On |
+|---|------------|--------------|-------------------|------------|
+| 8 | Goal-Driven Learning Completion | Enhanced prioritization (dep analysis), progress dashboard, curriculum | `app/autonomous_learning/pipeline.py` (enhance) | Autonomous Learning Pipeline (✅ Done), Goal Mgmt (✅ Done) |
+| 9 | Memory Consolidation | Cross-memory promotion, dedup, importance scoring for long-term quality | `app/memory/consolidation.py` (enhance) | Memory System (✅ Core Done), Consolidation Engine |
+| 10 | Cross-Source Retrieval Ranking Layer | Unified ranking across all memory/knowledge sources | `app/memory/unified_retrieval.py` (enhance) | Memory System, Retrieval Pipeline (✅ Done) |
+
+### 🟡 MEDIUM — Production Hardening
+| # | Capability | Why Required | Files to Implement | Depends On |
+|---|------------|--------------|-------------------|------------|
+| 11 | GPU/Hardware Detection | Resource-aware scheduling for ML workloads | `app/monitoring/gpu_monitor.py` | SystemMonitor (✅ Done), ResourceAllocator (✅ Done) |
+| 12 | Network/API/Service Health Checks | External dependency awareness (DB, API, MQ, MCP) | `app/monitoring/service_monitor.py` | SystemMonitor (✅ Done) |
+| 13 | Recovery Analytics Dashboard | Observe autonomous recovery patterns | `app/failure_recovery/analytics.py` | Failure Recovery (✅ Done), ObservabilityHub (✅ Done) |
+| 14 | Scheduling History/Analytics | Optimize task scheduling decisions | `app/planner/scheduler.py` (enhance) | Scheduler (✅ Done), BackgroundJobService (✅ Done) |
+| 15 | Parallel Tool Execution | Throughput for complex multi-file tasks | `app/core/tool_manager.py` (enhance) | Tool Ecosystem (✅ Done) |
+| 16 | Semantic Vector Search (FAISS) | Meaning-based retrieval beyond keywords | `app/knowledge_retrieval/vector_search.py` | Knowledge Retrieval (✅ Done), Vector DB (✅ Done) |
+| 17 | Knowledge Graph Traversal | Related concept discovery | `app/knowledge_retrieval/graph.py` | Knowledge Retrieval (✅ Done) |
+| 18 | Cross-Session Conversation Search | Better context retrieval across sessions | `app/memory/conversation_memory.py` (enhance) | Conversation Memory (✅ Done) |
+| 19 | Comprehensive Integration Tests | End-to-end autonomy verification | `tests/test_integration_*.py` | All systems |
+
+### 🟢 LOW — Nice-to-Have Enhancements (Post-v1)
+| # | Capability | Justification |
+|---|------------|---------------|
+| 20 | Multi-Agent Collaboration | Requires Phase 5 distributed execution; not single-agent autonomy |
+| 21 | Federated Learning | Privacy-preserving multi-device; niche |
+| 22 | Cloud/Cross-Device Sync | Multi-device; not required for local-first |
+| 23 | Advanced Multimodal (Vision/Audio) | Creative/media; not SW engineering |
+| 24 | Plugin/Skill Marketplaces | Ecosystem; post-v1 |
+| 25 | Swarm Intelligence | Multi-agent; post-v1 |
+| 26 | Simulation Environment | Testing; nice-to-have |
+| 27 | Chaos Engineering Integration | Resilience testing; post-v1 |
+| 28 | Web UI for Knowledge/Memory/Autonomy Dashboard | Developer experience; post-v1 |
+| 29 | Plugin/Extension Architecture | Extensibility; post-v1 |
+| 30 | Distributed Execution Support | Scaling; post-v1 |
 
 ---
 

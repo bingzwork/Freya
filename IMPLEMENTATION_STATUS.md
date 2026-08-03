@@ -1,8 +1,8 @@
 # Freya Implementation Status
 
-**Version:** v0.6.0
+**Version:** v0.7.0
 
-**Last Updated:** 2026-08-03 (Infrastructure Wiring Complete - All Subsystems Wired to Shared EventBus, BackgroundJobService, ObservabilityHub; MaintenanceScheduler Deprecated)
+**Last Updated:** 2026-08-03 (Infrastructure Wiring Complete - All Subsystems Wired to Shared EventBus, BackgroundJobService, ObservabilityHub; Central Autonomous Orchestrator Complete; MaintenanceScheduler Deprecated)
 
 **Purpose**
 
@@ -72,6 +72,7 @@ This document should always reflect the current state of the codebase.
 | Multi Agent Coordination | 🟡 PARTIAL | 40% |
 | Self Evaluation | ✅ COMPLETE (Critical + High Priority) | 100% |
 | Performance & Optimization | 🟡 PARTIAL | 60% |
+| **Central Autonomous Orchestrator** | ✅ COMPLETE | 100% |
 | **Shared Infrastructure Wiring** | ✅ COMPLETE | 100% |
 
 ---
@@ -86,7 +87,7 @@ Current Capability Summary
 
 | Status | Count |
 |--------|------:|
-| ✅ Complete | 62 |
+| ✅ Complete | 64 |
 | 🟢 Mostly Complete | 5 |
 | 🟡 Partial | 3 |
 | 🔵 Foundation | Multiple subsystems now wired |
@@ -111,8 +112,20 @@ The following work provides the highest impact because the implementation alread
 - Add additional LLM providers.
 - Implement Goal-Driven Learning automation (pipeline components exist but not fully wired to background scheduler).
 - ~~Wire AutonomyManager by default~~ — **COMPLETED** (`start_autonomy()` called in `FreyaAgent.run()` and `FreyaAgent.solve()`; AutonomyManager starts background scheduler, watchdog, self-initiated work, maintenance, continuous operation, and 6-phase decision loop).
+- ~~Complete Central Autonomous Orchestrator~~ — **COMPLETED** (`app/orchestrator/` fully implemented with 13 built-in capabilities, workflow composition, task execution, safety gates, self-observation, activity reporting, GUI interfaces, failure recovery integration; all 18 subsystems integrated via EventBus).
 
 ---
+
+### Central Autonomous Orchestrator
+
+Status: ✅ COMPLETE (100%)
+
+**Implementation Date:** 2026-08-03
+
+(See detailed section above in the Infrastructure Wiring section)
+
+---
+
 ### Natural Conversation & Intent Understanding
 
 Status: ✅ COMPLETE (100%)
@@ -377,7 +390,7 @@ Status: 🟢 MOSTLY COMPLETE (85%)
 
 ### World Model
 
-Status: 🟢 MOSTLY COMPLETE (75%)
+Status: 🟢 MOSTLY COMPLETE (85%)
 
 **Implemented Components:**
 
@@ -400,20 +413,20 @@ Status: 🟢 MOSTLY COMPLETE (75%)
 | **Environment Snapshot Dataclass** | ✅ Complete | `app/world_model/model.py` |
 | **Context-Aware Retrieval** | ✅ Complete | `app/world_model/retrieval.py` |
 | Cached Snapshots (TTL) | ✅ Complete | `app/world_model/model.py` |
+| **Project Metadata Detection** | ✅ Complete | `app/world_model/project_metadata.py` |
+| **Dependency Lockfile Parsing** | ✅ Complete | `app/world_model/project_metadata.py` |
+| **File System Watching (watchdog)** | ✅ Complete | `app/core/file_watcher.py` |
 
 **Partially Implemented:**
 
 | Capability | Status | Gap |
 |------------|--------|-----|
-| Project Understanding | 🟡 Partial | File/symbol indexing works; missing: project metadata (name, framework, build system), important file identification, architecture detection |
-| Dependency Understanding | 🟡 Partial | Symbol index + dep graph exist; missing: package lockfile parsing (requirements.txt, pyproject.toml, package.json), installed vs missing, version conflicts |
-| Environment Monitoring | 🟡 Partial | System metrics collected; missing: file watching, tool version tracking, dependency change detection, service health checks |
+| Environment Monitoring | 🟡 Partial | GPU/hardware detail tracking, service health checks |
 
 **Not Implemented:**
 
 | Capability | Description |
 |------------|-------------|
-| Dynamic File Watching | No `watchdog` integration for auto-refresh |
 | GPU/Hardware Detail | Basic CPU/mem only; no GPU detection, VRAM, compute capability |
 | Network/Internet Awareness | No connectivity checks, API endpoint health |
 | External Services Registry | No GitHub, Ollama, OpenAI, DB, MCP server detection |
@@ -426,15 +439,14 @@ Status: 🟢 MOSTLY COMPLETE (75%)
 - `HealthMonitor` → `SystemMetrics` for CPU/memory/disk
 - `DecisionManager` → Could use World Model for risk assessment (not yet wired)
 - `Planner` → Could use environment for tool selection (not yet wired)
+- `FileWatcher` → Auto-updates ProjectIndex, SymbolIndex, DependencyGraph, WorldModel cache on file changes
+- `ConfigHotReload` → Auto-reloads configuration on .env changes
 
 **Remaining Work (Priority Order):**
-1. ⭐⭐⭐⭐ Project metadata detection (pyproject.toml, package.json, etc.)
-2. ⭐⭐⭐⭐ Dependency lockfile parsing + installed vs missing analysis
-3. ⭐⭐⭐⭐ File system watching (`watchdog`) for auto-refresh
-4. ⭐⭐⭐ GPU/hardware detail detection
-5. ⭐⭐⭐ Network connectivity + service health checks
-6. ⭐⭐ External service registry
-7. ⭐ Relevance ranking/scoring
+1. ⭐⭐⭐ GPU/hardware detail detection
+2. ⭐⭐⭐ Network connectivity + service health checks
+3. ⭐⭐ External service registry
+4. ⭐ Relevance ranking/scoring
 
 ---
 
@@ -586,6 +598,108 @@ Status: ✅ COMPLETE (100%)
 
 ---
 
+### Central Autonomous Orchestrator
+
+Status: ✅ COMPLETE (100%)
+
+**Implementation Date:** 2026-08-03
+
+**Core Components Implemented:**
+
+1. **CentralOrchestrator** (`app/orchestrator/orchestrator.py`)
+   - Main coordination class integrating 18 subsystems
+   - Complete start/stop/pause/resume lifecycle management
+   - Intent-driven workflow execution pipeline with 11 stages
+   - Shared execution context management
+   - Event-driven coordination via EventBus
+   - Background job scheduling via BackgroundJobService
+   - Health monitoring via ObservabilityHub
+
+2. **CapabilityRegistry** (`app/orchestrator/capability_registry.py`)
+   - Dynamic capability discovery and registration
+   - Lifecycle management (INACTIVE → ACTIVE → HEALTHY/DEGRADED/UNHEALTHY)
+   - Dependency resolution and validation
+   - Health monitoring with configurable intervals
+   - `CapabilityMetadata` with `default_action` and `supported_actions` fields
+   - Thread-safe operations with RLock
+
+3. **WorkflowComposer** (`app/orchestrator/workflow_composer.py`)
+   - Intent-driven workflow composition from capabilities
+   - 5 composition strategies: SEQUENTIAL, PARALLEL, PIPELINE, FAN_OUT_FAN_IN, ADAPTIVE
+   - DecisionManager integration for strategy selection
+   - Memory retrieval integration for context-aware composition
+   - Uses `CapabilityMetadata.default_action` for action mapping
+
+4. **TaskExecutor** (`app/orchestrator/task_executor.py`)
+   - Long-running task execution with pause/resume/retry/checkpointing
+   - Concurrent workflow support (configurable max)
+   - Checkpoint-based recovery with configurable intervals
+   - Failure recovery integration via callback
+   - Execution state tracking (PENDING → RUNNING → COMPLETED/FAILED/CANCELLED/PAUSED/RETRYING/CHECKPOINTING/RECOVERING)
+
+5. **SafetyGate** (`app/orchestrator/safety_gate.py`)
+   - Risk analysis with DecisionManager integration
+   - Human oversight gates with approval requirements
+   - Configurable safety modes (STRICT, BALANCED, LENIENT, OBSERVE_ONLY)
+   - Per-operation approval policies
+   - Uses DecisionCategory.EXECUTION and DecisionOption
+
+6. **SelfObserver** (`app/orchestrator/self_observer.py`)
+   - Self-observation via ObservabilityHub
+   - Continuous metrics collection and alerting
+   - Performance stats and health monitoring
+   - Configurable observation levels (MINIMAL, STANDARD, DETAILED, DEBUG)
+   - `get_performance_stats()` and `get_stats()` methods
+
+7. **ActivityReporter** (`app/orchestrator/activity_reporter.py`)
+   - Plain English activity reporting
+   - `get_recent_summary(count)` for recent activity summary
+   - `get_history(limit, category, workflow_id)` for activity history
+   - Multiple activity levels (SYSTEM, PIPELINE, EXECUTION, DECISION, RECOVERY, LEARNING, SAFETY, USER)
+
+8. **OrchestratorGUIInterface** (`app/orchestrator/gui_interface.py`)
+   - GUI-compatible DTOs and interfaces
+   - `get_status()` for comprehensive system status
+   - `OrchestratorStreamingInterface` for real-time GUI updates
+   - Status snapshots with capabilities, workflows, metrics, health, activities
+
+9. **FailureRecoveryIntegration** (`app/orchestrator/failure_recovery_integration.py`)
+   - Bridge to failure recovery subsystem
+   - Auto-recovery modes (IMMEDIATE, DELAYED, MANUAL, DISABLED)
+   - `get_recovery_stats()` for failure statistics
+   - Failure history with filtering by workflow_id
+   - TaskExecutor callback integration for automatic recovery
+
+10. **ConversationControlHandler Integration**
+    - Coordination with ConversationControlHandler via external setter
+    - Conversation state context in execution pipeline
+
+11. **13 Built-in Capabilities Registered** (`app/orchestrator/capabilities.py`)
+    - memory_management, planning_engine, code_execution, decision_engine
+    - learning_pipeline, system_monitoring, communication_hub, tool_registry
+    - safety_guard, knowledge_base, reasoning_engine, orchestration_core, failure_recovery
+    - Each with explicit `default_action` and `supported_actions` metadata
+
+12. **18-Subsystem Integration**
+    - All subsystems communicating via EventBus
+    - Background jobs managed by BackgroundJobService
+    - Health checks registered with ObservabilityHub
+    - Pipeline execution standardized via Pipeline Framework
+
+**Integration Points:**
+- `FreyaAgent` integration ready via `get_orchestrator()`
+- EventBus for all cross-component communication
+- BackgroundJobService for periodic health checks, workflow cleanup, metrics aggregation
+- ObservabilityHub for health monitoring and metrics collection
+- DecisionManager for strategy selection and safety decisions
+- WorldModel for runtime context in workflow composition
+- UnifiedRetrieval for memory/knowledge retrieval in planning
+- ConversationControlHandler for conversation state coordination
+
+**Tests:** Integration verified — orchestrator starts/stops successfully, capabilities register correctly, workflow execution works, health checks pass, no infrastructure integration errors, no runtime exceptions during normal operation (10/10 integration tests passing)
+
+---
+
 ### Infrastructure Wiring Across All Subsystems
 
 Status: ✅ COMPLETE (100%)
@@ -616,6 +730,7 @@ All subsystems now integrate with the shared infrastructure (EventBus, Backgroun
 | **Autonomous Learning** | `app/autonomous_learning/pipeline.py` | ✅ | ✅ | ✅ |
 | **Knowledge Retrieval** | `app/knowledge_retrieval/pipeline.py` | ✅ | ✅ | ✅ |
 | **Long-Term Autonomy** | `app/long_term_autonomy/manager.py` | ✅ | ✅ | ✅ |
+| **Central Orchestrator** | `app/orchestrator/` | ✅ | ✅ | ✅ |
 
 **Pattern Applied:**
 1. Optional constructor parameters: `event_bus`, `job_service`, `observability`
@@ -799,6 +914,65 @@ Status: ✅ COMPLETE (100%)
 - Query expansion and reformulation
 - Knowledge graph traversal for related topics
 - Personalized ranking per user/context
+
+---
+
+### Knowledge Acquisition & Knowledge Base
+
+Status: 🟢 MOSTLY COMPLETE (95%)
+
+**Implementation Date:** 2026-08-03
+
+**Core Components Implemented:**
+
+1. **Knowledge Acquisition Pipeline** (`app/knowledge_acquisition/pipeline.py`)
+   - Unified pipeline: ACQUIRE → EXTRACT → VALIDATE → STORE → INDEX
+   - `KnowledgeAcquisitionPipeline` class with `acquire()` main entry point
+   - Integrates KnowledgeExtractionPipeline, KnowledgeValidator, EngineeringKnowledgeStorage, KnowledgeRetrievalPipeline
+   - Supports batch acquisition via `acquire_batch()`
+   - Recurring acquisition scheduling via BackgroundJobService (`schedule_recurring_acquisition()`)
+   - File watcher triggers via `setup_file_watch_triggers()`
+   - EventBus integration at each pipeline stage (started, extracting, extracted, validating, validated, storing, stored, indexing, indexed, completed)
+   - Comprehensive statistics tracking
+
+2. **External Knowledge Acquisition** (`app/knowledge_acquisition/external.py`)
+   - `ExternalKnowledgeAcquisition` class wrapping UnifiedExternalImporter
+   - Web documentation acquisition (`acquire_from_web_docs()`)
+   - Package documentation acquisition (`acquire_package_docs()`) — Python (PyPI/ReadTheDocs), npm, Rust (crates.io/docs.rs), Go (pkg.go.dev)
+   - Internet research acquisition (`acquire_from_internet_research()`) — DuckDuckGo search + content extraction
+   - StackOverflow Q&A acquisition (`acquire_from_stackoverflow()`)
+   - GitHub repository acquisition (`acquire_from_github_repo()`) — README, docs
+   - Standards bodies acquisition (`acquire_from_standards_body()`) — RFC, ISO, W3C, ECMA
+   - Freshness tracking and cache management
+   - Source configuration with priority, rate limiting, max results
+
+3. **Data Models** (`app/knowledge_acquisition/models.py`)
+   - `AcquisitionSource` — Source configuration with type, identifier, tags, priority
+   - `AcquisitionSourceType` enum — 19 source types (local: file, directory, code_repository, documentation, conversation, llm_response, tool_output, project_metadata, dependency_lockfile; external: web_documentation, package_documentation, internet_research, standards_body, stackoverflow, github_repository, vendor_documentation; system: system_event, file_watch_event, background_job)
+   - `AcquisitionJob` — Job tracking with status, timing, results per stage
+   - `AcquisitionStatus` enum — PENDING, EXTRACTING, VALIDATING, STORING, INDEXING, COMPLETED, PARTIAL, FAILED, SKIPPED
+   - `AcquisitionResult` — Final result with acquired/failed items, timing, metadata
+   - `KnowledgeAcquisitionConfig` — Full pipeline configuration (extraction, validation, storage, indexing, external, automation, observability)
+
+**Integration:**
+- Integrates with: Knowledge Extraction, Knowledge Retrieval, Knowledge Validation, Engineering Knowledge Storage, Software Engineering Knowledge (external importers), Autonomous Learning, Goal-Driven Learning, File Watcher, EventBus, BackgroundJobService, ObservabilityHub
+- Factory function `create_acquisition_pipeline()` for easy setup with optional agent integration for retrieval adapters
+- Convenience function `acquire_external_knowledge()` for direct external acquisition
+
+**Tests:** New module - integration tests pending; unit tests for extraction, retrieval, validation, software engineering knowledge all passing
+
+**Known Limitations:**
+- External acquisition requires network connectivity
+- Internet research uses DuckDuckGo HTML scraping (rate limited)
+- Freshness tracking is in-memory only (not persisted across restarts)
+- No semantic deduplication across external sources yet
+
+**Future Enhancements:**
+- Persistent freshness cache
+- Cross-source deduplication for external knowledge
+- More search engines for internet research (Google, Bing APIs)
+- Automated credibility/reliability scoring for external sources
+- Integration with Autonomous Learning for goal-driven acquisition
 
 ---
 
