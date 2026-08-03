@@ -624,7 +624,7 @@ All thresholds/limits configurable: allowlist/denylist paths, boundary limits, r
 
 ### 19. Tool Ecosystem
 
-**Status:** ✅ COMPLETE (90%) **Priority:** ⭐⭐⭐⭐ High **Last Updated:** 2026-07-30
+**Status:** ✅ COMPLETE (95%) **Priority:** ⭐⭐⭐⭐ High **Last Updated:** 2026-08-04
 
 | Category | Tools | Status |
 |----------|-------|--------|
@@ -635,7 +635,7 @@ All thresholds/limits configurable: allowlist/denylist paths, boundary limits, r
 | Formatting | format_file | ✅ Complete |
 | Safety | Workspace path validation (prevents directory traversal) | ✅ Complete |
 
-**Registry:** `app/core/tool_manager.py` — workspace-scoped execution, permission gating for mutating tools
+**Registry:** `app/core/tool_manager.py` — workspace-scoped execution, permission gating for mutating tools, parallel tool execution with dependency-aware scheduling
 
 ---
 

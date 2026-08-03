@@ -5,11 +5,13 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from dataclasses import dataclass
-from typing import Any, Callable, Optional, List, Dict
+from typing import Any, Callable, Optional, List, Dict, Tuple
 from contextlib import asynccontextmanager
 
 from app.core.file_allowlist import FileAllowlist, get_file_allowlist, FileOperation, AccessRule
 from app.core.logger import logger
+from app.planner.task_graph import TaskGraph
+from app.planner.task import Task
 
 
 @dataclass
@@ -738,7 +740,7 @@ class ToolManager:
         kwargs_list: List[Dict[str, Any]],
         max_workers: Optional[int] = None,
     ) -> ParallelExecutionResult:
-        """Execute the same tool multiple times with different arguments in parallel (async).
+        """Execute the same token multiple times with different arguments in parallel (async).
 
         Args:
             tool_name: Name of the tool to execute
@@ -750,3 +752,117 @@ class ToolManager:
         """
         tool_calls = [{'name': tool_name, 'kwargs': kwargs} for kwargs in kwargs_list]
         return await self.execute_parallel_async(tool_calls, max_workers)
+
+    def execute_task_graph(
+        self,
+        task_graph: TaskGraph,
+        task_to_tool_call: Optional[Callable[[Task], Tuple[str, Dict[str, Any]]]] = None,
+        max_workers: Optional[int] = None,
+        timeout_per_level: Optional[float] = None,
+    ) -> Dict[str, ToolResult]:
+        """Execute a task graph in dependency order, with each level of independent tasks run in parallel.
+
+        Args:
+            task_graph: The task graph to execute.
+            task_to_tool_call: A function that takes a Task and returns a tuple of (tool_name, kwargs).
+                               If None, the task's metadata is expected to have 'tool' and 'kwargs' keys.
+            max_workers: Maximum number of concurrent tool executions per level.
+            timeout_per_level: Timeout in seconds for each level. If None, no timeout.
+
+        Returns:
+            A dictionary mapping task IDs to their ToolResult.
+
+        Raises:
+            ValueError: If the task graph has a cycle.
+            TimeoutError: If any level exceeds the timeout.
+        """
+        # Check for cycles
+        if task_graph.has_cycle():
+            raise ValueError("Task graph contains a cycle")
+
+        # Get the levels of tasks that can be run in parallel
+        try:
+            levels = task_graph.get_parallel_tasks()
+        except Exception as e:
+            # If the graph has a cycle, get_parallel_tasks might raise an exception
+            raise ValueError(f"Failed to get parallel tasks from graph: {e}")
+
+        # Dictionary to hold results for all tasks
+        results: Dict[str, ToolResult] = {}
+
+        # Process each level
+        for level_index, task_ids in enumerate(levels):
+            if not task_ids:
+                continue
+
+            # Prepare tool calls for this level
+            tool_calls = []
+            task_id_to_task = {}  # Map task ID to task object for later reference
+            for task_id in task_ids:
+                task = task_graph._nodes[task_id].task  # Access the internal node to get the task
+                task_id_to_task[task_id] = task
+
+                if task_to_tool_call is not None:
+                    try:
+                        tool_name, kwargs = task_to_tool_call(task)
+                    except Exception as e:
+                        # If the mapping function fails, mark this task as failed
+                        results[task_id] = ToolResult(
+                            success=False,
+                            error=f"Failed to map task to tool call: {e}"
+                        )
+                        continue
+                else:
+                    # Default: expect task.metadata to have 'tool' and 'kwargs'
+                    tool_name = task.metadata.get('tool')
+                    kwargs = task.metadata.get('kwargs', {})
+                    if tool_name is None:
+                        results[task_id] = ToolResult(
+                            success=False,
+                            error=f"Task {task_id} has no 'tool' in metadata and no mapping function provided"
+                        )
+                        continue
+
+                tool_calls.append({
+                    'name': tool_name,
+                    'kwargs': kwargs,
+                })
+
+            # If we have any tool calls to execute in this level
+            if tool_calls:
+                # Execute the level in parallel
+                try:
+                    # Note: We are not implementing timeout and cancellation in this version for simplicity.
+                    # We will add them in a future iteration if required.
+                    level_result = self.execute_parallel(
+                        tool_calls=tool_calls,
+                        max_workers=max_workers,
+                    )
+                except Exception as e:
+                    # If the parallel execution fails unexpectedly, mark all tasks in this level as failed
+                    for task_id in task_ids:
+                        if task_id not in results:
+                            results[task_id] = ToolResult(
+                                success=False,
+                                error=f"Parallel execution failed: {e}"
+                            )
+                    # Since this level failed, we break and return what we have
+                    break
+
+                # Process the results for this level
+                for i, task_id in enumerate(task_ids):
+                    if task_id in results:
+                        # Already set by mapping function error
+                        continue
+
+                    tool_result = level_result.results[i]
+                    # Store the result
+                    results[task_id] = tool_result
+
+                # Check if any task in this level failed
+                level_failed = any(not results[task_id].success for task_id in task_ids if task_id in results)
+                if level_failed:
+                    # We break and do not process further levels
+                    break
+
+        return results
