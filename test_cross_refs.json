@@ -1,0 +1,34 @@
+{
+  "references": [
+    {
+      "reference_id": "ref_97682aeb59aa",
+      "source_memory": "experience",
+      "source_id": "exp1",
+      "target_memory": "lessons",
+      "target_id": "lesson1",
+      "reference_type": "source",
+      "confidence": 0.9,
+      "description": "Experience led to lesson",
+      "created_at": "2026-08-02T12:57:31.145652+00:00",
+      "metadata": {}
+    }
+  ],
+  "nodes": [
+    {
+      "memory_type": "experience",
+      "entry_id": "exp1",
+      "title": "Test Experience",
+      "summary": "This is a test experience",
+      "timestamp": "2026-08-02T12:57:31.093282+00:00",
+      "metadata": {}
+    },
+    {
+      "memory_type": "lessons",
+      "entry_id": "lesson1",
+      "title": "Test Lesson",
+      "summary": "This is a test lesson",
+      "timestamp": "2026-08-02T12:57:31.145652+00:00",
+      "metadata": {}
+    }
+  ]
+}

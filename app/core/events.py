@@ -581,6 +581,27 @@ class EventBus:
         """Clear event history."""
         self._history.clear()
 
+    def publish(self, event: Event) -> Event:
+        """
+        Publish an Event object to the event bus.
+
+        This is an alias for emit() that accepts an Event object directly.
+
+        Args:
+            event: The Event to publish
+
+        Returns:
+            The published event
+        """
+        return self.emit(
+            name=event.name,
+            data=event.data,
+            source=event.source,
+            priority=event.priority,
+            tags=event.tags,
+            metadata=event.metadata,
+        )
+
     def shutdown(self) -> None:
         """Shutdown the event bus."""
         self._running = False

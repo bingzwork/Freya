@@ -317,6 +317,17 @@ class TaskGraph:
 
         return sorted_nodes
 
+    def get_execution_order(self) -> List[str]:
+        """Get the execution order (topological sort) of tasks in the graph.
+
+        Returns:
+            List of task IDs in execution order.
+
+        Raises:
+            CycleDetectedError: If the graph contains a cycle.
+        """
+        return self.topological_sort()
+
     def get_critical_path(self) -> List[str]:
         """Get the critical path (longest path through the graph).
 

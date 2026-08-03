@@ -149,6 +149,9 @@ class AutonomyManager:
         # Register with shared observability
         self._register_with_observability()
 
+        # Initialize runtime state
+        self._initialize_state()
+
     def _register_with_observability(self) -> None:
         """Register this subsystem with the shared ObservabilityHub."""
         if self.observability:
@@ -365,7 +368,8 @@ class AutonomyManager:
             self.storage.save_tasks(self.tasks)
             logger.info(f"Cleaned up {removed} old tasks")
 
-    # State management
+    def _initialize_state(self) -> None:
+        """Initialize runtime state."""
         self._lock = threading.RLock()
         self._running = False
         self._main_thread = None

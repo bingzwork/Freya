@@ -293,6 +293,17 @@ class ConversationControlHandler:
                     "was_executing": False,
                 }
 
+    def register_execution_callback(self, callback: Callable[[], None]) -> None:
+        """Register a callback to be invoked when execution should stop.
+
+        This allows external components (like FreyaAgent) to be notified
+        when a stop/cancel/pause command is executed.
+
+        Args:
+            callback: A callable that takes no arguments and returns None
+        """
+        self._execution_callback = callback
+
     def handle_cancel(self, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Handle 'cancel'/'nevermind'/'abort' command - cancel pending action.
 

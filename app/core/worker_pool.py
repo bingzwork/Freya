@@ -326,7 +326,7 @@ class WorkerPool:
         worker.current_task = task
         worker.last_activity = datetime.now(timezone.utc).isoformat()
 
-        task.status = TaskStatus.RUNNING
+        task.status = TaskStatus.IN_PROGRESS
         task.started_at = datetime.now(timezone.utc).isoformat()
         task.attempt += 1
 
@@ -590,7 +590,7 @@ class WorkerPool:
     def get_active_tasks(self) -> List[Task]:
         """Get all currently active tasks."""
         with self._task_lock:
-            return [t for t in self._tasks.values() if t.status in (TaskStatus.QUEUED, TaskStatus.RUNNING)]
+            return [t for t in self._tasks.values() if t.status in (TaskStatus.QUEUED, TaskStatus.IN_PROGRESS)]
 
     def get_pending_tasks(self) -> List[Task]:
         """Get all pending/queued tasks."""
@@ -638,7 +638,7 @@ class WorkerPool:
                 return True
 
             with self._task_lock:
-                active = [t for t in self._tasks.values() if t.status in (TaskStatus.QUEUED, TaskStatus.RUNNING)]
+                active = [t for t in self._tasks.values() if t.status in (TaskStatus.QUEUED, TaskStatus.IN_PROGRESS)]
                 if not active and self._queue.empty():
                     return True
 
