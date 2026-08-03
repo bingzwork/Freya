@@ -41,7 +41,6 @@ from app.planner.scheduler import Scheduler as PlannerScheduler, SchedulingStrat
 from app.planner.task_graph import TaskGraph
 from app.planner.task import Task, TaskStatus, TaskPriority
 from app.planner.resource_allocator import ResourceAllocator
-from app.agent.executor import Executor
 from app.autonomous_learning.pipeline import AutonomousLearningPipeline as LearningPipeline
 from app.world_model.model import WorldModel
 from app.monitoring.system_monitor import SystemMonitor
@@ -447,6 +446,7 @@ class AutonomyManager:
             tools: The tools available to the agent
             engineering_lessons: Optional engineering lessons for learning
         """
+        from app.agent.executor import Executor
         self.executor = Executor(llm, tools, engineering_lessons)
         self.executor.set_conversation_control(self)  # Use self as conversation control
 

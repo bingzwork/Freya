@@ -487,3 +487,33 @@ def create_file_event_integration(
 ) -> FileEventBusIntegration:
     """Factory function to create FileEventBusIntegration."""
     return FileEventBusIntegration(event_bus, watcher)
+
+
+# Singleton instance for global access
+_file_watcher_instance: Optional[FileWatcher] = None
+
+
+def get_file_watcher(workspace: str = ".", **kwargs) -> FileWatcher:
+    """Get or create the singleton FileWatcher instance.
+
+    Args:
+        workspace: The workspace directory to watch
+        **kwargs: Additional arguments passed to FileWatcher constructor
+
+    Returns:
+        The singleton FileWatcher instance
+    """
+    global _file_watcher_instance
+    if _file_watcher_instance is None:
+        from app.core.events import get_event_bus
+        event_bus = get_event_bus()
+        _file_watcher_instance = create_file_watcher(event_bus, [workspace], **kwargs)
+    return _file_watcher_instance
+
+
+def reset_file_watcher() -> None:
+    """Reset the singleton FileWatcher instance (useful for testing)."""
+    global _file_watcher_instance
+    if _file_watcher_instance is not None:
+        _file_watcher_instance.stop()
+        _file_watcher_instance = None

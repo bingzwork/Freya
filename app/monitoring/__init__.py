@@ -46,6 +46,15 @@ from app.monitoring.network_monitor import (
     CheckType,
     ServiceStatus,
 )
+from app.monitoring.gpu_monitor import (
+    GPUMonitor,
+    GPUDetector,
+    GPUMetricsCollector,
+    GPUInfo,
+    GPUMetrics,
+    GPUVendor,
+    create_gpu_monitor,
+)
 from app.monitoring.monitoring_report import (
     MonitoringReport,
 )
@@ -78,5 +87,12 @@ __all__ = [
     "HealthCheckResult",
     "CheckType",
     "ServiceStatus",
+    "GPUMonitor",
+    "GPUDetector",
+    "GPUMetricsCollector",
+    "GPUInfo",
+    "GPUMetrics",
+    "GPUVendor",
+    "create_gpu_monitor",
     "MonitoringReport",
 ]

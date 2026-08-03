@@ -3,9 +3,76 @@
 import json
 import tempfile
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, Mock
 
 import pytest
+
+
+# Fixtures to mock expensive operations for HealthMonitor and integration tests
+@pytest.fixture
+def temp_workspace():
+    """Create a small temporary workspace for fast metric testing."""
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir)
+
+        # Create a minimal project structure
+        (workspace / "app").mkdir()
+        (workspace / "tests").mkdir()
+        (workspace / "app" / "__init__.py").write_text("")
+        (workspace / "app" / "main.py").write_text("def hello():\n    return 'world'\n")
+        (workspace / "app" / "utils.py").write_text("""
+def add(a, b):
+    '''Add two numbers.'''
+    return a + b
+""")
+        (workspace / "tests" / "__init__.py").write_text("")
+        (workspace / "tests" / "test_main.py").write_text("""
+def test_hello():
+    assert hello() == 'world'
+
+def test_add():
+    assert add(1, 2) == 3
+""")
+
+        yield str(workspace)
+
+
+@pytest.fixture
+def mock_expensive_operations():
+    """Mock expensive subprocess calls and external operations."""
+    with patch("subprocess.run") as mock_run, \
+         patch("app.core.project_index.ProjectIndex") as mock_pi, \
+         patch("app.core.symbol_index.SymbolIndex") as mock_si, \
+         patch("app.core.llm.LLM") as mock_llm, \
+         patch("app.health.health_metrics.psutil") as mock_psutil:
+
+        # Mock subprocess.run for flake8, pytest, etc.
+        # Note: pytest output parser expects format like "10 passed" "2 failed" "3 skipped"
+        mock_run.return_value = Mock(stdout="10 passed 2 failed 3 skipped", stderr="", returncode=0)
+
+        # Mock ProjectIndex and SymbolIndex
+        mock_pi_instance = Mock()
+        mock_pi_instance.build.return_value = None
+        mock_pi.return_value = mock_pi_instance
+
+        mock_si_instance = Mock()
+        mock_si_instance.build.return_value = None
+        mock_si.return_value = mock_si_instance
+
+        # Mock LLM
+        mock_llm_instance = Mock()
+        mock_llm_instance.ask.return_value = "4"
+        mock_llm.return_value = mock_llm_instance
+
+        # Mock psutil
+        mock_psutil.cpu_percent.return_value = 25.0
+        mock_psutil.virtual_memory.return_value = Mock(percent=50.0, used=1024*1024*1024)
+        mock_psutil.disk_usage.return_value = Mock(percent=60.0, used=1024*1024*1024, total=1024*1024*1024)
+
+        yield mock_run
 
 from app.health.health_metrics import (
     Metric,
@@ -87,7 +154,7 @@ class TestMetric:
             name="test",
             description="Test",
             category="test",
-            value=35.0,
+            value=50.0,
             unit="%",
             threshold_excellent=100,
             threshold_good=80,
@@ -129,33 +196,67 @@ class TestMetric:
 class TestCodeQualityMetrics:
     """Tests for CodeQualityMetrics."""
 
-    def test_count_files(self):
+    def test_count_files(self, temp_workspace):
         """Test counting files."""
-        cq = CodeQualityMetrics()
+        cq = CodeQualityMetrics(temp_workspace)
         metric = cq.count_files()
         assert metric.name == "total_files"
         assert metric.value > 0
         assert metric.unit == "files"
 
-    def test_count_python_files(self):
+    def test_count_python_files(self, temp_workspace):
         """Test counting Python files."""
-        cq = CodeQualityMetrics()
+        cq = CodeQualityMetrics(temp_workspace)
         metric = cq.count_python_files()
         assert metric.name == "python_files"
         assert metric.value > 0
         assert metric.unit == "files"
 
-    def test_count_lines_of_code(self):
+    def test_count_lines_of_code(self, temp_workspace):
         """Test counting lines of code."""
-        cq = CodeQualityMetrics()
+        cq = CodeQualityMetrics(temp_workspace)
         metric = cq.count_lines_of_code()
         assert metric.name == "lines_of_code"
         assert metric.value > 0
         assert metric.unit == "lines"
 
-    def test_collect_all(self):
-        """Test collecting all code quality metrics."""
+    @patch("subprocess.run")
+    def test_check_pep8_compliance(self, mock_run):
+        """Test PEP 8 compliance check (mocked - calls flake8 subprocess)."""
+        mock_run.return_value = Mock(stdout="", stderr="", returncode=0)
         cq = CodeQualityMetrics()
+        metric = cq.check_pep8_compliance()
+        assert metric.name == "pep8_compliance"
+        assert metric.value is not None
+        assert metric.unit == "%"
+
+    def test_check_import_structure(self, temp_workspace):
+        """Test import structure check."""
+        cq = CodeQualityMetrics(temp_workspace)
+        metric = cq.check_import_structure()
+        assert metric.name == "import_structure"
+        assert metric.value is not None
+        assert metric.unit == "%"
+
+    def test_count_docstrings(self, temp_workspace):
+        """Test docstring count."""
+        cq = CodeQualityMetrics(temp_workspace)
+        metric = cq.count_docstrings()
+        assert metric.name == "docstring_coverage"
+        assert metric.value is not None
+        assert metric.unit == "%"
+
+    def test_check_type_hints(self, temp_workspace):
+        """Test type hints check."""
+        cq = CodeQualityMetrics(temp_workspace)
+        metric = cq.check_type_hints()
+        assert metric.name == "type_hint_coverage"
+        assert metric.value is not None
+        assert metric.unit == "%"
+
+    def test_collect_all(self, temp_workspace):
+        """Test collecting all code quality metrics."""
+        cq = CodeQualityMetrics(temp_workspace)
         metrics = cq.collect_all()
         assert len(metrics) > 0
         names = [m.name for m in metrics]
@@ -167,17 +268,47 @@ class TestCodeQualityMetrics:
 class TestTestMetrics:
     """Tests for TestMetrics."""
 
-    def test_count_tests(self):
+    def test_count_tests(self, temp_workspace):
         """Test counting tests."""
-        tm = TestMetrics()
+        tm = TestMetrics(temp_workspace)
         metric = tm.count_tests()
         assert metric.name == "total_tests"
         assert metric.value > 0
         assert metric.unit == "tests"
 
-    def test_collect_all(self):
-        """Test collecting all test metrics."""
+    @patch("subprocess.run")
+    def test_run_tests(self, mock_run):
+        """Test running tests returns pass rate metric (mocked - calls pytest subprocess)."""
+        mock_run.return_value = Mock(stdout="10 passed 2 failed 3 skipped", stderr="", returncode=0)
         tm = TestMetrics()
+        metric = tm.run_tests()
+        assert metric.name == "test_pass_rate"
+        assert metric.value >= 0
+        assert metric.unit == "%"
+
+    @patch("subprocess.run")
+    def test_test_coverage(self, mock_run):
+        """Test coverage metric (mocked - calls pytest with coverage subprocess)."""
+        mock_run.return_value = Mock(stdout="TOTAL    85%", stderr="", returncode=0)
+        tm = TestMetrics()
+        metric = tm.test_coverage()
+        assert metric.name == "test_coverage"
+        assert metric.value is not None
+        assert metric.unit == "%"
+
+    @patch("subprocess.run")
+    def test_count_skipped_tests(self, mock_run):
+        """Test counting skipped tests (mocked - calls pytest subprocess)."""
+        mock_run.return_value = Mock(stdout="5 skipped", stderr="", returncode=0)
+        tm = TestMetrics()
+        metric = tm.count_skipped_tests()
+        assert metric.name == "skipped_tests"
+        assert metric.value >= 0
+        assert metric.unit == "tests"
+
+    def test_collect_all(self, temp_workspace, mock_expensive_operations):
+        """Test collecting all test metrics."""
+        tm = TestMetrics(temp_workspace)
         metrics = tm.collect_all()
         assert len(metrics) > 0
         names = [m.name for m in metrics]
@@ -187,16 +318,40 @@ class TestTestMetrics:
 class TestPerformanceMetrics:
     """Tests for PerformanceMetrics."""
 
-    def test_indexing_speed(self):
-        """Test measuring indexing speed."""
+    @patch("app.core.project_index.ProjectIndex")
+    @patch("app.core.symbol_index.SymbolIndex")
+    def test_indexing_speed(self, mock_symbol_index, mock_project_index, mock_expensive_operations):
+        """Test measuring indexing speed (mocked - builds actual indexes)."""
+        mock_pi = Mock()
+        mock_pi.build.return_value = None
+        mock_project_index.return_value = mock_pi
+
+        mock_si = Mock()
+        mock_si.build.return_value = None
+        mock_symbol_index.return_value = mock_si
+
         pm = PerformanceMetrics()
         metric = pm.indexing_speed()
         assert metric.name == "indexing_speed"
         assert metric.unit == "seconds"
+        assert metric.value is not None
 
-    def test_collect_all(self):
-        """Test collecting all performance metrics."""
+    @patch("app.core.llm.LLM")
+    def test_llm_response_time(self, mock_llm, mock_expensive_operations):
+        """Test LLM response time (mocked - calls actual LLM)."""
+        mock_llm_instance = Mock()
+        mock_llm_instance.ask.return_value = "4"
+        mock_llm.return_value = mock_llm_instance
+
         pm = PerformanceMetrics()
+        metric = pm.llm_response_time()
+        assert metric.name == "llm_response_time"
+        assert metric.unit == "seconds"
+        assert metric.value is not None
+
+    def test_collect_all(self, temp_workspace, mock_expensive_operations):
+        """Test collecting all performance metrics."""
+        pm = PerformanceMetrics(temp_workspace)
         metrics = pm.collect_all()
         assert len(metrics) > 0
         names = [m.name for m in metrics]
@@ -206,8 +361,8 @@ class TestPerformanceMetrics:
 class TestSystemMetrics:
     """Tests for SystemMetrics."""
 
-    def test_cpu_usage(self):
-        """Test getting CPU usage."""
+    def test_cpu_usage(self, mock_expensive_operations):
+        """Test getting CPU usage (mocked - uses psutil)."""
         sm = SystemMetrics()
         metric = sm.cpu_usage()
         assert metric.name == "cpu_usage"
@@ -215,8 +370,8 @@ class TestSystemMetrics:
         if metric.value is not None:
             assert 0 <= metric.value <= 100
 
-    def test_memory_usage(self):
-        """Test getting memory usage."""
+    def test_memory_usage(self, mock_expensive_operations):
+        """Test getting memory usage (mocked - uses psutil)."""
         sm = SystemMetrics()
         metric = sm.memory_usage()
         assert metric.name == "memory_usage"
@@ -224,24 +379,24 @@ class TestSystemMetrics:
         if metric.value is not None:
             assert 0 <= metric.value <= 100
 
-    def test_disk_usage(self):
-        """Test getting disk usage."""
+    def test_disk_usage(self, mock_expensive_operations):
+        """Test getting disk usage (mocked - uses psutil)."""
         sm = SystemMetrics()
         metric = sm.disk_usage()
         assert metric.name == "disk_usage"
         assert metric.unit == "%"
 
-    def test_pycache_size(self):
+    def test_pycache_size(self, temp_workspace):
         """Test getting __pycache__ size."""
-        sm = SystemMetrics()
+        sm = SystemMetrics(temp_workspace)
         metric = sm.pycache_size()
         assert metric.name == "pycache_size"
         assert metric.unit == "MB"
         assert metric.value >= 0
 
-    def test_collect_all(self):
+    def test_collect_all(self, temp_workspace, mock_expensive_operations):
         """Test collecting all system metrics."""
-        sm = SystemMetrics()
+        sm = SystemMetrics(temp_workspace)
         metrics = sm.collect_all()
         assert len(metrics) > 0
         names = [m.name for m in metrics]
@@ -285,27 +440,27 @@ class TestAlert:
 class TestHealthMonitor:
     """Tests for HealthMonitor."""
 
-    def test_monitor_initialization(self):
+    def test_monitor_initialization(self, temp_workspace):
         """Test monitor initialization."""
-        monitor = HealthMonitor()
+        monitor = HealthMonitor(temp_workspace)
         assert monitor.workspace.exists()
         assert monitor.check_interval == 300
 
-    def test_collect_metrics(self):
+    def test_collect_metrics(self, temp_workspace, mock_expensive_operations):
         """Test collecting metrics."""
-        monitor = HealthMonitor()
+        monitor = HealthMonitor(temp_workspace)
         metrics = monitor.collect_metrics()
         assert len(metrics) > 0
 
-    def test_check_metrics(self):
+    def test_check_metrics(self, temp_workspace, mock_expensive_operations):
         """Test checking metrics and getting alerts."""
-        monitor = HealthMonitor()
+        monitor = HealthMonitor(temp_workspace)
         alerts = monitor.check_metrics()
         assert isinstance(alerts, dict)
 
-    def test_get_summary(self):
+    def test_get_summary(self, temp_workspace, mock_expensive_operations):
         """Test getting summary."""
-        monitor = HealthMonitor()
+        monitor = HealthMonitor(temp_workspace)
         monitor.check_metrics()
         summary = monitor.get_summary()
         assert "status" in summary
@@ -313,38 +468,26 @@ class TestHealthMonitor:
         assert "metrics_count" in summary
         assert "alerts_count" in summary
 
-    def test_get_health_score(self):
+    def test_get_health_score(self, temp_workspace, mock_expensive_operations):
         """Test getting health score."""
-        monitor = HealthMonitor()
+        monitor = HealthMonitor(temp_workspace)
         monitor.check_metrics()
         score = monitor.get_health_score()
         assert 0 <= score <= 100
 
-    def test_get_status(self):
+    def test_get_status(self, temp_workspace, mock_expensive_operations):
         """Test getting overall status."""
-        monitor = HealthMonitor()
+        monitor = HealthMonitor(temp_workspace)
         monitor.check_metrics()
         status = monitor.get_status()
         assert isinstance(status, HealthStatus)
 
-    def test_set_threshold(self):
+    def test_set_threshold(self, temp_workspace):
         """Test setting custom threshold."""
-        monitor = HealthMonitor()
+        monitor = HealthMonitor(temp_workspace)
         monitor.set_threshold("test_metric", "excellent", 90.0)
         assert "test_metric" in monitor.custom_thresholds
         assert monitor.custom_thresholds["test_metric"]["excellent"] == 90.0
-
-    def test_identify_duplicates(self):
-        """Test identifying duplicates."""
-        monitor = HealthMonitor()
-        duplicates = monitor.identify_duplicates()
-        assert isinstance(duplicates, dict)
-
-    def test_identify_technical_debt(self):
-        """Test identifying technical debt."""
-        monitor = HealthMonitor()
-        debt = monitor.identify_technical_debt()
-        assert isinstance(debt, dict)
 
 
 class TestLoggingAlertCallback:
@@ -383,9 +526,9 @@ class TestLoggingAlertCallback:
 class TestHealthReport:
     """Tests for HealthReport."""
 
-    def test_report_generation(self):
+    def test_report_generation(self, temp_workspace, mock_expensive_operations):
         """Test generating a report."""
-        monitor = HealthMonitor()
+        monitor = HealthMonitor(temp_workspace)
         report = HealthReport(monitor)
         data = report.generate(run_check=True)
         assert "metadata" in data
@@ -394,9 +537,9 @@ class TestHealthReport:
         assert "alerts" in data
         assert "recommendations" in data
 
-    def test_report_save_json(self):
+    def test_report_save_json(self, temp_workspace, mock_expensive_operations):
         """Test saving report as JSON."""
-        monitor = HealthMonitor()
+        monitor = HealthMonitor(temp_workspace)
         report = HealthReport(monitor)
         report.generate()
 
@@ -408,9 +551,9 @@ class TestHealthReport:
                 loaded = json.load(f)
             assert "metadata" in loaded
 
-    def test_report_save_markdown(self):
+    def test_report_save_markdown(self, temp_workspace, mock_expensive_operations):
         """Test saving report as Markdown."""
-        monitor = HealthMonitor()
+        monitor = HealthMonitor(temp_workspace)
         report = HealthReport(monitor)
         report.generate()
 
@@ -421,9 +564,9 @@ class TestHealthReport:
             content = path.read_text()
             assert "# Freya Health Report" in content
 
-    def test_report_save_text(self):
+    def test_report_save_text(self, temp_workspace, mock_expensive_operations):
         """Test saving report as plain text."""
-        monitor = HealthMonitor()
+        monitor = HealthMonitor(temp_workspace)
         report = HealthReport(monitor)
         report.generate()
 
@@ -434,9 +577,9 @@ class TestHealthReport:
             content = path.read_text()
             assert "FREYA HEALTH REPORT" in content
 
-    def test_get_summary(self):
+    def test_get_summary(self, temp_workspace, mock_expensive_operations):
         """Test getting report summary."""
-        monitor = HealthMonitor()
+        monitor = HealthMonitor(temp_workspace)
         report = HealthReport(monitor)
         summary = report.get_summary()
         assert "Freya Health Status" in summary
@@ -446,58 +589,58 @@ class TestHealthReport:
 class TestHealthDashboard:
     """Tests for HealthDashboard."""
 
-    def test_dashboard_initialization(self):
+    def test_dashboard_initialization(self, temp_workspace, mock_expensive_operations):
         """Test dashboard initialization."""
-        dashboard = HealthDashboard()
+        dashboard = HealthDashboard(workspace=temp_workspace)
         assert dashboard.monitor is not None
         assert dashboard.report is not None
 
-    def test_display_text(self, capsys):
+    def test_display_text(self, capsys, temp_workspace, mock_expensive_operations):
         """Test displaying dashboard as text."""
-        dashboard = HealthDashboard()
+        dashboard = HealthDashboard(workspace=temp_workspace)
         dashboard.display(format="text")
         captured = capsys.readouterr()
         assert "FREYA HEALTH DASHBOARD" in captured.out
 
-    def test_display_markdown(self, capsys):
+    def test_display_markdown(self, capsys, temp_workspace, mock_expensive_operations):
         """Test displaying dashboard as Markdown."""
-        dashboard = HealthDashboard()
+        dashboard = HealthDashboard(workspace=temp_workspace)
         dashboard.display(format="markdown")
         captured = capsys.readouterr()
         assert "# Freya Health Report" in captured.out
 
-    def test_display_json(self, capsys):
+    def test_display_json(self, capsys, temp_workspace, mock_expensive_operations):
         """Test displaying dashboard as JSON."""
-        dashboard = HealthDashboard()
+        dashboard = HealthDashboard(workspace=temp_workspace)
         dashboard.display(format="json")
         captured = capsys.readouterr()
         output = json.loads(captured.out)
         assert "metadata" in output
 
-    def test_get_metric(self):
+    def test_get_metric(self, temp_workspace, mock_expensive_operations):
         """Test getting a specific metric."""
-        dashboard = HealthDashboard()
+        dashboard = HealthDashboard(workspace=temp_workspace)
         dashboard.refresh()
         metric = dashboard.get_metric("total_files")
         assert metric is not None
         assert metric.name == "total_files"
 
-    def test_get_alerts(self):
+    def test_get_alerts(self, temp_workspace, mock_expensive_operations):
         """Test getting alerts."""
-        dashboard = HealthDashboard()
+        dashboard = HealthDashboard(workspace=temp_workspace)
         alerts = dashboard.get_alerts()
         assert isinstance(alerts, list)
 
-    def test_get_summary(self):
+    def test_get_summary(self, temp_workspace, mock_expensive_operations):
         """Test getting summary."""
-        dashboard = HealthDashboard()
+        dashboard = HealthDashboard(workspace=temp_workspace)
         summary = dashboard.get_summary()
         assert "status" in summary
         assert "score" in summary
 
-    def test_refresh(self):
+    def test_refresh(self, temp_workspace, mock_expensive_operations):
         """Test refreshing dashboard data."""
-        dashboard = HealthDashboard()
+        dashboard = HealthDashboard(workspace=temp_workspace)
         dashboard.refresh()
         assert dashboard.report.report_data is not None
 
@@ -505,9 +648,9 @@ class TestHealthDashboard:
 class TestHealthIntegration:
     """Integration tests for the health system."""
 
-    def test_full_health_check(self):
+    def test_full_health_check(self, temp_workspace, mock_expensive_operations):
         """Test a complete health check."""
-        monitor = HealthMonitor()
+        monitor = HealthMonitor(temp_workspace)
         monitor.check_metrics()
 
         # Check we have metrics

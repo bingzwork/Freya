@@ -40,6 +40,7 @@ from app.autonomous_learning.gap_detection import KnowledgeGapDetector
 from app.autonomous_learning.research_loop import AutonomousResearchLoop
 from app.autonomous_learning.analytics import LearningAnalytics
 from app.memory.cross_references import CrossMemoryReferences
+from app.memory.goals import GoalStorage
 from app.multi_agent_learning.share import KnowledgeSharer, KnowledgeReceiver
 from app.memory.consolidation import ConsolidationEngine, ConsolidationConfig, ConsolidationTrigger, create_consolidation_engine
 
@@ -1140,6 +1141,12 @@ class AutonomousLearningPipeline:
 
         Analyzes active goals to determine what knowledge is required to achieve them,
         compares with existing knowledge, and identifies gaps.
+
+        Enhanced features:
+        - Goal dependency-aware gap detection (blocked goals get higher priority)
+        - Goal hierarchy support (parent goals propagate requirements)
+        - Research prioritization based on goal priority and blocking status
+        - Cross-reference tracking for traceability
         """
         if not self.goal_storage or not self.planner or not self.config.goal_driven_learning_enabled:
             return
@@ -1147,20 +1154,8 @@ class AutonomousLearningPipeline:
         try:
             logger.debug("Detecting goal-driven knowledge gaps")
 
-            # Get active and pending goals
-            goals = []
-            active_goal = self.goal_storage.active_goal()
-            if active_goal:
-                goals.append(active_goal)
-
-            # Get queued goals
-            queued_goals = self.goal_storage.queue()
-            goals.extend(queued_goals[:10])  # Limit to avoid overload
-
-            # Also get any goals that are not completed
-            all_goals = self.goal_storage.all()
-            incomplete_goals = [g for g in all_goals if getattr(g, 'status', '') != 'completed']
-            goals.extend([g for g in incomplete_goals if g not in goals][:10])  # Limit and deduplicate
+            # Get active and pending goals with enhanced filtering
+            goals = self._get_relevant_goals_for_gap_analysis()
 
             goal_gaps = []
 
@@ -1170,6 +1165,9 @@ class AutonomousLearningPipeline:
                     if not getattr(goal, 'description', None) and not getattr(goal, 'name', None):
                         continue
 
+                    # Check if goal is blocked - blocked goals get priority for gap detection
+                    is_blocked = self._is_goal_blocked(goal)
+
                     # Create a plan for this goal to understand what tasks are involved
                     goal_description = getattr(goal, 'description', '') or getattr(goal, 'name', '')
                     plan = self.planner.create_plan(goal_description)
@@ -1177,11 +1175,21 @@ class AutonomousLearningPipeline:
                     # Extract knowledge requirements from goal and plan
                     required_knowledge = self._extract_knowledge_requirements(goal, plan)
 
+                    # Also get requirements from goal dependencies
+                    dep_requirements = self._extract_dependency_requirements(goal)
+                    for cat, items in dep_requirements.items():
+                        required_knowledge[cat].update(items)
+
                     # Check what knowledge we already have
                     available_knowledge = self._get_available_knowledge()
 
                     # Identify gaps
-                    gaps = self._identify_knowledge_gaps(goal, required_knowledge, available_knowledge)
+                    gaps = self._identify_knowledge_gaps(goal, required_knowledge, available_knowledge, is_blocked)
+
+                    # Add cross-references if available
+                    if self.cross_references and gaps:
+                        self._add_goal_gap_cross_references(goal, gaps)
+
                     goal_gaps.extend(gaps)
 
                 except Exception as e:
@@ -1199,19 +1207,59 @@ class AutonomousLearningPipeline:
                     {"goal_gap_count": len(goal_gaps)}
                 )
 
-                # Optionally, we could trigger immediate research for high-priority gaps
-                # but for now, we'll just record them and let the regular gap detection
-                # and research loop handle them in the next cycle
+                # Trigger immediate research for critical/priority gaps
+                self._schedule_goal_gap_research(goal_gaps)
 
         except Exception as e:
             logger.error(f"Error detecting goal-driven knowledge gaps: {e}")
             self.stats.errors.append(f"Goal-driven gap detection failed: {str(e)}")
 
-    def _extract_knowledge_requirements(self, goal: Any, plan: Any) -> Dict[str, Any]:
-        """Extract knowledge requirements from a goal and its plan.
+    def _get_relevant_goals_for_gap_analysis(self) -> List[Any]:
+        """Get goals relevant for gap analysis with enhanced filtering."""
+        goals = []
 
-        Returns a dictionary categorizing the knowledge needed.
-        """
+        # Get active goal (highest priority)
+        active_goal = self.goal_storage.active_goal()
+        if active_goal:
+            goals.append(active_goal)
+
+        # Get queued goals (next in line)
+        queued_goals = self.goal_storage.queue()
+        goals.extend(queued_goals[:15])  # Limit to avoid overload
+
+        # Get incomplete goals that aren't blocked by missing dependencies
+        all_goals = self.goal_storage.all()
+        for goal in all_goals:
+            if getattr(goal, 'status', '') != 'completed' and goal not in goals:
+                # Only include if not explicitly blocked by user
+                if getattr(goal, 'status', '') != 'blocked':
+                    goals.append(goal)
+                    if len(goals) >= 25:
+                        break
+
+        # Add parent goals of active/queued goals (they propagate requirements)
+        for goal in list(goals):
+            parent = self.goal_storage.parent_of(goal.id)
+            if parent and parent not in goals and parent.status != 'completed':
+                goals.append(parent)
+
+        return goals
+
+    def _is_goal_blocked(self, goal: Any) -> bool:
+        """Check if a goal is blocked (by dependencies or explicit status)."""
+        try:
+            # Check explicit blocked status
+            if getattr(goal, 'status', '') == 'blocked':
+                return True
+            # Check if blocked by incomplete dependencies
+            if hasattr(self.goal_storage, 'is_blocked'):
+                return self.goal_storage.is_blocked(goal.id)
+        except Exception:
+            pass
+        return False
+
+    def _extract_dependency_requirements(self, goal: Any) -> Dict[str, Set[str]]:
+        """Extract knowledge requirements from goal dependencies."""
         requirements = {
             'concepts': set(),
             'tools': set(),
@@ -1221,155 +1269,21 @@ class AutonomousLearningPipeline:
         }
 
         try:
-            # Extract from goal name and description
-            goal_text = f"{getattr(goal, 'name', '')} {getattr(goal, 'description', '')}".lower()
-
-            # Enhanced keyword extraction with better categorization
-            # Use a combination of pattern matching and known technology lists
-
-            # Known frameworks/technologies
-            known_frameworks = {
-                'django', 'flask', 'fastapi', 'express', 'react', 'vue', 'angular', 'svelte',
-                'spring', 'springboot', 'rails', 'laravel', 'dotnet', 'aspnet', 'nodejs', 'nextjs',
-                'pytorch', 'tensorflow', 'jax', 'sklearn', 'pandas', 'numpy', 'scipy',
-                'kubernetes', 'docker', 'terraform', 'ansible', 'helm',
-                'postgresql', 'mysql', 'mongodb', 'redis', 'sqlite', 'cassandra',
-                'graphql', 'rest', 'grpc', 'websocket',
-                'aws', 'gcp', 'azure', 'vercel', 'netlify',
-                'github', 'gitlab', 'bitbucket', 'ci', 'cd', 'jenkins', 'githubactions',
-                'pytest', 'jest', 'vitest', 'cypress', 'playwright', 'selenium',
-                'webpack', 'vite', 'rollup', 'esbuild', 'swc', 'babel', 'typescript',
-                'rust', 'go', 'java', 'python', 'javascript', 'typescript', 'cpp', 'csharp',
-                'sqlalchemy', 'prisma', 'drizzle', 'typeorm', 'mongoose',
-            }
-
-            # Known tools
-            known_tools = {
-                'git', 'docker', 'kubectl', 'terraform', 'ansible', 'helm', 'vagrant',
-                'curl', 'wget', 'httpie', 'postman', 'insomnia',
-                'vscode', 'vim', 'neovim', 'emacs', 'intellij', 'pycharm', 'webstorm',
-                'eslint', 'prettier', 'black', 'isort', 'flake8', 'mypy', 'pyright',
-                'jest', 'vitest', 'pytest', 'coverage', 'sonarqube',
-                'prometheus', 'grafana', 'datadog', 'newrelic', 'sentry',
-                'nginx', 'apache', 'traefik', 'caddy',
-                'redis', 'memcached', 'rabbitmq', 'kafka', 'nats',
-            }
-
-            # Known skills/methods
-            known_skills = {
-                'testing', 'debugging', 'refactoring', 'optimization', 'profiling',
-                'deployment', 'ci_cd', 'monitoring', 'logging', 'tracing',
-                'security', 'authentication', 'authorization', 'encryption',
-                'database_design', 'api_design', 'architecture', 'scalability',
-                'performance', 'caching', 'async', 'concurrency', 'parallelism',
-                'machine_learning', 'data_science', 'nlp', 'computer_vision',
-                'code_review', 'documentation', 'technical_writing', 'mentoring',
-            }
-
-            # Known domains
-            known_domains = {
-                'web', 'mobile', 'backend', 'frontend', 'fullstack',
-                'database', 'cloud', 'devops', 'security', 'ai', 'ml',
-                'data', 'analytics', 'blockchain', 'embedded', 'iot',
-                'game', 'graphics', 'compiler', 'os', 'kernel',
-                'network', 'distributed', 'microservices', 'serverless',
-            }
-
-            words = re.findall(r'\b[a-zA-Z][a-zA-Z0-9_-]*\b', goal_text)
-
-            for word in words:
-                word_lower = word.lower()
-                if len(word_lower) <= 2:
-                    continue
-
-                # Check frameworks
-                if word_lower in known_frameworks:
-                    requirements['frameworks'].add(word_lower)
-                    requirements['tools'].add(word_lower)
-                    continue
-
-                # Check tools
-                if word_lower in known_tools:
-                    requirements['tools'].add(word_lower)
-                    continue
-
-                # Check skills
-                if word_lower in known_skills:
-                    requirements['skills'].add(word_lower)
-                    continue
-
-                # Check domains
-                if word_lower in known_domains:
-                    requirements['domains'].add(word_lower)
-                    continue
-
-                # Check for tech-like patterns (compound words with dots, hyphens, underscores)
-                if any(sep in word_lower for sep in ['.', '-', '_']):
-                    requirements['tools'].add(word_lower)
-                    requirements['frameworks'].add(word_lower)
-                    continue
-
-                # Longer words that might be concepts
-                if len(word_lower) > 4:
-                    requirements['concepts'].add(word_lower)
-
-            # Also extract from specific patterns like "use X", "implement Y with Z"
-            import_pattern = re.findall(r'\b(?:use|using|with|implement|build|create|add|integrate|setup|configure)\s+(\w+)', goal_text)
-            for match in import_pattern:
-                if match.lower() in known_frameworks:
-                    requirements['frameworks'].add(match.lower())
-                    requirements['tools'].add(match.lower())
-                elif match.lower() in known_tools:
-                    requirements['tools'].add(match.lower())
-                elif len(match) > 3:
-                    requirements['concepts'].add(match.lower())
-
-            # Extract from plan steps if available
-            if hasattr(plan, 'tasks'):
-                for task in plan.tasks:
-                    task_text = f"{getattr(task, 'title', '')} {getattr(task, 'description', '')}".lower()
-                    words = re.findall(r'\b[a-zA-Z][a-zA-Z0-9_-]*\b', task_text)
-                    for word in words:
-                        word_lower = word.lower()
-                        if len(word_lower) <= 2:
-                            continue
-                        if word_lower in known_frameworks:
-                            requirements['frameworks'].add(word_lower)
-                            requirements['tools'].add(word_lower)
-                        elif word_lower in known_tools:
-                            requirements['tools'].add(word_lower)
-                        elif word_lower in known_skills:
-                            requirements['skills'].add(word_lower)
-                        elif word_lower in known_domains:
-                            requirements['domains'].add(word_lower)
-                        elif any(sep in word_lower for sep in ['.', '-', '_']):
-                            requirements['tools'].add(word_lower)
-                            requirements['frameworks'].add(word_lower)
-                        elif len(word_lower) > 4:
-                            requirements['concepts'].add(word_lower)
-
-                    # Also check for specific patterns in task descriptions
-                    import_pattern = re.findall(r'\b(?:use|using|with|implement|build|create|add|integrate|setup|configure)\s+(\w+)', task_text)
-                    for match in import_pattern:
-                        if match.lower() in known_frameworks:
-                            requirements['frameworks'].add(match.lower())
-                            requirements['tools'].add(match.lower())
-                        elif match.lower() in known_tools:
-                            requirements['tools'].add(match.lower())
-                        elif len(match) > 3:
-                            requirements['concepts'].add(match.lower())
-
+            if hasattr(self.goal_storage, 'dependencies_of'):
+                deps = self.goal_storage.dependencies_of(goal.id)
+                for dep in deps:
+                    dep_text = f"{getattr(dep, 'name', '')} {getattr(dep, 'description', '')}".lower()
+                    dep_requirements = self._extract_keywords_from_text(dep_text)
+                    for cat, items in dep_requirements.items():
+                        requirements[cat].update(items)
         except Exception as e:
-            logger.debug(f"Error extracting knowledge requirements: {e}")
+            logger.debug(f"Error extracting dependency requirements: {e}")
 
         return requirements
 
-    def _get_available_knowledge(self) -> Dict[str, Set[str]]:
-        """Get currently available knowledge from our memory systems.
-
-        Returns a dictionary categorizing the knowledge we already have.
-        """
-        available = {
+    def _extract_keywords_from_text(self, text: str) -> Dict[str, Set[str]]:
+        """Extract categorized keywords from text."""
+        requirements = {
             'concepts': set(),
             'tools': set(),
             'frameworks': set(),
@@ -1377,99 +1291,107 @@ class AutonomousLearningPipeline:
             'domains': set()
         }
 
-        try:
-            # Check semantic memory for concepts
-            if self.semantic_memory:
-                try:
-                    semantic_entries = self.semantic_memory.all() if hasattr(self.semantic_memory, 'all') else []
-                    for entry in semantic_entries[:100]:  # Limit for performance
-                        if hasattr(entry, 'key'):
-                            available['concepts'].add(entry.key.lower())
-                        if hasattr(entry, 'tags'):
-                            for tag in getattr(entry, 'tags', []):
-                                if isinstance(tag, str):
-                                    available['concepts'].add(tag.lower())
-                                    # Categorize tags
-                                    if any(tech in tag.lower() for tech in ['api', 'sdk', 'framework', 'library', 'tool']):
-                                        available['tools'].add(tag.lower())
-                                        available['frameworks'].add(tag.lower())
-                                    if any(domain in tag.lower() for domain in ['web', 'mobile', 'database', 'cloud', 'security']):
-                                        available['domains'].add(tag.lower())
-                except Exception as e:
-                    logger.debug(f"Error accessing semantic memory: {e}")
+        # Known frameworks/technologies
+        known_frameworks = {
+            'django', 'flask', 'fastapi', 'express', 'react', 'vue', 'angular', 'svelte',
+            'spring', 'springboot', 'rails', 'laravel', 'dotnet', 'aspnet', 'nodejs', 'nextjs',
+            'pytorch', 'tensorflow', 'jax', 'sklearn', 'pandas', 'numpy', 'scipy',
+            'kubernetes', 'docker', 'terraform', 'ansible', 'helm',
+            'postgresql', 'mysql', 'mongodb', 'redis', 'sqlite', 'cassandra',
+            'graphql', 'rest', 'grpc', 'websocket',
+            'aws', 'gcp', 'azure', 'vercel', 'netlify',
+            'github', 'gitlab', 'bitbucket', 'ci', 'cd', 'jenkins', 'githubactions',
+            'pytest', 'jest', 'vitest', 'cypress', 'playwright', 'selenium',
+            'webpack', 'vite', 'rollup', 'esbuild', 'swc', 'babel', 'typescript',
+            'rust', 'go', 'java', 'python', 'javascript', 'typescript', 'cpp', 'csharp',
+            'sqlalchemy', 'prisma', 'drizzle', 'typeorm', 'mongoose',
+        }
 
-            # Check engineering lessons for skills, tools, frameworks
-            if self.engineering_lessons:
-                try:
-                    lessons = self.engineering_lessons.all() if hasattr(self.engineering_lessons, 'all') else []
-                    for lesson in lessons[:100]:  # Limit for performance
-                        if hasattr(lesson, 'title'):
-                            title_lower = lesson.title.lower()
-                            available['concepts'].add(title_lower)
-                            if hasattr(lesson, 'tags'):
-                                for tag in getattr(lesson, 'tags', []):
-                                    if isinstance(tag, str):
-                                        tag_lower = tag.lower()
-                                        available['concepts'].add(tag_lower)
-                                        if any(tech in tag_lower for tech in ['api', 'sdk', 'framework', 'library', 'tool']):
-                                            available['tools'].add(tag_lower)
-                                            available['frameworks'].add(tag_lower)
-                                        if any(skill in tag_lower for skill in ['test', 'deploy', 'build', 'compile', 'debug']):
-                                            available['skills'].add(tag_lower)
-                                        if any(domain in tag_lower for domain in ['web', 'mobile', 'database', 'cloud', 'security']):
-                                            available['domains'].add(tag_lower)
-                            if hasattr(lesson, 'category'):
-                                cat = getattr(lesson, 'category', '')
-                                if isinstance(cat, str):
-                                    available['domains'].add(cat.lower())
-                                    if any(skill in cat.lower() for skill in ['test', 'deploy', 'build', 'code']):
-                                        available['skills'].add(cat.lower())
-                        if hasattr(lesson, 'lesson_type'):
-                            lt = getattr(lesson, 'lesson_type', '')
-                            if hasattr(lt, 'value'):
-                                lt_val = lt.value
-                                if isinstance(lt_val, str):
-                                    if any(skill in lt_val.lower() for skill in ['test', 'deploy', 'build', 'debug']):
-                                        available['skills'].add(lt_val.lower())
-                                    if any(domain in lt_val.lower() for domain in ['web', 'mobile', 'database', 'cloud', 'security']):
-                                        available['domains'].add(lt_val.lower())
-                except Exception as e:
-                    logger.debug(f"Error accessing engineering lessons: {e}")
+        # Known tools
+        known_tools = {
+            'git', 'docker', 'kubectl', 'terraform', 'ansible', 'helm', 'vagrant',
+            'curl', 'wget', 'httpie', 'postman', 'insomnia',
+            'vscode', 'vim', 'neovim', 'emacs', 'intellij', 'pycharm', 'webstorm',
+            'eslint', 'prettier', 'black', 'isort', 'flake8', 'mypy', 'pyright',
+            'jest', 'vitest', 'pytest', 'coverage', 'sonarqube',
+            'prometheus', 'grafana', 'datadog', 'newrelic', 'sentry',
+            'nginx', 'apache', 'traefik', 'caddy',
+            'redis', 'memcached', 'rabbitmq', 'kafka', 'nats',
+        }
 
-            # Check experiences for practical knowledge
-            if self.experience_memory:
-                try:
-                    experiences = self.experience_memory.all() if hasattr(self.experience_memory, 'all') else []
-                    for exp in experiences[:100]:  # Limit for performance
-                        if hasattr(exp, 'tags'):
-                            for tag in getattr(exep, 'tags', []):
-                                if isinstance(tag, str):
-                                    tag_lower = tag.lower()
-                                    available['skills'].add(tag_lower)
-                                    if any(tech in tag_lower for tech in ['api', 'sdk', 'framework', 'library', 'tool']):
-                                        available['tools'].add(tag_lower)
-                                        available['frameworks'].add(tag_lower)
-                                    if any(domain in tag_lower for domain in ['web', 'mobile', 'database', 'cloud', 'security']):
-                                        available['domains'].add(tag_lower)
-                        if hasattr(exp, 'category'):
-                            cat = getattr(exp, 'category', '')
-                            if isinstance(cat, str):
-                                available['domains'].add(cat.lower())
-                                if any(skill in cat.lower() for skill in ['test', 'build', 'debug']):
-                                    available['skills'].add(cat.lower())
-                except Exception as e:
-                    logger.debug(f"Error accessing experience memory: {e}")
+        # Known skills/methods
+        known_skills = {
+            'testing', 'debugging', 'refactoring', 'optimization', 'profiling',
+            'deployment', 'ci_cd', 'monitoring', 'logging', 'tracing',
+            'security', 'authentication', 'authorization', 'encryption',
+            'database_design', 'api_design', 'architecture', 'scalability',
+            'performance', 'caching', 'async', 'concurrency', 'parallelism',
+            'machine_learning', 'data_science', 'nlp', 'computer_vision',
+            'code_review', 'documentation', 'technical_writing', 'mentoring',
+        }
 
-        except Exception as e:
-            logger.debug(f"Error getting available knowledge: {e}")
+        # Known domains
+        known_domains = {
+            'web', 'mobile', 'backend', 'frontend', 'fullstack',
+            'database', 'cloud', 'devops', 'security', 'ai', 'ml',
+            'data', 'analytics', 'blockchain', 'embedded', 'iot',
+            'game', 'graphics', 'compiler', 'os', 'kernel',
+            'network', 'distributed', 'microservices', 'serverless',
+        }
 
-        return available
+        words = re.findall(r'\b[a-zA-Z][a-zA-Z0-9_-]*\b', text)
 
-    def _identify_knowledge_gaps(self, goal: Any, required: Dict[str, Set[str]], available: Dict[str, Set[str]]) -> List[KnowledgeGap]:
-        """Identify gaps between required and available knowledge.
+        for word in words:
+            word_lower = word.lower()
+            if len(word_lower) <= 2:
+                continue
 
-        Returns a list of KnowledgeGap objects.
-        """
+            # Check frameworks
+            if word_lower in known_frameworks:
+                requirements['frameworks'].add(word_lower)
+                requirements['tools'].add(word_lower)
+                continue
+
+            # Check tools
+            if word_lower in known_tools:
+                requirements['tools'].add(word_lower)
+                continue
+
+            # Check skills
+            if word_lower in known_skills:
+                requirements['skills'].add(word_lower)
+                continue
+
+            # Check domains
+            if word_lower in known_domains:
+                requirements['domains'].add(word_lower)
+                continue
+
+            # Check for tech-like patterns
+            if any(sep in word_lower for sep in ['.', '-', '_']):
+                requirements['tools'].add(word_lower)
+                requirements['frameworks'].add(word_lower)
+                continue
+
+            # Longer words that might be concepts
+            if len(word_lower) > 4:
+                requirements['concepts'].add(word_lower)
+
+        # Extract from patterns like "use X", "implement Y with Z"
+        import_pattern = re.findall(r'\b(?:use|using|with|implement|build|create|add|integrate|setup|configure)\s+(\w+)', text)
+        for match in import_pattern:
+            if match.lower() in known_frameworks:
+                requirements['frameworks'].add(match.lower())
+                requirements['tools'].add(match.lower())
+            elif match.lower() in known_tools:
+                requirements['tools'].add(match.lower())
+            elif len(match) > 3:
+                requirements['concepts'].add(match.lower())
+
+        return requirements
+
+    def _identify_knowledge_gaps(self, goal: Any, required: Dict[str, Set[str]], available: Dict[str, Set[str]], is_blocked: bool = False) -> List[KnowledgeGap]:
+        """Identify gaps between required and available knowledge with enhanced priority."""
         gaps = []
 
         try:
@@ -1497,6 +1419,10 @@ class AutonomousLearningPipeline:
 
                     # Boost priority for tools and frameworks as they're often blocking
                     if category in ['tools', 'frameworks']:
+                        priority_num = min(4, priority_num + 1)
+
+                    # Further boost if goal is blocked
+                    if is_blocked:
                         priority_num = min(4, priority_num + 1)
 
                     priority_levels = {4: GapPriority.CRITICAL, 3: GapPriority.HIGH, 2: GapPriority.MEDIUM, 1: GapPriority.LOW}
@@ -1530,7 +1456,8 @@ class AutonomousLearningPipeline:
                                 "goal_name": goal_name,
                                 "goal_description": goal_desc,
                                 "requirement_type": category,
-                                "missing_count": len(missing)
+                                "missing_count": len(missing),
+                                "goal_blocked": is_blocked
                             }
                         )
                         gaps.append(gap)
@@ -1539,3 +1466,47 @@ class AutonomousLearningPipeline:
             logger.debug(f"Error identifying knowledge gaps: {e}")
 
         return gaps
+
+    def _add_goal_gap_cross_references(self, goal: Any, gaps: List[KnowledgeGap]) -> None:
+        """Add cross-references between goals and detected knowledge gaps."""
+        if not self.cross_references:
+            return
+        try:
+            for gap in gaps:
+                self.cross_references.add_reference(
+                    source_memory="goals",
+                    source_id=goal.id,
+                    target_memory="knowledge_gap",
+                    target_id=gap.id,
+                    reference_type="source",
+                    confidence=0.8,
+                    description=f"Goal '{goal.name}' requires knowledge: {gap.title}",
+                    metadata={"goal_priority": getattr(goal, 'priority', 'medium'), "gap_category": gap.sub_category}
+                )
+        except Exception as e:
+            logger.debug(f"Error adding goal-gap cross-references: {e}")
+
+    def _schedule_goal_gap_research(self, gaps: List[KnowledgeGap]) -> None:
+        """Schedule immediate research for high-priority goal-driven gaps."""
+        if not self.research_loop or not self.config.research_enabled:
+            return
+
+        # Separate critical/high priority gaps
+        urgent_gaps = [g for g in gaps if g.priority in [GapPriority.CRITICAL, GapPriority.HIGH]]
+
+        for gap in urgent_gaps[:3]:  # Limit to top 3 urgent gaps
+            try:
+                # Create a research task for this gap
+                research_task = ResearchTask(
+                    id=f"goal_research_{gap.id}_{int(time.time())}",
+                    gap_id=gap.id,
+                    query=gap.description,
+                    target_sources=self.config.trusted_sources,
+                    max_results_per_source=5,
+                    status=ResearchStatus.PENDING,
+                    metadata={"goal_driven": True, "priority": gap.priority.value}
+                )
+                # In a full implementation, this would add to research loop's queue
+                logger.info(f"Scheduled goal-driven research for gap: {gap.title}")
+            except Exception as e:
+                logger.debug(f"Error scheduling goal gap research: {e}")

@@ -108,6 +108,15 @@ def _make_isolated_agent() -> FreyaAgent:
     return FreyaAgent(workspace=temp.name), temp
 
 
+def _cleanup_agent(agent: FreyaAgent, temp) -> None:
+    """Properly shutdown agent and cleanup temp directory."""
+    try:
+        agent.shutdown()
+    except Exception:
+        pass
+    temp.cleanup()
+
+
 def _make_lessons_storage():
     """Return an isolated EngineeringLessonStorage rooted in a tmp dir."""
     from app.memory.engineering_lessons import EngineeringLessonStorage
@@ -184,7 +193,7 @@ def test_solve_success_stores_pattern_lesson() -> None:
         assert lessons[-1].category == "task"
         assert after == before + 1
     finally:
-        temp.cleanup()
+        _cleanup_agent(agent, temp)
 
 
 def test_solve_failure_stores_anti_pattern_lesson() -> None:
@@ -206,7 +215,7 @@ def test_solve_failure_stores_anti_pattern_lesson() -> None:
         assert "boom" in (lessons[-1].examples or [""])[0]
         assert after == before + 1
     finally:
-        temp.cleanup()
+        _cleanup_agent(agent, temp)
 
 
 def test_repair_outcome_stores_lesson() -> None:
@@ -238,7 +247,7 @@ def test_repair_outcome_stores_lesson() -> None:
         assert lessons[-1].lesson_type == "pattern"
         assert lessons[-1].severity == "recommended"
     finally:
-        temp.cleanup()
+        _cleanup_agent(agent, temp)
 
 
 # --- Self-Learning Priority 3: engineered lesson retrieval in repair() ---
@@ -316,7 +325,7 @@ def test_repair_prepends_seeded_anti_pattern_on_retry() -> None:
         # The original verification feedback still rides along at the end.
         assert "Previous verification failed" in retry_prompt
     finally:
-        temp.cleanup()
+        _cleanup_agent(agent, temp)
 
 
 def test_repair_omits_past_failures_when_nothing_matches() -> None:
@@ -366,7 +375,7 @@ def test_repair_omits_past_failures_when_nothing_matches() -> None:
         # The retry still carries the verification feedback from RepairLoop.
         assert "Previous verification failed" in seen_prompts[1]
     finally:
-        temp.cleanup()
+        _cleanup_agent(agent, temp)
 
 
 # --- Self-Learning Priority 4: ExperienceMemory writes + run()/Executor integration ---
@@ -390,7 +399,7 @@ def test_solve_success_stores_experience_entry() -> None:
         assert entry.category == "task"
         assert entry.metadata.get("kind") == "solve"
     finally:
-        temp.cleanup()
+        _cleanup_agent(agent, temp)
 
 
 def test_solve_failure_stores_negative_experience_entry() -> None:
@@ -412,7 +421,7 @@ def test_solve_failure_stores_negative_experience_entry() -> None:
         assert entry.category == "debug"
         assert entry.metadata.get("kind") == "solve"
     finally:
-        temp.cleanup()
+        _cleanup_agent(agent, temp)
 
 
 def test_repair_outcome_stores_experience_entry() -> None:
@@ -444,7 +453,7 @@ def test_repair_outcome_stores_experience_entry() -> None:
         assert entry.outcome == "positive"
         assert entry.metadata.get("kind") == "repair"
     finally:
-        temp.cleanup()
+        _cleanup_agent(agent, temp)
 
 
 def test_run_engineering_task_includes_lesson_and_experience_blocks() -> None:
@@ -504,7 +513,9 @@ def test_run_engineering_task_includes_lesson_and_experience_blocks() -> None:
         # Stub out the executor so the engineering path completes without
         # touching real tools.
         agent.executor.execute_plan = lambda *_a, **_kw: []  # type: ignore[assignment]
-        agent.planner.create_plan = lambda _task: {"steps": ["inspect"]}  # type: ignore[assignment]
+        agent.planner.create_plan = lambda _task: Plan(
+            tasks=[Task(id="test_task", title="inspect", category=TaskCategory.IMPLEMENTATION)]
+        )  # type: ignore[assignment]
 
         # ``Refactor app/foo.py`` routes to CODE_TASK and clears
         # _has_sufficient_context via has_action_with_file.
@@ -521,7 +532,7 @@ def test_run_engineering_task_includes_lesson_and_experience_blocks() -> None:
         )
     finally:
         decision_manager_module.decide_context_sufficiency = original_decide_context_sufficiency
-        temp.cleanup()
+        _cleanup_agent(agent, temp)
 
 
 def test_executor_renders_pre_execute_pattern_block() -> None:

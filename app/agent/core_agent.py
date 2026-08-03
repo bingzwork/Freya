@@ -4,6 +4,7 @@ from app.brain.state import ConversationState
 from app.core.llm import LLM
 from app.planner.plan_manager import PlanManager, Plan, TaskCategory
 from app.planner.task import Task, TaskStatus
+from pathlib import Path
 from typing import Optional, Dict, List, Any
 from app.core.logger import logger
 from app.core.project_index import ProjectIndex
@@ -70,6 +71,9 @@ from app.long_term_autonomy.manager import AutonomyManager
 
 # Config Hot-Reload
 from app.core.config_hot_reload import ConfigHotReload, setup_config_hot_reload_for_agent
+
+# File Watcher
+from app.core.file_watcher import get_file_watcher, FileEventType
 
 # Shared Infrastructure
 from app.core.events import get_event_bus, Event, EventPriority
@@ -378,8 +382,13 @@ class FreyaAgent:
         # Config Hot-Reload - watches .env file for changes and reloads configuration
         self.config_hot_reload: Optional[ConfigHotReload] = None
 
+        # File Watcher - watches filesystem for changes and emits events
+        self.file_watcher = None
+
+        # World Model - unified environment snapshot facade
+        self._world_model = None
+
         # Reflection engine for post-task learning
-        self.reflection_engine = ReflectionEngine()
 
         # Progress tracking - stores the last execution's progress snapshot
         self.last_execution_progress: Optional[Dict[str, Any]] = None
@@ -424,9 +433,23 @@ class FreyaAgent:
 
         # Set up event subscriptions for cross-subsystem communication
         self._setup_event_subscriptions()
+
+        # Initialize and start FileWatcher for real-time filesystem monitoring
+        self._init_file_watcher()
         # ==== End Shared Infrastructure Initialization ====
 
         logger.info("Freya Agent initialized")
+
+    @property
+    def world_model(self):
+        """Get or create the WorldModel instance."""
+        if self._world_model is None:
+            from app.world_model.model import create_world_model
+            self._world_model = create_world_model(
+                workspace=self.workspace,
+                project_index=self.project_index,
+            )
+        return self._world_model
 
     def setup_config_hot_reload(self, env_path=None, validate_on_reload=True) -> ConfigHotReload:
         """
@@ -457,6 +480,143 @@ class FreyaAgent:
             self.config_hot_reload.stop()
             self.config_hot_reload = None
             logger.info("Config hot-reload stopped")
+
+    def stop_file_watcher(self) -> None:
+        """Stop the FileWatcher."""
+        if self.file_watcher:
+            try:
+                self.file_watcher.stop()
+                logger.info("[FreyaAgent] FileWatcher stopped")
+            except Exception as e:
+                logger.warning(f"[FreyaAgent] Error stopping FileWatcher: {e}")
+            finally:
+                self.file_watcher = None
+
+    def _init_file_watcher(self) -> None:
+        """Initialize and start the FileWatcher for real-time filesystem monitoring."""
+        try:
+            self.file_watcher = get_file_watcher(self.workspace)
+
+            # Subscribe to file events to update indexes and world model
+            self._setup_file_watcher_subscriptions()
+
+            # Start the watcher
+            self.file_watcher.start()
+            logger.info(f"[FreyaAgent] FileWatcher started for workspace: {self.workspace}")
+        except Exception as e:
+            logger.warning(f"[FreyaAgent] Failed to initialize FileWatcher: {e}")
+            self.file_watcher = None
+
+    def _setup_file_watcher_subscriptions(self) -> None:
+        """Set up event subscriptions for file system events."""
+        if not self.file_watcher:
+            return
+
+        # Subscribe to file events via EventBus (FileWatcher emits events there)
+        self.event_bus.subscribe("file.created", self._on_file_created)
+        self.event_bus.subscribe("file.modified", self._on_file_modified)
+        self.event_bus.subscribe("file.deleted", self._on_file_deleted)
+        self.event_bus.subscribe("file.moved", self._on_file_moved)
+
+    def _on_file_created(self, data) -> None:
+        """Handle file creation events."""
+        path = data.get("path", "") if isinstance(data, dict) else str(data)
+        logger.debug(f"[FreyaAgent] File created: {path}")
+        self._update_indexes_for_path(path, "created")
+
+    def _on_file_modified(self, data) -> None:
+        """Handle file modification events."""
+        path = data.get("path", "") if isinstance(data, dict) else str(data)
+        logger.debug(f"[FreyaAgent] File modified: {path}")
+        self._update_indexes_for_path(path, "modified")
+
+    def _on_file_deleted(self, data) -> None:
+        """Handle file deletion events."""
+        path = data.get("path", "") if isinstance(data, dict) else str(data)
+        logger.debug(f"[FreyaAgent] File deleted: {path}")
+        self._update_indexes_for_path(path, "deleted")
+
+    def _on_file_moved(self, data) -> None:
+        """Handle file move/rename events."""
+        src_path = data.get("src_path", "") if isinstance(data, dict) else ""
+        dest_path = data.get("dest_path", "") if isinstance(data, dict) else ""
+        logger.debug(f"[FreyaAgent] File moved: {src_path} -> {dest_path}")
+        self._update_indexes_for_path(src_path, "deleted")
+        self._update_indexes_for_path(dest_path, "created")
+
+    def _update_indexes_for_path(self, path: str, change_type: str) -> None:
+        """Update relevant indexes when a file changes.
+
+        Args:
+            path: The file path that changed
+            change_type: One of "created", "modified", "deleted"
+        """
+        try:
+            # Convert to relative path if needed
+            abs_path = Path(path)
+            if abs_path.is_absolute():
+                try:
+                    rel_path = str(abs_path.relative_to(self.workspace))
+                except ValueError:
+                    rel_path = str(abs_path)
+            else:
+                rel_path = path
+
+            # Update ProjectIndex
+            if hasattr(self, 'project_index') and self.project_index:
+                if change_type == "deleted":
+                    # Remove from project index
+                    if rel_path in self.project_index.files:
+                        del self.project_index.files[rel_path]
+                        logger.debug(f"[FreyaAgent] Removed {rel_path} from ProjectIndex")
+                else:
+                    # Re-read and add to project index
+                    try:
+                        if abs_path.exists() and abs_path.is_file() and abs_path.suffix in self.project_index.EXTENSIONS:
+                            if not any(part in self.project_index.IGNORE for part in abs_path.parts):
+                                content = abs_path.read_text(encoding="utf-8", errors="ignore")
+                                self.project_index.files[rel_path] = content
+                                logger.debug(f"[FreyaAgent] Updated {rel_path} in ProjectIndex")
+                    except Exception as e:
+                        logger.debug(f"[FreyaAgent] Could not update ProjectIndex for {rel_path}: {e}")
+
+            # Update SymbolIndex (rebuild for Python files)
+            if hasattr(self, 'symbol_index') and self.symbol_index and change_type in ("created", "modified"):
+                if rel_path.endswith(".py"):
+                    try:
+                        self.symbol_index.build()
+                        logger.debug(f"[FreyaAgent] Rebuilt SymbolIndex due to {change_type}: {rel_path}")
+                    except Exception as e:
+                        logger.debug(f"[FreyaAgent] Could not rebuild SymbolIndex: {e}")
+
+            # Update DependencyGraph if Python file changed
+            if hasattr(self, 'dependency_graph') and self.dependency_graph and change_type in ("created", "modified"):
+                if rel_path.endswith(".py"):
+                    try:
+                        self.dependency_graph.build()
+                        logger.debug(f"[FreyaAgent] Rebuilt DependencyGraph due to {change_type}: {rel_path}")
+                    except Exception as e:
+                        logger.debug(f"[FreyaAgent] Could not rebuild DependencyGraph: {e}")
+
+            # Invalidate WorldModel cache so next snapshot reflects changes
+            if hasattr(self, 'world_model') and self.world_model:
+                try:
+                    self.world_model._last_snapshot = None
+                    self.world_model._last_snapshot_time = 0
+                    logger.debug(f"[FreyaAgent] Invalidated WorldModel cache due to {change_type}: {rel_path}")
+                except Exception as e:
+                    logger.debug(f"[FreyaAgent] Could not invalidate WorldModel cache: {e}")
+
+            # If config file changed, trigger config hot-reload check
+            config_files = (".env", "pyproject.toml", "setup.py", "requirements.txt",
+                           "package.json", "Cargo.toml", "go.mod", "pom.xml")
+            if any(rel_path.endswith(cf) or cf in rel_path for cf in config_files):
+                # Emit event for config change
+                self.event_bus.emit("config.changed", data={"path": rel_path, "change_type": change_type}, source="FileWatcher")
+                logger.info(f"[FreyaAgent] Config file changed: {rel_path}")
+
+        except Exception as e:
+            logger.warning(f"[FreyaAgent] Error updating indexes for {path}: {e}")
 
     def _request_execution_stop(self) -> None:
         """Callback to request execution stop from conversation control."""
@@ -2448,6 +2608,9 @@ Estimated Hours: {task.estimated_hours or 'Not set'}""")
 
         # Stop config hot-reload
         self.stop_config_hot_reload()
+
+        # Stop file watcher
+        self.stop_file_watcher()
 
         # Stop observability
         if hasattr(self, 'observability'):

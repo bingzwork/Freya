@@ -7,6 +7,7 @@ CPU, memory, disk usage, GPU, and overall system health.
 import os
 import platform
 import psutil
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -16,9 +17,21 @@ from typing import Dict, List, Any, Optional, Callable, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from app.monitoring.alert_manager import SystemAlert
+    from app.monitoring.network_monitor import NetworkMonitor
 
+# Import ServiceStatus for runtime use in get_summary
+from app.monitoring.network_monitor import ServiceStatus
 
-# Optional GPU detection via pynvml
+# Import new GPU monitor for cross-vendor support
+try:
+    from app.monitoring.gpu_monitor import GPUMonitor, GPUMetrics as NewGPUMetrics
+    HAS_GPU_MONITOR = True
+except ImportError:
+    HAS_GPU_MONITOR = False
+    GPUMonitor = None
+    NewGPUMetrics = None
+
+# Optional GPU detection via pynvml (legacy)
 try:
     import pynvml
     HAS_PYNVML = True
@@ -38,8 +51,9 @@ class SystemHealthStatus(Enum):
 
 @dataclass
 class GPUMetrics:
-    """Metrics for a single GPU device."""
+    """Metrics for a single GPU device (compatible with new GPUMonitor)."""
     index: int = 0
+    vendor: str = "unknown"
     name: str = ""
     driver_version: str = ""
     memory_total_mb: float = 0.0
@@ -51,6 +65,9 @@ class GPUMetrics:
     temperature_celsius: Optional[float] = None
     power_draw_watts: Optional[float] = None
     power_limit_watts: Optional[float] = None
+    fan_speed_percent: Optional[float] = None
+    clock_graphics_mhz: Optional[float] = None
+    clock_memory_mhz: Optional[float] = None
     encoder_utilization_percent: Optional[float] = None
     decoder_utilization_percent: Optional[float] = None
 
@@ -58,6 +75,7 @@ class GPUMetrics:
         """Convert to dictionary."""
         return {
             "index": self.index,
+            "vendor": self.vendor,
             "name": self.name,
             "driver_version": self.driver_version,
             "memory": {
@@ -76,6 +94,11 @@ class GPUMetrics:
             "power": {
                 "draw_watts": self.power_draw_watts,
                 "limit_watts": self.power_limit_watts,
+            },
+            "fan_speed_percent": self.fan_speed_percent,
+            "clocks": {
+                "graphics_mhz": self.clock_graphics_mhz,
+                "memory_mhz": self.clock_memory_mhz,
             },
         }
 
@@ -129,6 +152,7 @@ class ResourceMetrics:
     gpus: List[GPUMetrics] = field(default_factory=list)
     gpu_count: int = 0
     gpu_driver_version: str = ""
+    gpu_by_vendor: Dict[str, int] = field(default_factory=dict)
 
     @classmethod
     def collect(cls) -> "ResourceMetrics":
@@ -233,7 +257,7 @@ class ResourceMetrics:
         base_metrics = cls._collect_base_metrics()
 
         # Then collect GPU metrics
-        gpus, gpu_driver_version = cls._collect_gpu_metrics()
+        gpus, gpu_driver_version, gpu_by_vendor = cls._collect_gpu_metrics()
 
         # Create final metrics object with GPU data
         return cls(
@@ -264,6 +288,7 @@ class ResourceMetrics:
             gpus=gpus,
             gpu_count=len(gpus),
             gpu_driver_version=gpu_driver_version,
+            gpu_by_vendor=gpu_by_vendor,
         )
 
     @classmethod
@@ -364,12 +389,70 @@ class ResourceMetrics:
 
     @classmethod
     def _collect_gpu_metrics(cls) -> tuple[List[GPUMetrics], str]:
-        """Collect GPU metrics using pynvml."""
+        """Collect GPU metrics using new GPUMonitor (cross-vendor) with fallback to pynvml."""
         gpus = []
         driver_version = ""
+        gpu_by_vendor = {}
 
-        if not HAS_PYNVML:
-            return gpus, driver_version
+        # Try new GPUMonitor first (cross-vendor support)
+        if HAS_GPU_MONITOR and GPUMonitor:
+            try:
+                gpu_monitor = GPUMonitor()
+                gpu_info_list = gpu_monitor.get_gpu_info()
+                metrics_list = gpu_monitor.collect_metrics()
+
+                # Build GPU info lookup
+                gpu_info_by_index = {g.index: g for g in gpu_info_list}
+
+                for metric in metrics_list:
+                    gpu_info = gpu_info_by_index.get(metric.index)
+                    if gpu_info:
+                        driver_version = gpu_info.driver_version or driver_version
+
+                    gpu = GPUMetrics(
+                        index=metric.index,
+                        vendor=metric.vendor.value if hasattr(metric.vendor, 'value') else str(metric.vendor),
+                        name=metric.name,
+                        driver_version=driver_version,
+                        memory_total_mb=metric.memory_total_mb,
+                        memory_used_mb=metric.memory_used_mb,
+                        memory_free_mb=metric.memory_free_mb,
+                        memory_percent=metric.memory_utilization_percent,
+                        gpu_utilization_percent=metric.gpu_utilization_percent,
+                        memory_utilization_percent=metric.memory_utilization_percent,
+                        temperature_celsius=metric.temperature_celsius,
+                        power_draw_watts=metric.power_draw_watts,
+                        power_limit_watts=metric.power_limit_watts,
+                        fan_speed_percent=metric.fan_speed_percent,
+                        clock_graphics_mhz=metric.clock_graphics_mhz,
+                        clock_memory_mhz=metric.clock_memory_mhz,
+                        encoder_utilization_percent=metric.encoder_utilization_percent,
+                        decoder_utilization_percent=metric.decoder_utilization_percent,
+                    )
+                    gpus.append(gpu)
+
+                # Count by vendor
+                for g in gpu_info_list:
+                    vendor = g.vendor.value if hasattr(g.vendor, 'value') else str(g.vendor)
+                    gpu_by_vendor[vendor] = gpu_by_vendor.get(vendor, 0) + 1
+
+                return gpus, driver_version, gpu_by_vendor
+            except Exception:
+                # Fall through to legacy method
+                pass
+
+        # Fallback to legacy pynvml
+        if HAS_PYNVML:
+            return cls._collect_gpu_metrics_legacy()
+
+        return gpus, driver_version, gpu_by_vendor
+
+    @classmethod
+    def _collect_gpu_metrics_legacy(cls) -> tuple[List[GPUMetrics], str, Dict[str, int]]:
+        """Legacy GPU metrics collection using pynvml (NVIDIA only)."""
+        gpus = []
+        driver_version = ""
+        gpu_by_vendor = {}
 
         try:
             # Initialize NVML
@@ -448,6 +531,7 @@ class ResourceMetrics:
 
                     gpu = GPUMetrics(
                         index=i,
+                        vendor="nvidia",
                         name=name,
                         driver_version=driver_version,
                         memory_total_mb=memory_total_mb,
@@ -470,11 +554,13 @@ class ResourceMetrics:
             # Shutdown NVML
             pynvml.nvmlShutdown()
 
+            gpu_by_vendor["nvidia"] = len(gpus)
+
         except Exception as e:
             # NVML not available or error initialization
             pass
 
-        return gpus, driver_version
+        return gpus, driver_version, gpu_by_vendor
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -521,6 +607,7 @@ class ResourceMetrics:
             "gpu": {
                 "count": self.gpu_count,
                 "driver_version": self.gpu_driver_version,
+                "by_vendor": self.gpu_by_vendor,
                 "devices": [gpu.to_dict() for gpu in self.gpus],
             },
         }
@@ -701,11 +788,16 @@ class SystemMonitor:
     triggers alerts when thresholds are breached.
     """
 
-    def __init__(self, config: Optional[MonitorConfig] = None):
+    def __init__(
+        self,
+        config: Optional[MonitorConfig] = None,
+        network_monitor: Optional["NetworkMonitor"] = None,
+    ):
         """Initialize the system monitor.
 
         Args:
             config: Configuration for the monitor.
+            network_monitor: Optional NetworkMonitor instance to include service health in overall health.
         """
         self.config = config or MonitorConfig()
         self.workspace = Path(self.config.workspace).resolve()
@@ -716,56 +808,102 @@ class SystemMonitor:
         self._callbacks: List[MonitoringCallback] = []
         self._alert_callbacks: List[Callable[["SystemAlert"], None]] = []
 
+        # Optional NetworkMonitor for service health integration
+        self._network_monitor: Optional["NetworkMonitor"] = network_monitor
+
+        # Initialize GPUMonitor for cross-vendor GPU tracking
+        self._gpu_monitor: Optional[GPUMonitor] = None
+        if HAS_GPU_MONITOR and GPUMonitor:
+            try:
+                from app.core.events import get_event_bus
+                self._gpu_monitor = GPUMonitor(
+                    workspace=str(self.workspace),
+                    event_bus=get_event_bus(),
+                    poll_interval_seconds=self.config.interval_seconds,
+                    enabled=self.config.enabled,
+                )
+            except Exception:
+                self._gpu_monitor = None
+
+        # Thread safety for shared state
+        self._lock = threading.RLock()
+
     def add_callback(self, callback: MonitoringCallback) -> None:
         """Add a monitoring callback."""
-        self._callbacks.append(callback)
+        with self._lock:
+            self._callbacks.append(callback)
 
     def remove_callback(self, callback: MonitoringCallback) -> None:
         """Remove a monitoring callback."""
-        if callback in self._callbacks:
-            self._callbacks.remove(callback)
+        with self._lock:
+            if callback in self._callbacks:
+                self._callbacks.remove(callback)
 
     def collect_metrics(self) -> ResourceMetrics:
         """Collect current system metrics."""
         metrics = ResourceMetrics.collect()
-        self._current_metrics = metrics
 
-        # Add to history
-        self._metrics_history.append(metrics)
-        if len(self._metrics_history) > self.config.history_size:
-            self._metrics_history = self._metrics_history[-self.config.history_size:]
+        with self._lock:
+            self._current_metrics = metrics
 
-        # Check health status
-        old_status = self._current_status
-        self._current_status = metrics.get_health_status()
+            # Add to history
+            self._metrics_history.append(metrics)
+            if len(self._metrics_history) > self.config.history_size:
+                self._metrics_history = self._metrics_history[-self.config.history_size:]
 
-        # Notify callbacks
-        for callback in self._callbacks:
+            # Also collect from GPUMonitor for event publishing
+            gpu_monitor = self._gpu_monitor
+            old_status = self._current_status
+            self._current_status = self._calculate_overall_health_status(metrics)
+            callbacks = list(self._callbacks)
+
+        # Notify callbacks (outside lock)
+        for callback in callbacks:
             callback.on_metrics_collected(metrics)
 
         if old_status != self._current_status:
-            for callback in self._callbacks:
+            for callback in callbacks:
                 callback.on_health_change(old_status, self._current_status)
+
+        # GPUMonitor collect (outside lock to avoid blocking)
+        if gpu_monitor:
+            try:
+                gpu_monitor.collect_metrics()
+            except Exception:
+                pass
 
         return metrics
 
     def get_current_metrics(self) -> Optional[ResourceMetrics]:
         """Get the current metrics."""
+        with self._lock:
+            if self._current_metrics is None:
+                pass  # Will collect outside lock
+
         if self._current_metrics is None:
             self.collect_metrics()
-        return self._current_metrics
+
+        with self._lock:
+            return self._current_metrics
 
     def get_health_status(self) -> SystemHealthStatus:
         """Get the current health status."""
+        with self._lock:
+            if self._current_metrics is None:
+                pass  # Will collect outside lock
+
         if self._current_metrics is None:
             self.collect_metrics()
-        return self._current_status
+
+        with self._lock:
+            return self._current_status
 
     def get_metrics_history(self, count: Optional[int] = None) -> List[ResourceMetrics]:
         """Get historical metrics."""
-        if count is None:
-            return list(self._metrics_history)
-        return list(self._metrics_history[-count:])
+        with self._lock:
+            if count is None:
+                return list(self._metrics_history)
+            return list(self._metrics_history[-count:])
 
     def check_thresholds(self) -> List["SystemAlert"]:
         """Check if any thresholds are breached and return alerts."""
@@ -896,41 +1034,182 @@ class SystemMonitor:
 
     def start(self) -> None:
         """Start continuous monitoring."""
-        if self._running:
-            return
+        with self._lock:
+            if self._running:
+                return
 
-        self._running = True
+            self._running = True
+
+        # Start GPUMonitor if available
+        if self._gpu_monitor:
+            try:
+                self._gpu_monitor.start_monitoring()
+            except Exception:
+                pass
+
         import threading
         self._thread = threading.Thread(target=self._monitor_loop, daemon=True)
         self._thread.start()
 
     def stop(self) -> None:
         """Stop continuous monitoring."""
-        self._running = False
-        if hasattr(self, '_thread'):
-            self._thread.join(timeout=self.config.interval_seconds + 1)
+        thread = None
+        with self._lock:
+            self._running = False
+            thread = getattr(self, '_thread', None)
+
+        # Stop GPUMonitor if available
+        if self._gpu_monitor:
+            try:
+                self._gpu_monitor.stop_monitoring()
+            except Exception:
+                pass
+
+        if thread:
+            thread.join(timeout=self.config.interval_seconds + 1)
 
     def _monitor_loop(self) -> None:
         """Main monitoring loop."""
-        while self._running:
+        while True:
+            with self._lock:
+                if not self._running:
+                    break
+
             try:
                 self.collect_metrics()
                 alerts = self.check_thresholds()
+                with self._lock:
+                    callbacks = list(self._callbacks)
                 for alert in alerts:
-                    for callback in self._callbacks:
+                    for callback in callbacks:
                         callback.on_alert(alert)
             except Exception as e:
                 print(f"[MONITOR] Error in monitoring loop: {e}")
 
             # Sleep for the interval
             for _ in range(int(self.config.interval_seconds * 10)):
-                if not self._running:
-                    break
+                with self._lock:
+                    if not self._running:
+                        break
                 time.sleep(0.1)
+
+    def _calculate_overall_health_status(self, metrics: "ResourceMetrics") -> SystemHealthStatus:
+        """Calculate overall health status including service health from NetworkMonitor."""
+        # Start with base resource health score
+        score = metrics.calculate_health_score()
+
+        # Factor in service health if NetworkMonitor is available
+        if self._network_monitor:
+            try:
+                all_health = self._network_monitor.get_all_health()
+                if all_health:
+                    # Count service statuses
+                    healthy_count = sum(1 for h in all_health.values() if h.status == ServiceStatus.HEALTHY)
+                    degraded_count = sum(1 for h in all_health.values() if h.status == ServiceStatus.DEGRADED)
+                    unhealthy_count = sum(1 for h in all_health.values() if h.status == ServiceStatus.UNHEALTHY)
+                    total_services = len(all_health)
+
+                    if total_services > 0:
+                        # Penalize based on service health:
+                        # - Each unhealthy service: -10 points
+                        # - Each degraded service: -5 points
+                        # Max penalty: 30 points (so services can't bring score below 0 alone)
+                        service_penalty = min(30.0, unhealthy_count * 10.0 + degraded_count * 5.0)
+                        score -= service_penalty
+            except Exception:
+                # If we can't get service health, ignore it
+                pass
+
+        # Clamp and return status
+        score = max(0, min(100, score))
+        if score >= 80:
+            return SystemHealthStatus.EXCELLENT
+        elif score >= 60:
+            return SystemHealthStatus.GOOD
+        elif score >= 40:
+            return SystemHealthStatus.WARNING
+        elif score >= 20:
+            return SystemHealthStatus.WARNING
+        else:
+            return SystemHealthStatus.CRITICAL
+
+    def _calculate_overall_health_score(self, metrics: "ResourceMetrics") -> float:
+        """Calculate overall health score including service health from NetworkMonitor."""
+        # Start with base resource health score
+        score = metrics.calculate_health_score()
+
+        # Factor in service health if NetworkMonitor is available
+        if self._network_monitor:
+            try:
+                all_health = self._network_monitor.get_all_health()
+                if all_health:
+                    # Count service statuses
+                    healthy_count = sum(1 for h in all_health.values() if h.status == ServiceStatus.HEALTHY)
+                    degraded_count = sum(1 for h in all_health.values() if h.status == ServiceStatus.DEGRADED)
+                    unhealthy_count = sum(1 for h in all_health.values() if h.status == ServiceStatus.UNHEALTHY)
+                    total_services = len(all_health)
+
+                    if total_services > 0:
+                        # Penalize based on service health:
+                        # - Each unhealthy service: -10 points
+                        # - Each degraded service: -5 points
+                        # Max penalty: 30 points (so services can't bring score below 0 alone)
+                        service_penalty = min(30.0, unhealthy_count * 10.0 + degraded_count * 5.0)
+                        score -= service_penalty
+            except Exception:
+                # If we can't get service health, ignore it
+                pass
+
+        # Clamp and return score
+        return max(0.0, min(100.0, score))
+
+    def _get_service_summary(self) -> Optional[Dict[str, Any]]:
+        """Get a summary of monitored services if NetworkMonitor is available."""
+        if not self._network_monitor:
+            return None
+        try:
+            all_health = self._network_monitor.get_all_health()
+            if not all_health:
+                return None
+
+            healthy = sum(1 for h in all_health.values() if h.status == ServiceStatus.HEALTHY)
+            degraded = sum(1 for h in all_health.values() if h.status == ServiceStatus.DEGRADED)
+            unhealthy = sum(1 for h in all_health.values() if h.status == ServiceStatus.UNHEALTHY)
+            unknown = sum(1 for h in all_health.values() if h.status == ServiceStatus.UNKNOWN)
+
+            return {
+                "total": len(all_health),
+                "healthy": healthy,
+                "degraded": degraded,
+                "unhealthy": unhealthy,
+                "unknown": unknown,
+                "details": {
+                    name: {
+                        "status": health.status.value,
+                        "healthy_endpoints": health.healthy_endpoints,
+                        "total_endpoints": health.total_endpoints,
+                        "consecutive_failures": health.consecutive_failures,
+                    }
+                    for name, health in all_health.items()
+                },
+            }
+        except Exception:
+            return None
 
     def get_summary(self) -> Dict[str, Any]:
         """Get a summary of the current system state."""
-        metrics = self.get_current_metrics()
+        with self._lock:
+            metrics = self._current_metrics
+            current_status = self._current_status
+            gpu_monitor = self._gpu_monitor
+            network_monitor = self._network_monitor
+
+        if metrics is None:
+            self.collect_metrics()
+            with self._lock:
+                metrics = self._current_metrics
+                current_status = self._current_status
+
         if metrics is None:
             return {"status": "unknown"}
 
@@ -939,9 +1218,11 @@ class SystemMonitor:
             gpu_summary = {
                 "count": metrics.gpu_count,
                 "driver_version": metrics.gpu_driver_version,
+                "by_vendor": metrics.gpu_by_vendor,
                 "devices": [
                     {
                         "index": gpu.index,
+                        "vendor": gpu.vendor,
                         "name": gpu.name,
                         "utilization_percent": gpu.gpu_utilization_percent,
                         "memory_percent": gpu.memory_percent,
@@ -952,15 +1233,64 @@ class SystemMonitor:
                 ],
             }
 
+        # Also include GPUMonitor summary if available (and merge key metrics)
+        if gpu_monitor:
+            try:
+                monitor_summary = gpu_monitor.get_summary()
+                if monitor_summary and isinstance(monitor_summary, dict):
+                    # Merge vendor counts if available
+                    if "by_vendor" in monitor_summary and monitor_summary["by_vendor"]:
+                        if gpu_summary is None:
+                            gpu_summary = {}
+                        gpu_summary["by_vendor"] = monitor_summary["by_vendor"]
+                    # Add total count if available
+                    if "total_gpus" in monitor_summary:
+                        if gpu_summary is None:
+                            gpu_summary = {}
+                        gpu_summary["total_gpus"] = monitor_summary["total_gpus"]
+            except Exception:
+                pass
+
+        # Get service summary
+        services = None
+        if network_monitor:
+            try:
+                all_health = network_monitor.get_all_health()
+                if all_health:
+                    healthy = sum(1 for h in all_health.values() if h.status == ServiceStatus.HEALTHY)
+                    degraded = sum(1 for h in all_health.values() if h.status == ServiceStatus.DEGRADED)
+                    unhealthy = sum(1 for h in all_health.values() if h.status == ServiceStatus.UNHEALTHY)
+                    unknown = sum(1 for h in all_health.values() if h.status == ServiceStatus.UNKNOWN)
+
+                    services = {
+                        "total": len(all_health),
+                        "healthy": healthy,
+                        "degraded": degraded,
+                        "unhealthy": unhealthy,
+                        "unknown": unknown,
+                        "details": {
+                            name: {
+                                "status": health.status.value,
+                                "healthy_endpoints": health.healthy_endpoints,
+                                "total_endpoints": health.total_endpoints,
+                                "consecutive_failures": health.consecutive_failures,
+                            }
+                            for name, health in all_health.items()
+                        },
+                    }
+            except Exception:
+                pass
+
         return {
-            "status": self._current_status.value,
-            "health_score": metrics.calculate_health_score(),
+            "status": current_status.value,
+            "health_score": self._calculate_overall_health_score(metrics),
             "cpu_percent": metrics.cpu_percent,
             "memory_percent": metrics.memory_percent,
             "disk_percent": metrics.disk_percent,
             "temperature": metrics.temperature_celsius,
             "process_count": metrics.process_count,
             "gpu": gpu_summary,
+            "services": services,
         }
 
     def __enter__(self):

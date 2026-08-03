@@ -146,6 +146,11 @@ class ResourceInfo:
     load_avg_15min: Optional[float] = None
     health_score: float = 0.0
     health_status: str = "unknown"
+    # GPU information
+    gpu_count: int = 0
+    gpu_driver_version: str = ""
+    gpu_by_vendor: Dict[str, int] = field(default_factory=dict)
+    gpu_devices: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -184,6 +189,12 @@ class ResourceInfo:
             },
             "health_score": self.health_score,
             "health_status": self.health_status,
+            "gpu": {
+                "count": self.gpu_count,
+                "driver_version": self.gpu_driver_version,
+                "by_vendor": self.gpu_by_vendor,
+                "devices": self.gpu_devices,
+            },
         }
 
 
@@ -367,6 +378,21 @@ class EnvironmentSnapshot:
             "",
             f"Resources: CPU {self.resources.cpu_percent:.0f}% / Mem {self.resources.memory_percent:.0f}% / Disk {self.resources.disk_percent:.0f}%",
             f"  Health: {self.resources.health_status} ({self.resources.health_score:.0f}/100)",
+        ]
+
+        # Add GPU info
+        if self.resources.gpu_count > 0:
+            lines.append(f"  GPUs: {self.resources.gpu_count} (Driver: {self.resources.gpu_driver_version})")
+            for vendor, count in self.resources.gpu_by_vendor.items():
+                lines.append(f"    {vendor}: {count}")
+            for gpu in self.resources.gpu_devices:
+                util = gpu.get('utilization_percent', 0)
+                mem = gpu.get('memory_percent', 0)
+                temp = gpu.get('temperature_celsius')
+                temp_str = f", {temp:.0f}C" if temp else ""
+                lines.append(f"    [{gpu['index']}] {gpu['name']} (Vendor: {gpu['vendor']}) - GPU: {util:.0f}%, Mem: {mem:.0f}%{temp_str}")
+
+        lines.extend([
             "",
             f"Tools: {len(self.tools.available_tools)} available",
             f"  Git: {'Yes' if self.tools.git_available else 'No'}",
@@ -378,7 +404,7 @@ class EnvironmentSnapshot:
             f"  Code Quality: {len(self.health.code_quality)} metrics",
             f"  Tests: {len(self.health.test_metrics)} metrics",
             f"  Performance: {len(self.health.performance_metrics)} metrics",
-        ]
+        ])
         return "\n".join(lines)
 
 
@@ -606,12 +632,18 @@ class WorldModel:
     def get_quick_summary(self) -> Dict[str, Any]:
         """Get a quick text summary for LLM context."""
         snapshot = self.get_snapshot()
+        gpu_str = ""
+        if snapshot.resources.gpu_count > 0:
+            gpu_str = f" / GPUs: {snapshot.resources.gpu_count}"
+            if snapshot.resources.gpu_by_vendor:
+                gpu_str += " (" + ", ".join(f"{k}: {v}" for k, v in snapshot.resources.gpu_by_vendor.items()) + ")"
+
         lines = [
             f"Project: {snapshot.project.name or 'Unknown'} ({snapshot.project.root_path})",
             f"Git: {snapshot.git.current_branch or 'N/A'} ({'clean' if snapshot.git.is_clean else 'dirty'})",
             f"OS: {snapshot.runtime.os_family} ({snapshot.runtime.shell_name})",
             f"Python: {snapshot.runtime.python_version}",
-            f"Resources: CPU {snapshot.resources.cpu_percent:.0f}%, Mem {snapshot.resources.memory_percent:.0f}%, Disk {snapshot.resources.disk_percent:.0f}%",
+            f"Resources: CPU {snapshot.resources.cpu_percent:.0f}%, Mem {snapshot.resources.memory_percent:.0f}%, Disk {snapshot.resources.disk_percent:.0f}%{gpu_str}",
             f"Health: {snapshot.health.overall_status} ({snapshot.health.health_score:.0f}/100)",
             f"Tools: {len(snapshot.tools.available_tools)} available",
         ]
@@ -705,6 +737,21 @@ class WorldModel:
         """Collect system resource metrics."""
         try:
             metrics = self.system_monitor.collect_metrics()
+
+            # Build GPU info
+            gpu_devices = []
+            for gpu in metrics.gpus:
+                gpu_devices.append({
+                    "index": gpu.index,
+                    "vendor": gpu.vendor,
+                    "name": gpu.name,
+                    "driver_version": gpu.driver_version,
+                    "utilization_percent": gpu.gpu_utilization_percent,
+                    "memory_percent": gpu.memory_percent,
+                    "temperature_celsius": gpu.temperature_celsius,
+                    "power_draw_watts": gpu.power_draw_watts,
+                })
+
             return ResourceInfo(
                 cpu_percent=metrics.cpu_percent,
                 cpu_count=metrics.cpu_count,
@@ -729,6 +776,10 @@ class WorldModel:
                 load_avg_15min=metrics.load_avg_15min,
                 health_score=metrics.calculate_health_score(),
                 health_status=metrics.get_health_status().value,
+                gpu_count=metrics.gpu_count,
+                gpu_driver_version=metrics.gpu_driver_version,
+                gpu_by_vendor=metrics.gpu_by_vendor,
+                gpu_devices=gpu_devices,
             )
         except Exception as e:
             logger.warning(f"[WorldModel] Error collecting resource info: {e}")

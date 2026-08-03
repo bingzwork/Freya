@@ -1,6 +1,6 @@
 # Freya Master Implementation Roadmap
 
-**Version:** v2.0 | **Updated:** 2026-08-03 | **Source:** Full codebase static analysis
+**Version:** v2.0 | **Updated:** 2026-08-04 | **Source:** Full codebase static analysis
 
 ---
 
@@ -10,12 +10,12 @@ Freya is **~99% complete** on core autonomous software engineering capabilities.
 
 | Category | Count | Impact |
 |----------|-------|--------|
-| **Production Hardening** | ~8 | Observability, parallel execution, GPU detection, vector search |
+| **Production Hardening** | ~6 | Observability, parallel execution, vector search |
 | **Post-V1 Enhancements** | ~15 | Multi-agent, vision, voice, federated learning, plugin ecosystem |
 
 **Recommended path:** Freya is production-ready as a V1 autonomous AI. Only optional hardening remains before release.
 
-**Major Completed Milestones (2026-08-03):**
+**Major Completed Milestones (2026-08-04):**
 - ✅ **Infrastructure Wiring Complete** — All 18 subsystems wired to EventBus, BackgroundJobService, ObservabilityHub
 - ✅ **Central Autonomous Orchestrator Complete** — Full capability-driven orchestration with 13 built-in capabilities, workflow composition, task execution, safety gates, self-observation, activity reporting, GUI interfaces, failure recovery integration
 - ✅ **Safe Self Improvement Complete** — 9 modules: Allowlists, Boundaries, Risk Execution, Approval Gates, Prioritization, Rollback Checkpoints, Patch Promotion, Policy Engine, Main Orchestrator
@@ -29,6 +29,8 @@ Freya is **~99% complete** on core autonomous software engineering capabilities.
 - ✅ **Dependency Lockfile Parsing** — requirements.txt, pyproject.toml, package-lock.json, Cargo.lock; installed vs missing, version conflicts
 - ✅ **AtomicJsonStore Base Class** — Reduces boilerplate; consistent atomic writes across all storage
 - ✅ **Config Registry with Hot-Reload** — Runtime tuning without restart
+- ✅ **GPU / Hardware Detection** — GPU detection (VRAM, compute capability, driver version), hardware detail collection (`app/monitoring/gpu_monitor.py`)
+- ✅ **Network / Service Health Checks** — Connectivity checks, endpoint health, DNS resolution, service registry (`app/monitoring/network_monitor.py`)
 
 ---
 
@@ -51,12 +53,12 @@ Freya is **~99% complete** on core autonomous software engineering capabilities.
 | ⭐⭐⭐⭐ | Software Engineering Knowledge | 100% | ✅ COMPLETE | `app/software_engineering_knowledge/` |
 | ⭐⭐⭐⭐ | Learning System (Autonomous) | 100% | ✅ COMPLETE | `app/autonomous_learning/` |
 | ⭐⭐⭐⭐ | Learning System (Goal-Driven) | 100% | ✅ COMPLETE | `app/autonomous_learning/pipeline.py` |
-| ⭐⭐⭐⭐ | World Model | 85% | 🟢 MOSTLY | `app/world_model/`, `app/monitoring/`, `app/diagnostics/` |
+| ⭐⭐⭐⭐ | World Model | 90% | 🟢 MOSTLY | `app/world_model/`, `app/monitoring/`, `app/diagnostics/` |
 | ⭐⭐⭐⭐ | Self Observation | 85% | 🟢 MOSTLY | `app/monitoring/`, `app/health/`, `app/diagnostics/` |
 | ⭐⭐⭐⭐ | Task Scheduling | 90% | ✅ COMPLETE | `app/planner/scheduler.py`, `app/planner/resource_allocator.py` |
 | ⭐⭐⭐⭐ | Tool Ecosystem | 90% | ✅ COMPLETE | `app/core/tool_manager.py` |
 | ⭐⭐⭐⭐ | Human Oversight & Approval | 85% | 🟢 FUNCTIONAL | `app/agent/core_agent.py`, `app/ui/permission_menu.py` |
-| ⭐⭐⭐⭐ | Resource Management | 70% | 🟢 MOSTLY | `app/monitoring/system_monitor.py`, `app/planner/resource_allocator.py` |
+| ⭐⭐⭐⭐ | Resource Management | 100% | ✅ COMPLETE | `app/monitoring/system_monitor.py`, `app/monitoring/gpu_monitor.py`, `app/monitoring/network_monitor.py`, `app/planner/resource_allocator.py` |
 | ⭐⭐⭐ | Knowledge Acquisition & KB | 100% | ✅ COMPLETE | `app/knowledge_acquisition/`, `app/intelligence/knowledge_base.py` |
 | ⭐⭐⭐ | Safe Self Improvement | 100% | ✅ COMPLETE | `app/safe_self_improvement/` |
 | ⭐⭐⭐ | Long-Term Autonomy | 80% | 🟢 MOSTLY | `app/long_term_autonomy/` |
@@ -91,18 +93,14 @@ All infrastructure wiring, orchestration, safety systems, learning pipelines, kn
 *Capabilities that significantly improve production reliability, observability, or performance.*
 
 ### 1. GPU / Hardware Detection
-- **Current Status:** Not implemented (basic CPU/memory/disk only)
-- **Why Required:** Resource-aware scheduling for ML workloads; enables GPU task allocation
-- **What's Missing:** `app/monitoring/gpu_monitor.py` — GPU detection (VRAM, compute capability, driver version), hardware detail collection
+- **Current Status:** ✅ **COMPLETE** (2026-08-04)
+- **Implementation:** `app/monitoring/gpu_monitor.py` — GPU detection (VRAM, compute capability, driver version), hardware detail collection; thread-safe with RLock; EventBus integration; context manager for resource cleanup
 - **Dependencies:** `SystemMonitor` (✅ Done), `ResourceAllocator` (✅ Done)
-- **Estimated Effort:** 2-3 days
 
 ### 2. Network / API / Service Health Checks
-- **Current Status:** Not implemented
-- **Why Required:** External dependency awareness (databases, APIs, message queues, MCP servers) for autonomous diagnosis
-- **What's Missing:** `app/monitoring/service_monitor.py` — Connectivity checks, endpoint health, DNS resolution, service registry
+- **Current Status:** ✅ **COMPLETE** (2026-08-04)
+- **Implementation:** `app/monitoring/network_monitor.py` — Connectivity checks, endpoint health, DNS resolution, service registry; thread-safe with RLock; async HTTP/DNS/TCP checks; EventBus integration; context manager for resource cleanup
 - **Dependencies:** `SystemMonitor` (✅ Done), `WorldModel` (✅ Mostly Done)
-- **Estimated Effort:** 3-4 days
 
 ### 3. Recovery Analytics Dashboard
 - **Current Status:** Not implemented

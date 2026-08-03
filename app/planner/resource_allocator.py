@@ -327,3 +327,95 @@ class ResourceAllocator:
         self._allocations.clear()
         self._resource_allocations.clear()
         self._history.clear()
+
+    @classmethod
+    def discover_gpu_resources(cls) -> List[Resource]:
+        """Discover and create GPU resources from system GPUs.
+
+        Returns:
+            List of GPU Resource objects
+        """
+        try:
+            from app.monitoring.gpu_monitor import GPUMonitor, GPUVendor
+        except ImportError:
+            return []
+
+        gpu_monitor = GPUMonitor()
+        gpu_info_list = gpu_monitor.get_gpu_info()
+        gpu_metrics_list = gpu_monitor.collect_metrics()
+
+        # Build metrics lookup
+        metrics_by_index = {m.index: m for m in gpu_metrics_list}
+
+        resources = []
+        for gpu_info in gpu_info_list:
+            # Create resource for this GPU
+            gpu_metrics = metrics_by_index.get(gpu_info.index)
+
+            # Calculate available VRAM (in GB)
+            vram_total_gb = gpu_info.vram_total_mb / 1024.0 if gpu_info.vram_total_mb > 0 else 0
+            vram_used_gb = gpu_info.vram_used_mb / 1024.0 if gpu_info.vram_used_mb > 0 else 0
+            vram_free_gb = vram_total_gb - vram_used_gb if vram_total_gb > 0 else 0
+
+            # Use GPU utilization for GPU capacity (if available)
+            gpu_util = gpu_metrics.gpu_utilization_percent if gpu_metrics else 0
+            # Available GPU compute = 100% - utilization
+            available_compute = max(0.0, 100.0 - gpu_util) / 100.0
+
+            # Tags for GPU
+            tags = ["gpu", gpu_info.vendor.value.lower()]
+            if gpu_info.compute_capability:
+                tags.append(f"cc_{gpu_info.compute_capability}")
+            if gpu_info.cuda_version:
+                tags.append(f"cuda_{gpu_info.cuda_version.replace('.', '_')}")
+
+            resource = Resource(
+                id=f"gpu_{gpu_info.index}",
+                name=f"GPU {gpu_info.index}: {gpu_info.name}",
+                resource_type=ResourceType.GPU,
+                capacity=1.0,  # 1 GPU unit
+                available=available_compute,  # Available compute percentage
+                unit="gpu",
+                description=f"{gpu_info.vendor.value.upper()} {gpu_info.name} - {vram_total_gb:.1f}GB VRAM",
+                tags=tags,
+                metadata={
+                    "vendor": gpu_info.vendor.value,
+                    "name": gpu_info.name,
+                    "driver_version": gpu_info.driver_version,
+                    "vram_total_gb": vram_total_gb,
+                    "vram_free_gb": vram_free_gb,
+                    "compute_capability": gpu_info.compute_capability,
+                    "cuda_version": gpu_info.cuda_version,
+                    "rocm_version": gpu_info.rocm_version,
+                    "opencl_version": gpu_info.opencl_version,
+                    "device_id": gpu_info.device_id,
+                    "architecture": gpu_info.architecture,
+                },
+            )
+            resources.append(resource)
+
+        return resources
+
+    def sync_gpu_resources(self) -> int:
+        """Sync GPU resources with current system state.
+
+        Discovers GPU hardware and updates resource availability based on current metrics.
+
+        Returns:
+            Number of GPU resources synced/updated
+        """
+        gpu_resources = self.discover_gpu_resources()
+        count = 0
+
+        for resource in gpu_resources:
+            existing = self._resources.get(resource.id)
+            if existing:
+                # Update availability based on current metrics
+                existing.available = resource.available
+                existing.metadata = resource.metadata
+                count += 1
+            else:
+                self.add_resource(resource)
+                count += 1
+
+        return count

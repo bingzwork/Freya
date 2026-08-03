@@ -192,6 +192,16 @@ class HealthReport:
             self.generate()
 
         data = self.report_data
+
+        status_emoji = {
+            "excellent": "🟢",
+            "good": "🔵",
+            "fair": "🟡",
+            "poor": "🟠",
+            "critical": "🔴",
+            "unknown": "⚪",
+        }
+
         lines = []
 
         # Header

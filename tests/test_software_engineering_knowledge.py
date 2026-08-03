@@ -869,31 +869,37 @@ class TestExternalImport:
         assert "mdn" in EXTERNAL_SOURCES
         assert "rfc_editor" in EXTERNAL_SOURCES
 
-    def test_external_import_stubs(self):
+    @pytest.mark.asyncio
+    async def test_external_import_stubs(self):
         importer = ExternalKnowledgeImporter()
 
         # All return not implemented errors
-        result = importer.import_from_source("python_docs", "query")
+        result = await importer.import_from_source("python_docs", "query")
         assert not result.success
         assert len(result.errors) > 0
 
-        result = importer.import_from_url("https://example.com")
+        result = await importer.import_from_url("https://example.com")
         assert not result.success
 
-        result = importer.import_package_docs("requests", "python")
+        result = await importer.import_package_docs("requests", "python")
         assert not result.success
 
-    def test_internet_research_stubs(self):
+        await importer.close()
+
+    @pytest.mark.asyncio
+    async def test_internet_research_stubs(self):
         importer = InternetResearchImporter()
 
-        result = importer.search_and_import("query")
+        result = await importer.search_and_import("query")
         assert not result.success
 
-        result = importer.import_from_stackoverflow("12345")
+        result = await importer.import_from_stackoverflow("12345")
         assert not result.success
 
-        result = importer.import_from_github_repo("https://github.com/user/repo")
+        result = await importer.import_from_github_repo("https://github.com/user/repo")
         assert not result.success
+
+        await importer.close()
 
     def test_package_doc_importer(self):
         importer = PackageDocumentationImporter()
@@ -901,18 +907,21 @@ class TestExternalImport:
         result = importer.import_python_package_docs("nonexistent_package_12345")
         assert not result.success
 
-    def test_unified_external_importer(self):
+    @pytest.mark.asyncio
+    async def test_unified_external_importer(self):
         importer = UnifiedExternalImporter()
 
-        result = importer.import_from_source(KnowledgeSource.EXTERNAL_DOCS, "python:requests")
+        result = await importer.import_from_source(KnowledgeSource.EXTERNAL_DOCS, "python:requests")
         # The import may succeed if requests is installed, or fail if not
         # Assert that we get a valid result either way
         assert result is not None
         assert hasattr(result, 'success')
         assert hasattr(result, 'items')
 
-        result = importer.import_from_source(KnowledgeSource.INTERNET_RESEARCH, "query")
+        result = await importer.import_from_source(KnowledgeSource.INTERNET_RESEARCH, "query")
         assert not result.success
+
+        await importer.close()
 
 
 class TestIntegration:

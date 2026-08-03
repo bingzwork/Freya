@@ -302,7 +302,15 @@ class BackgroundJobService:
         }
         self._stats_lock = threading.Lock()
 
-        # Start scheduler
+    def start(self) -> None:
+        """Explicitly start the background scheduler thread.
+
+        This must be called after initialization to begin processing jobs.
+        """
+        if self._scheduler_thread is not None and self._scheduler_thread.is_alive():
+            logger.warning("BackgroundJobService already started")
+            return
+        self._shutdown = False
         self._start_scheduler()
 
     def _start_scheduler(self) -> None:

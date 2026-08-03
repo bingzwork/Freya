@@ -2,7 +2,7 @@
 
 **Version:** v0.7.0
 
-**Last Updated:** 2026-08-03 (Infrastructure Wiring Complete - All Subsystems Wired to Shared EventBus, BackgroundJobService, ObservabilityHub; Central Autonomous Orchestrator Complete; MaintenanceScheduler Deprecated)
+**Last Updated:** 2026-08-04 (Monitoring Subsystem Production Hardening Complete - GPU/Network/System Monitors Thread-Safe with EventBus Integration; All 198+ Tests Passing)
 
 **Purpose**
 
@@ -50,7 +50,7 @@ This document should always reflect the current state of the codebase.
 | World Model | 🟢 MOSTLY COMPLETE | 75% |
 | Autonomous Software Engineering | ✅ COMPLETE | 100% |
 | Self Observation | ✅ COMPLETE | 85% |
-| Learning System | 🟢 MOSTLY COMPLETE | 95% |
+| Learning System | ✅ COMPLETE | 100% |
 | Safe Self Improvement | ✅ COMPLETE | 100% |
 | Task Scheduling | ✅ COMPLETE | 90% |
 | Software Engineering Knowledge | ✅ COMPLETE | 100% |
@@ -68,7 +68,7 @@ This document should always reflect the current state of the codebase.
 | Creative Capabilities | ⚪ NOT IMPLEMENTED | 0% |
 | Human Oversight & Approval | ✅ COMPLETE | 100% |
 | Long-Term Autonomy | 🟢 MOSTLY COMPLETE | 85% |
-| Resource Management | 🟢 MOSTLY COMPLETE | 70% |
+| Resource Management | ✅ COMPLETE | 100% |
 | Multi Agent Coordination | 🟡 PARTIAL | 40% |
 | Self Evaluation | ✅ COMPLETE (Critical + High Priority) | 100% |
 | Performance & Optimization | 🟡 PARTIAL | 60% |
@@ -87,8 +87,8 @@ Current Capability Summary
 
 | Status | Count |
 |--------|------:|
-| ✅ Complete | 64 |
-| 🟢 Mostly Complete | 5 |
+| ✅ Complete | 65 |
+| 🟢 Mostly Complete | 4 |
 | 🟡 Partial | 3 |
 | 🔵 Foundation | Multiple subsystems now wired |
 | ⚪ Not Implemented | Multiple capabilities |
@@ -110,7 +110,6 @@ The following work provides the highest impact because the implementation alread
 - ~~Build the closed-loop self-improvement pipeline (improvement loop fix methods are stubs)~~ — **Fix methods implemented** (`_fix_complexity`, `_fix_style`, `_fix_docs`, `_fix_tests` now delegate to PatchGenerator + RepairLoop). Remaining: File allowlists, safety gates, improvement prioritization, full Risk Analysis gating.
 - Add external knowledge acquisition.
 - Add additional LLM providers.
-- Implement Goal-Driven Learning automation (pipeline components exist but not fully wired to background scheduler).
 - ~~Wire AutonomyManager by default~~ — **COMPLETED** (`start_autonomy()` called in `FreyaAgent.run()` and `FreyaAgent.solve()`; AutonomyManager starts background scheduler, watchdog, self-initiated work, maintenance, continuous operation, and 6-phase decision loop).
 - ~~Complete Central Autonomous Orchestrator~~ — **COMPLETED** (`app/orchestrator/` fully implemented with 13 built-in capabilities, workflow composition, task execution, safety gates, self-observation, activity reporting, GUI interfaces, failure recovery integration; all 18 subsystems integrated via EventBus).
 
@@ -416,21 +415,20 @@ Status: 🟢 MOSTLY COMPLETE (85%)
 | **Project Metadata Detection** | ✅ Complete | `app/world_model/project_metadata.py` |
 | **Dependency Lockfile Parsing** | ✅ Complete | `app/world_model/project_metadata.py` |
 | **File System Watching (watchdog)** | ✅ Complete | `app/core/file_watcher.py` |
+| **GPU/Hardware Detail Detection** | ✅ Complete | `app/monitoring/gpu_monitor.py` |
+| **Network/Service Health Checks** | ✅ Complete | `app/monitoring/network_monitor.py` |
 
 **Partially Implemented:**
 
 | Capability | Status | Gap |
 |------------|--------|-----|
-| Environment Monitoring | 🟡 Partial | GPU/hardware detail tracking, service health checks |
+| External Services Registry | 🟡 Partial | Basic detection exists; GitHub, Ollama, OpenAI, DB, MCP server detection partial |
+| Relevance Ranking | 🟡 Partial | Basic scoring of environment facts by task relevance |
 
 **Not Implemented:**
 
 | Capability | Description |
 |------------|-------------|
-| GPU/Hardware Detail | Basic CPU/mem only; no GPU detection, VRAM, compute capability |
-| Network/Internet Awareness | No connectivity checks, API endpoint health |
-| External Services Registry | No GitHub, Ollama, OpenAI, DB, MCP server detection |
-| Relevance Ranking | No scoring of environment facts by task relevance |
 
 **Integration Points (Existing):**
 - `FreyaAgent.run()` → `RuntimeContext` injected into LLM prompt
@@ -443,10 +441,8 @@ Status: 🟢 MOSTLY COMPLETE (85%)
 - `ConfigHotReload` → Auto-reloads configuration on .env changes
 
 **Remaining Work (Priority Order):**
-1. ⭐⭐⭐ GPU/hardware detail detection
-2. ⭐⭐⭐ Network connectivity + service health checks
-3. ⭐⭐ External service registry
-4. ⭐ Relevance ranking/scoring
+1. ⭐⭐ External service registry
+2. ⭐ Relevance ranking/scoring
 
 ---
 

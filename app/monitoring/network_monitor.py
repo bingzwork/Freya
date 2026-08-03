@@ -6,6 +6,7 @@ and external service registry for tracking service dependencies.
 
 import asyncio
 import socket
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -17,6 +18,7 @@ from urllib.parse import urlparse
 import aiohttp
 
 from app.monitoring.alert_manager import AlertManager, SystemAlert, AlertSeverity, AlertStatus
+from app.core.events import EventBus, get_event_bus, EventPriority
 
 
 class CheckType(Enum):
@@ -348,6 +350,11 @@ class NetworkHealthChecker:
                     ssl_cert_expiry=ssl_cert_expiry,
                 )
         except asyncio.TimeoutError:
+            resolved_ip = None
+            try:
+                resolved_ip = socket.gethostbyname(parsed.hostname) if parsed.hostname else None
+            except Exception:
+                pass
             return HealthCheckResult(
                 endpoint_name=endpoint_name,
                 service_name="",
@@ -356,9 +363,14 @@ class NetworkHealthChecker:
                 success=False,
                 latency_ms=(time.time() - start_time) * 1000,
                 error_message=f"Request timeout after {timeout}s",
-                resolved_ip=socket.gethostbyname(parsed.hostname) if parsed.hostname else None,
+                resolved_ip=resolved_ip,
             )
         except aiohttp.ClientError as e:
+            resolved_ip = None
+            try:
+                resolved_ip = socket.gethostbyname(parsed.hostname) if parsed.hostname else None
+            except Exception:
+                pass
             return HealthCheckResult(
                 endpoint_name=endpoint_name,
                 service_name="",
@@ -367,9 +379,14 @@ class NetworkHealthChecker:
                 success=False,
                 latency_ms=(time.time() - start_time) * 1000,
                 error_message=f"Client error: {str(e)}",
-                resolved_ip=socket.gethostbyname(parsed.hostname) if parsed.hostname else None,
+                resolved_ip=resolved_ip,
             )
         except Exception as e:
+            resolved_ip = None
+            try:
+                resolved_ip = socket.gethostbyname(parsed.hostname) if parsed.hostname else None
+            except Exception:
+                pass
             return HealthCheckResult(
                 endpoint_name=endpoint_name,
                 service_name="",
@@ -378,7 +395,7 @@ class NetworkHealthChecker:
                 success=False,
                 latency_ms=(time.time() - start_time) * 1000,
                 error_message=str(e),
-                resolved_ip=socket.gethostbyname(parsed.hostname) if parsed.hostname else None,
+                resolved_ip=resolved_ip,
             )
 
     async def check_dns(self, hostname: str, timeout: float = None) -> HealthCheckResult:
@@ -436,6 +453,7 @@ class NetworkMonitor:
         workspace: str = ".",
         alert_manager: Optional[AlertManager] = None,
         default_check_interval: float = 60.0,
+        event_bus: Optional[EventBus] = None,
     ):
         """Initialize the network monitor.
 
@@ -443,10 +461,12 @@ class NetworkMonitor:
             workspace: The project workspace directory.
             alert_manager: Optional alert manager for triggering alerts.
             default_check_interval: Default interval for health checks.
+            event_bus: Optional event bus for publishing events.
         """
         self.workspace = Path(workspace).resolve()
         self.alert_manager = alert_manager
         self.default_check_interval = default_check_interval
+        self.event_bus = event_bus or get_event_bus()
 
         # Services registry
         self._services: Dict[str, ServiceConfig] = {}
@@ -475,15 +495,35 @@ class NetworkMonitor:
             "alerts_triggered": 0,
         }
 
+        # Thread safety for shared state accessed from async tasks and sync callers
+        self._lock = threading.RLock()
+
     def register_service(self, service: ServiceConfig) -> None:
         """Register a service for monitoring.
 
         Args:
             service: Service configuration to register.
         """
-        self._services[service.name] = service
-        self._service_health[service.name] = ServiceHealth(name=service.name)
+        with self._lock:
+            self._services[service.name] = service
+            self._service_health[service.name] = ServiceHealth(name=service.name)
+
         print(f"[NETWORK] Registered service: {service.name} with {len(service.endpoints)} endpoints")
+
+        # Emit service registered event
+        self.event_bus.emit(
+            name="service.registered",
+            data={
+                "service_name": service.name,
+                "description": service.description,
+                "endpoint_count": len(service.endpoints),
+                "endpoints": [e.name for e in service.endpoints],
+                "depends_on": service.depends_on,
+            },
+            source="network_monitor",
+            priority=EventPriority.NORMAL,
+            tags={"service": service.name},
+        )
 
     def unregister_service(self, name: str) -> None:
         """Unregister a service.
@@ -491,37 +531,58 @@ class NetworkMonitor:
         Args:
             name: Name of the service to unregister.
         """
-        self._services.pop(name, None)
-        self._service_health.pop(name, None)
+        service = None
+        task = None
+        with self._lock:
+            service = self._services.pop(name, None)
+            self._service_health.pop(name, None)
 
-        # Cancel any running check task
-        if name in self._check_tasks:
-            self._check_tasks[name].cancel()
-            del self._check_tasks[name]
+            # Cancel any running check task
+            if name in self._check_tasks:
+                task = self._check_tasks.pop(name)
+
+        if task:
+            task.cancel()
+
+        # Emit service unregistered event
+        if service:
+            self.event_bus.emit(
+                name="service.unregistered",
+                data={"service_name": name},
+                source="network_monitor",
+                priority=EventPriority.NORMAL,
+                tags={"service": name},
+            )
 
     def get_service(self, name: str) -> Optional[ServiceConfig]:
         """Get a service configuration by name."""
-        return self._services.get(name)
+        with self._lock:
+            return self._services.get(name)
 
     def list_services(self) -> List[ServiceConfig]:
         """List all registered services."""
-        return list(self._services.values())
+        with self._lock:
+            return list(self._services.values())
 
     def get_service_health(self, name: str) -> Optional[ServiceHealth]:
         """Get health status for a service."""
-        return self._service_health.get(name)
+        with self._lock:
+            return self._service_health.get(name)
 
     def get_all_health(self) -> Dict[str, ServiceHealth]:
         """Get health status for all services."""
-        return self._service_health.copy()
+        with self._lock:
+            return self._service_health.copy()
 
     def add_health_change_callback(self, callback: Callable[[str, ServiceStatus, ServiceStatus], None]) -> None:
         """Add callback for health status changes."""
-        self._health_change_callbacks.append(callback)
+        with self._lock:
+            self._health_change_callbacks.append(callback)
 
     def add_check_complete_callback(self, callback: Callable[[HealthCheckResult], None]) -> None:
         """Add callback for completed health checks."""
-        self._check_complete_callbacks.append(callback)
+        with self._lock:
+            self._check_complete_callbacks.append(callback)
 
     async def check_service(self, service_name: str) -> List[HealthCheckResult]:
         """Check all endpoints for a service.
@@ -532,19 +593,22 @@ class NetworkMonitor:
         Returns:
             List of health check results.
         """
-        service = self._services.get(service_name)
-        if not service or not service.enabled:
-            return []
+        with self._lock:
+            service = self._services.get(service_name)
+            if not service or not service.enabled:
+                return []
 
-        health = self._service_health.get(service_name)
-        if not health:
-            health = ServiceHealth(name=service_name)
-            self._service_health[service_name] = health
+            health = self._service_health.get(service_name)
+            if not health:
+                health = ServiceHealth(name=service_name)
+                self._service_health[service_name] = health
 
-        old_status = health.status
+            old_status = health.status
+            endpoints = list(service.endpoints)
+
         results = []
 
-        for endpoint in service.endpoints:
+        for endpoint in endpoints:
             if not endpoint.enabled:
                 continue
 
@@ -552,20 +616,65 @@ class NetworkMonitor:
             results.append(result)
 
             # Notify check complete callbacks
-            for callback in self._check_complete_callbacks:
+            with self._lock:
+                callbacks = list(self._check_complete_callbacks)
+
+            for callback in callbacks:
                 try:
                     callback(result)
                 except Exception as e:
                     print(f"[NETWORK] Error in check complete callback: {e}")
 
+            # Emit check complete event
+            self.event_bus.emit(
+                name="service.check_complete",
+                data=result.to_dict(),
+                source="network_monitor",
+                priority=EventPriority.LOW,
+                tags={"service": service_name, "endpoint": endpoint.name},
+            )
+
         # Update service health
         self._update_service_health(service_name, results)
 
-        # Check for health status change
-        if health.status != old_status:
-            for callback in self._health_change_callbacks:
+        # Check for health status change and emit events
+        with self._lock:
+            current_status = self._service_health[service_name].status
+            callbacks = list(self._health_change_callbacks)
+
+        if current_status != old_status:
+            # Emit service status change event
+            event_name = "service.status_changed"
+            if current_status == ServiceStatus.HEALTHY and old_status != ServiceStatus.HEALTHY:
+                if old_status == ServiceStatus.UNHEALTHY:
+                    event_name = "service.recovered"
+                else:
+                    event_name = "service.online"
+            elif current_status == ServiceStatus.UNHEALTHY:
+                event_name = "service.offline"
+            elif current_status == ServiceStatus.DEGRADED:
+                event_name = "service.degraded"
+
+            self.event_bus.emit(
+                name=event_name,
+                data={
+                    "service_name": service_name,
+                    "old_status": old_status.value,
+                    "new_status": current_status.value,
+                    "healthy_endpoints": health.healthy_endpoints,
+                    "total_endpoints": health.total_endpoints,
+                    "consecutive_failures": health.consecutive_failures,
+                    "consecutive_successes": health.consecutive_successes,
+                },
+                source="network_monitor",
+                priority=EventPriority.HIGH if current_status == ServiceStatus.UNHEALTHY else EventPriority.NORMAL,
+                tags={"service": service_name},
+            )
+
+            # Also call legacy callbacks
+            for callback in callbacks:
                 try:
-                    callback(service_name, old_status, health.status)
+                    callback(service_name, old_status, current_status)
                 except Exception as e:
                     print(f"[NETWORK] Error in health change callback: {e}")
 
@@ -620,17 +729,22 @@ class NetworkMonitor:
             result.endpoint_name = endpoint.name
             last_result = result
 
-            # Update stats
-            self._stats["total_checks"] += 1
-            if result.success:
-                self._stats["successful_checks"] += 1
-            else:
-                self._stats["failed_checks"] += 1
+            # Update stats and history (thread-safe)
+            with self._lock:
+                self._stats["total_checks"] += 1
+                if result.success:
+                    self._stats["successful_checks"] += 1
+                else:
+                    self._stats["failed_checks"] += 1
 
-            # Add to history
-            self._check_history.append(result)
-            if len(self._check_history) > self._max_history:
-                self._check_history = self._check_history[-self._max_history:]
+                # Add to history
+                self._check_history.append(result)
+                if len(self._check_history) > self._max_history:
+                    self._check_history = self._check_history[-self._max_history:]
+
+            # Emit events for specific failure types
+            if not result.success:
+                self._emit_failure_event(service_name, endpoint, result, attempt)
 
             # If successful, break retry loop
             if result.success:
@@ -645,6 +759,74 @@ class NetworkMonitor:
             await self._trigger_latency_alert(service_name, endpoint, last_result)
 
         return last_result
+
+    def _emit_failure_event(self, service_name: str, endpoint: EndpointConfig, result: HealthCheckResult, attempt: int) -> None:
+        """Emit specific failure events based on error type."""
+        error_msg = result.error_message.lower()
+
+        if "dns" in error_msg or "resolution" in error_msg or "getaddrinfo" in error_msg or "name or service not known" in error_msg:
+            self.event_bus.emit(
+                name="service.dns_failure",
+                data={
+                    "service_name": service_name,
+                    "endpoint_name": endpoint.name,
+                    "url": endpoint.url,
+                    "error": result.error_message,
+                    "attempt": attempt + 1,
+                    "max_retries": endpoint.max_retries,
+                },
+                source="network_monitor",
+                priority=EventPriority.HIGH,
+                tags={"service": service_name, "endpoint": endpoint.name, "error_type": "dns"},
+            )
+        elif "timeout" in error_msg:
+            self.event_bus.emit(
+                name="service.timeout",
+                data={
+                    "service_name": service_name,
+                    "endpoint_name": endpoint.name,
+                    "url": endpoint.url,
+                    "error": result.error_message,
+                    "attempt": attempt + 1,
+                    "max_retries": endpoint.max_retries,
+                    "timeout_seconds": endpoint.timeout_seconds,
+                },
+                source="network_monitor",
+                priority=EventPriority.HIGH,
+                tags={"service": service_name, "endpoint": endpoint.name, "error_type": "timeout"},
+            )
+        elif "connection refused" in error_msg or "connection reset" in error_msg or "unreachable" in error_msg:
+            self.event_bus.emit(
+                name="service.endpoint_unreachable",
+                data={
+                    "service_name": service_name,
+                    "endpoint_name": endpoint.name,
+                    "url": endpoint.url,
+                    "error": result.error_message,
+                    "attempt": attempt + 1,
+                    "max_retries": endpoint.max_retries,
+                },
+                source="network_monitor",
+                priority=EventPriority.HIGH,
+                tags={"service": service_name, "endpoint": endpoint.name, "error_type": "unreachable"},
+            )
+        else:
+            self.event_bus.emit(
+                name="service.check_failed",
+                data={
+                    "service_name": service_name,
+                    "endpoint_name": endpoint.name,
+                    "url": endpoint.url,
+                    "check_type": endpoint.check_type.value,
+                    "error": result.error_message,
+                    "attempt": attempt + 1,
+                    "max_retries": endpoint.max_retries,
+                    "latency_ms": result.latency_ms,
+                },
+                source="network_monitor",
+                priority=EventPriority.NORMAL,
+                tags={"service": service_name, "endpoint": endpoint.name},
+            )
 
     async def _trigger_latency_alert(self, service_name: str, endpoint: EndpointConfig, result: HealthCheckResult) -> None:
         """Trigger alert for high latency."""
@@ -668,37 +850,55 @@ class NetworkMonitor:
             },
         )
         self.alert_manager.trigger(alert)
-        self._stats["alerts_triggered"] += 1
+        with self._lock:
+            self._stats["alerts_triggered"] += 1
+
+        # Also emit high latency event
+        self.event_bus.emit(
+            name="service.high_latency",
+            data={
+                "service_name": service_name,
+                "endpoint_name": endpoint.name,
+                "url": endpoint.url,
+                "latency_ms": result.latency_ms,
+                "threshold_ms": endpoint.max_latency_ms,
+                "status_code": result.status_code,
+            },
+            source="network_monitor",
+            priority=EventPriority.HIGH,
+            tags={"service": service_name, "endpoint": endpoint.name, "alert_type": "latency"},
+        )
 
     def _update_service_health(self, service_name: str, results: List[HealthCheckResult]) -> None:
         """Update aggregated service health from check results."""
-        health = self._service_health[service_name]
-        health.last_check = datetime.now(timezone.utc).isoformat()
-        health.last_results = results
-        health.total_endpoints = len(results)
+        with self._lock:
+            health = self._service_health[service_name]
+            health.last_check = datetime.now(timezone.utc).isoformat()
+            health.last_results = results
+            health.total_endpoints = len(results)
 
-        healthy_count = sum(1 for r in results if r.success)
-        health.healthy_endpoints = healthy_count
+            healthy_count = sum(1 for r in results if r.success)
+            health.healthy_endpoints = healthy_count
 
-        if healthy_count == 0:
-            health.status = ServiceStatus.UNHEALTHY
-        elif healthy_count == len(results):
-            health.status = ServiceStatus.HEALTHY
-        else:
-            health.status = ServiceStatus.DEGRADED
+            if healthy_count == 0:
+                health.status = ServiceStatus.UNHEALTHY
+            elif healthy_count == len(results):
+                health.status = ServiceStatus.HEALTHY
+            else:
+                health.status = ServiceStatus.DEGRADED
 
-        # Update consecutive counts
-        if health.healthy_endpoints == health.total_endpoints:
-            health.consecutive_successes += 1
-            health.consecutive_failures = 0
-        else:
-            health.consecutive_failures += 1
-            health.consecutive_successes = 0
+            # Update consecutive counts
+            if health.healthy_endpoints == health.total_endpoints:
+                health.consecutive_successes += 1
+                health.consecutive_failures = 0
+            else:
+                health.consecutive_failures += 1
+                health.consecutive_successes = 0
 
-        # Calculate uptime percentage (simplified)
-        total_checks = health.consecutive_successes + health.consecutive_failures
-        if total_checks > 0:
-            health.uptime_percentage = (health.consecutive_successes / total_checks) * 100
+            # Calculate uptime percentage (simplified)
+            total_checks = health.consecutive_successes + health.consecutive_failures
+            if total_checks > 0:
+                health.uptime_percentage = (health.consecutive_successes / total_checks) * 100
 
     async def check_all_services(self) -> Dict[str, List[HealthCheckResult]]:
         """Check all registered services.
@@ -706,51 +906,64 @@ class NetworkMonitor:
         Returns:
             Dictionary mapping service names to check results.
         """
+        with self._lock:
+            service_names = [name for name, s in self._services.items() if s.enabled]
+
         results = {}
-        for service_name in self._services:
-            if self._services[service_name].enabled:
-                results[service_name] = await self.check_service(service_name)
+        for service_name in service_names:
+            results[service_name] = await self.check_service(service_name)
         return results
 
     async def start_monitoring(self) -> None:
         """Start continuous monitoring of all services."""
-        if self._running:
-            return
+        with self._lock:
+            if self._running:
+                return
 
-        self._running = True
-        print(f"[NETWORK] Starting monitoring for {len(self._services)} services")
+            self._running = True
+            services_to_start = [
+                (name, service) for name, service in self._services.items()
+                if service.enabled
+            ]
 
-        for service_name, service in self._services.items():
-            if service.enabled:
-                task = asyncio.create_task(self._monitor_service(service_name))
+        print(f"[NETWORK] Starting monitoring for {len(services_to_start)} services")
+
+        for service_name, service in services_to_start:
+            task = asyncio.create_task(self._monitor_service(service_name))
+            with self._lock:
                 self._check_tasks[service_name] = task
 
     async def stop_monitoring(self) -> None:
         """Stop continuous monitoring."""
-        self._running = False
+        tasks = []
+        with self._lock:
+            self._running = False
+            tasks = list(self._check_tasks.values())
+            self._check_tasks.clear()
 
         # Cancel all check tasks
-        for task in self._check_tasks.values():
+        for task in tasks:
             task.cancel()
 
         # Wait for tasks to complete
-        if self._check_tasks:
-            await asyncio.gather(*self._check_tasks.values(), return_exceptions=True)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
-        self._check_tasks.clear()
         await self._checker.close()
 
         print("[NETWORK] Monitoring stopped")
 
     async def _monitor_service(self, service_name: str) -> None:
         """Background task to monitor a single service."""
-        service = self._services.get(service_name)
-        if not service:
-            return
+        with self._lock:
+            service = self._services.get(service_name)
+            if not service:
+                return
 
-        interval = service.check_interval_seconds or self.default_check_interval
+            interval = service.check_interval_seconds or self.default_check_interval
+            running = self._running
 
-        while self._running:
+        while running:
             try:
                 await self.check_service(service_name)
             except asyncio.CancelledError:
@@ -764,26 +977,36 @@ class NetworkMonitor:
             except asyncio.CancelledError:
                 break
 
+            with self._lock:
+                running = self._running
+
     def get_summary(self) -> Dict[str, Any]:
         """Get a summary of network monitoring status."""
-        healthy_services = sum(1 for h in self._service_health.values() if h.status == ServiceStatus.HEALTHY)
-        degraded_services = sum(1 for h in self._service_health.values() if h.status == ServiceStatus.DEGRADED)
-        unhealthy_services = sum(1 for h in self._service_health.values() if h.status == ServiceStatus.UNHEALTHY)
+        with self._lock:
+            healthy_services = sum(1 for h in self._service_health.values() if h.status == ServiceStatus.HEALTHY)
+            degraded_services = sum(1 for h in self._service_health.values() if h.status == ServiceStatus.DEGRADED)
+            unhealthy_services = sum(1 for h in self._service_health.values() if h.status == ServiceStatus.UNHEALTHY)
+            monitoring = self._running
+            total_services = len(self._services)
+            enabled_services = sum(1 for s in self._services.values() if s.enabled)
+            stats = self._stats.copy()
+            services = {name: health.to_dict() for name, health in self._service_health.items()}
 
         return {
-            "monitoring": self._running,
-            "total_services": len(self._services),
-            "enabled_services": sum(1 for s in self._services.values() if s.enabled),
+            "monitoring": monitoring,
+            "total_services": total_services,
+            "enabled_services": enabled_services,
             "healthy_services": healthy_services,
             "degraded_services": degraded_services,
             "unhealthy_services": unhealthy_services,
-            "stats": self._stats.copy(),
-            "services": {name: health.to_dict() for name, health in self._service_health.items()},
+            "stats": stats,
+            "services": services,
         }
 
     def get_check_history(self, count: Optional[int] = None, service_name: Optional[str] = None) -> List[HealthCheckResult]:
         """Get check history."""
-        history = self._check_history
+        with self._lock:
+            history = list(self._check_history)
 
         if service_name:
             history = [r for r in history if r.service_name == service_name]
@@ -804,8 +1027,13 @@ class NetworkMonitor:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
 
+        services = []
         for service_data in data.get("services", []):
             service = ServiceConfig.from_dict(service_data)
+            services.append(service)
+
+        # Register all services (each call acquires its own lock)
+        for service in services:
             self.register_service(service)
 
     def save_services_to_config(self, config_path: str) -> None:
@@ -814,8 +1042,11 @@ class NetworkMonitor:
         path = Path(config_path)
         path.parent.mkdir(parents=True, exist_ok=True)
 
+        with self._lock:
+            services_data = [s.to_dict() for s in self._services.values()]
+
         data = {
-            "services": [s.to_dict() for s in self._services.values()],
+            "services": services_data,
         }
 
         with open(path, "w", encoding="utf-8") as f:

@@ -314,16 +314,22 @@ class TestMetrics:
             )
             output = result.stdout + result.stderr
             # Parse output for passed/failed counts
+            # Pytest output format: "10 passed, 2 failed, 3 skipped in 1.23s"
+            import re
             passed = 0
             failed = 0
             skipped = 0
-            for part in output.split():
-                if part.startswith("passed"):
-                    passed = int(part.replace("passed", "").replace(",", "").strip())
-                elif part.startswith("failed"):
-                    failed = int(part.replace("failed", "").replace(",", "").strip())
-                elif part.startswith("skipped"):
-                    skipped = int(part.replace("skipped", "").replace(",", "").strip())
+
+            # Match patterns like "10 passed", "2 failed", "3 skipped" (with optional commas)
+            for match in re.finditer(r"(\d+)\s+(passed|failed|skipped)", output):
+                count = int(match.group(1))
+                kind = match.group(2)
+                if kind == "passed":
+                    passed = count
+                elif kind == "failed":
+                    failed = count
+                elif kind == "skipped":
+                    skipped = count
 
             total = passed + failed + skipped
             if total > 0:
@@ -404,16 +410,16 @@ class TestMetrics:
                 timeout=120,
             )
             output = result.stdout + result.stderr
-            for part in output.split():
-                if part.startswith("skipped"):
-                    skipped = int(part.replace("skipped", "").replace(",", "").strip())
-                    return Metric(
-                        name="skipped_tests",
-                        description="Number of skipped tests",
-                        category="testing",
-                        value=float(skipped),
-                        unit="tests",
-                    )
+            import re
+            for match in re.finditer(r"(\d+)\s+skipped", output):
+                skipped = int(match.group(1))
+                return Metric(
+                    name="skipped_tests",
+                    description="Number of skipped tests",
+                    category="testing",
+                    value=float(skipped),
+                    unit="tests",
+                )
         except (subprocess.TimeoutExpired, FileNotFoundError):
             pass
         return Metric(
