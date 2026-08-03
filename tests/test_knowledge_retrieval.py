@@ -23,6 +23,7 @@ from app.knowledge_retrieval import (
     UsageAnalytics,
     KnowledgeSourceAdapter,
     SemanticMemoryAdapter,
+    VectorSearchAdapter,
     PipelineStats,
     KnowledgeRetrievalPipeline,
     create_pipeline_from_agent,
@@ -607,6 +608,30 @@ class TestSourceAdapters:
         assert len(results) == 1
         assert results[0].source_type == KnowledgeSourceType.SEMANTIC_MEMORY
         assert "singleton" in results[0].content.lower()
+
+    def test_vector_search_adapter(self):
+        """Test vector search adapter with mock."""
+        mock_vector_db = Mock()
+        mock_vector_db.is_empty.return_value = False
+        mock_vector_db.embedding_dim = 128
+        mock_vector_db.search.return_value = [
+            (1, 0.9, {"content": "Test content", "title": "Test Title"}),
+        ]
+
+        adapter = VectorSearchAdapter(vector_db=mock_vector_db)
+        assert adapter.is_available()
+
+        results = adapter.retrieve_candidates(RetrievalQuery(query="test"))
+        assert len(results) == 1
+        assert results[0].source_type == KnowledgeSourceType.VECTOR_SEARCH
+        assert results[0].content == "Test content"
+        assert results[0].title == "Test Title"
+        assert results[0].raw_confidence == 0.9
+
+        # Test when vector_db is empty
+        mock_vector_db.is_empty.return_value = True
+        assert not adapter.is_available()
+        assert adapter.retrieve_candidates(RetrievalQuery(query="test")) == []
 
 
 class TestConvenienceFunctions:

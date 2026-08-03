@@ -2,7 +2,7 @@
 
 **Version:** v0.7.0
 
-**Last Updated:** 2026-08-04 (Parallel Tool Execution Subsystem Implemented - Concurrent Tool Execution with Dependency-aware Scheduling; All Tests Passing)
+**Last Updated:** 2026-08-04 (Semantic Vector Search Subsystem Implemented - FAISS-based semantic search for knowledge retrieval; All Tests Passing)
 
 **Purpose**
 
@@ -878,7 +878,7 @@ Status: ✅ COMPLETE (100%)
 
 6. **Source Adapters** (`app/knowledge_retrieval/sources.py`)
    - `KnowledgeSourceAdapter` base class with `source_type`, `is_available()`, `retrieve_candidates()`, `get_source_quality()`
-   - 9 concrete adapters:
+   - 10 concrete adapters:
      - `SemanticMemoryAdapter` — General programming knowledge
      - `EpisodicMemoryAdapter` — Event history with outcomes
      - `ProjectMemoryAdapter` — Project-specific knowledge
@@ -887,6 +887,7 @@ Status: ✅ COMPLETE (100%)
      - `ExperienceMemoryAdapter` — Past task experiences
      - `EngineeringLessonsAdapter` — Patterns and anti-patterns
      - `ExtractedKnowledgeAdapter` — From knowledge_extraction pipeline
+     - `VectorSearchAdapter` — FAISS-based semantic vector search
      - `DocumentationAdapter` — Markdown/RST docs
    - `create_adapters_from_agent(agent)` — Auto-creates all adapters from FreyaAgent
 
@@ -897,14 +898,12 @@ Status: ✅ COMPLETE (100%)
 **Tests:** 27 tests in `tests/test_knowledge_retrieval.py` — all passing
 
 **Known Limitations:**
-- No semantic vector search (keyword/phrase matching only; could integrate FAISS)
 - No cross-project retrieval (single workspace only)
 - No UI dashboard (analytics via programmatic access only)
 - Calibration requires minimum samples (~20 observations per source)
 - Adaptation is simple (gradient-like weight adjustment only)
 
 **Future Enhancements:**
-- Semantic vector search integration
 - Multi-project/federated retrieval
 - Retrieval UI dashboard for observability
 - More sophisticated adaptive ranking (bandit algorithms)
