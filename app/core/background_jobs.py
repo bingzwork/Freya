@@ -29,6 +29,8 @@ from collections import defaultdict
 
 from app.core.logger import logger
 from app.core.events import EventBus, get_event_bus, Event, EventPriority
+from pathlib import Path
+import json
 
 
 class JobStatus(Enum):
@@ -301,7 +303,58 @@ class BackgroundJobService:
             "total_jobs_retried": 0,
         }
         self._stats_lock = threading.Lock()
+        # Job execution history
+        self._history_file = Path("data/scheduling/job_history.json")
+        self._history_file.parent.mkdir(parents=True, exist_ok=True)
+        self._job_history: List[Dict[str, Any]] = []
+        self._max_history_size = 10000
+        self._history_lock = threading.RLock()
+        self._load_history()
 
+    def _load_history(self) -> None:
+        """Load job execution history from disk."""
+        try:
+            if self._history_file.exists():
+                with self._history_file.open("r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, list):
+                        self._job_history = data
+                        # Trim to max size
+                        if len(self._job_history) > self._max_history_size:
+                            self._job_history = self._job_history[-self._max_history_size:]
+                    else:
+                        self._job_history = []
+        except Exception as e:
+            logger.warning(f"Failed to load job history: {e}")
+            self._job_history = []
+
+    def _save_history(self) -> None:
+        """Save job execution history to disk."""
+        try:
+            with self._history_file.parent.joinpath("job_history.json.tmp").open("w", encoding="utf-8") as f:
+                json.dump(self._job_history, f, indent=2)
+            # Atomic replace
+            temp_file = self._history_file.parent.joinpath("job_history.json.tmp")
+            temp_file.replace(self._history_file)
+        except Exception as e:
+            logger.error(f"Failed to save job history: {e}")
+
+    def _record_job_execution(self, job: Job, job_result: JobResult) -> None:
+        """Record job execution to history."""
+        record = {
+            "job_id": job.id,
+            "job_name": job.name,
+            "success": job_result.success,
+            "duration_seconds": job_result.duration_seconds,
+            "timestamp": job_result.timestamp,
+            "error": job_result.error,
+            "retry_count": job.current_retry,
+        }
+        with self._history_lock:
+            self._job_history.append(record)
+            if len(self._job_history) > self._max_history_size:
+                self._job_history = self._job_history[-self._max_history_size:]
+            self._save_history()
     def start(self) -> None:
         """Explicitly start the background scheduler thread.
 
@@ -413,6 +466,7 @@ class BackgroundJobService:
                     duration_seconds=duration,
                 )
                 job.add_result(job_result)
+                self._record_job_execution(job, job_result)
                 job.last_error = None
                 job.current_retry = 0
 
@@ -466,6 +520,7 @@ class BackgroundJobService:
                     duration_seconds=duration,
                 )
                 job.add_result(job_result)
+                self._record_job_execution(job, job_result)
 
                 # Emit retry event
                 self._emit_job_event("job.retrying", job, {
@@ -489,6 +544,7 @@ class BackgroundJobService:
                     duration_seconds=duration,
                 )
                 job.add_result(job_result)
+                self._record_job_execution(job, job_result)
 
                 # Emit job failed event
                 self._emit_job_event("job.failed", job, {"error": error_msg, "duration": duration})
@@ -845,6 +901,21 @@ class BackgroundJobService:
             "workers_available": self._worker_semaphore._value,
         })
         return stats
+
+    def get_job_history(self, job_id: Optional[str] = None, limit: int = 100, success: Optional[bool] = None) -> List[Dict[str, Any]]:
+        """Get job execution history with optional filtering."""
+        with self._history_lock:
+            history = self._job_history
+        if job_id:
+            history = [record for record in history if record.get("job_id") == job_id]
+        if success is not None:
+            history = [record for record in history if record.get("success") == success]
+        # Return most recent first
+        history = list(reversed(history))
+        if limit:
+            history = history[:limit]
+        return history
+
 
     def shutdown(self, wait: bool = True, timeout: float = 30.0) -> None:
         """Shutdown the job service."""
