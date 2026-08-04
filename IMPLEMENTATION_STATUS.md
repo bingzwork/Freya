@@ -2,7 +2,7 @@
 
 **Version:** v0.7.0
 
-**Last Updated:** 2026-08-04 (Scheduling History & Analytics Subsystem Implemented - BackgroundJobService enhanced with execution history and analytics)
+**Last Updated:** 2026-08-04 (Unified Runtime Decision Pipeline Complete - Self Observation subsystem completion)
 
 **Purpose**
 
@@ -49,7 +49,7 @@ This document should always reflect the current state of the codebase.
 | Failure Recovery | ✅ COMPLETE | 95% |
 | World Model | 🟢 MOSTLY COMPLETE | 75% |
 | Autonomous Software Engineering | ✅ COMPLETE | 100% |
-| Self Observation | ✅ COMPLETE | 85% |
+| Self Observation | ✅ COMPLETE | 90% |
 | Learning System | ✅ COMPLETE | 100% |
 | Safe Self Improvement | ✅ COMPLETE | 100% |
 | Task Scheduling | ✅ COMPLETE | 90% |
@@ -106,7 +106,7 @@ The following work provides the highest impact because the implementation alread
 - ~~Migrate from the legacy planner to the new planner framework (Phase 1)~~ — completed (PlanManager integrated into FreyaAgent; Planner creates Plan objects; Executor consumes Plan objects; backward compatibility maintained).
 - ~~Migrate from the legacy planner to the new planner framework (Phase 2+)~~ — **Phase 2 complete:** `Planner.create_plan()` builds TaskGraph with sequential dependencies, `TaskGraph.topological_sort()` drives `Executor.execute_plan()` execution order, cycle detection rejects cyclic graphs, completed TaskNode state preserved for replanning. **Phase 3 complete:** Scheduler (ASAP, PRIORITY_FIRST) and ResourceAllocator (default MACHINE, TOOL, GPU resources) wired into execution pipeline; linear loop replaced with scheduler-driven execution.
 - ~~Implement Autonomous Learning Pipeline~~ — **COMPLETED** (Experience → Knowledge Extraction → Validation → Storage → Gap Detection → Autonomous Research fully implemented in `app/autonomous_learning/` with background scheduler, analytics, and multi-agent knowledge sharing).
-- Connect monitoring, diagnostics, confidence, and risk into a unified runtime decision pipeline.
+- ~~Connect monitoring, diagnostics, confidence, and risk into a unified runtime decision pipeline~~ — **COMPLETED** (Unified Runtime Decision Pipeline implemented in `app/self_observation/decision_pipeline.py`; 9-stage pipeline with 11 context sources integrating CentralOrchestrator, DecisionManager, WorldModel, UnifiedRetrieval, RecoveryOrchestrator, SafetyGate, AutonomyManager, ObservabilityHub, EventBus).
 - ~~Build the closed-loop self-improvement pipeline (improvement loop fix methods are stubs)~~ — **Fix methods implemented** (`_fix_complexity`, `_fix_style`, `_fix_docs`, `_fix_tests` now delegate to PatchGenerator + RepairLoop). Remaining: File allowlists, safety gates, improvement prioritization, full Risk Analysis gating.
 - Add external knowledge acquisition.
 - Add additional LLM providers.

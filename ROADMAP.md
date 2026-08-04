@@ -1,7 +1,7 @@
 # Freya Roadmap
 
 **Source of Truth:** Current Implementation
-**Last Updated:** 2026-08-04 (Monitoring Subsystem Production Hardening Complete - GPU/Network/System Monitors Thread-Safe with EventBus Integration; All Tests Passing)
+**Last Updated:** 2026-08-04 (Unified Runtime Decision Pipeline Complete - Self Observation completion; Monitoring Subsystem Production Hardening Complete)
 
 ---
 
@@ -31,7 +31,7 @@ The codebase already contains mature foundation modules across planning, memory,
 | Failure Recovery                | Complete (Foundation + High Priority)           |
 | World Model                     | 🟢 Mostly Complete (~85%)                       |
 | Autonomous Software Engineering | Core Complete                                   |
-| Self Observation                | Complete (Integration Partial)                  |
+| Self Observation                | ✅ **COMPLETE (90%)**                         |
 | Learning System                 | ✅ **COMPLETE (100%)**                      |
 | Safe Self Improvement           | ✅ **COMPLETE (100%)**                        |
 | Task Scheduling                 | Complete (ASAP, PRIORITY_FIRST)                |
@@ -222,7 +222,7 @@ Connect existing systems that already exist but are currently isolated.
 * Wire risk analysis into execution decisions.
 * Connect backlog generation with diagnostics.
 * Improve runtime observability.
-* **Wire confidence, risk, and decision components into a unified decision pipeline.**
+* ~~Wire confidence, risk, and decision components into a unified decision pipeline~~ — **COMPLETED** (Unified Runtime Decision Pipeline implemented; 9 stages with 11 context sources)
 
 ### Expected Outcome
 
