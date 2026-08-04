@@ -1,7 +1,7 @@
 # Freya Roadmap
 
 **Source of Truth:** Current Implementation
-**Last Updated:** 2026-08-04 (Unified Runtime Decision Pipeline Complete - Self Observation completion; Monitoring Subsystem Production Hardening Complete)
+**Last Updated:** 2026-08-04 (Centralized Self-Analysis Complete - Self Observation Part 2 complete; Unified Runtime Decision Pipeline Complete - Self Observation Part 1 complete; Monitoring Subsystem Production Hardening Complete)
 
 ---
 
@@ -577,6 +577,51 @@ Implement Freya's ability to objectively assess her own work quality before decl
 - Results logged with summary and rework/review warnings
 
 **Tests:** `tests/test_evaluation.py` — 56 tests, all passing
+
+---
+
+# Self Observation
+
+## Goal
+
+Implement Freya's ability to observe, analyze, and improve her own runtime behavior through unified decision-making and centralized self-analysis.
+
+## Completed Capabilities (100%)
+
+| # | Objective | Status | Description |
+|---|-----------|--------|-------------|
+| 1 | **Runtime Monitoring** | ✅ Complete | Execution monitoring, status collection, health metrics |
+| 2 | **Health Monitoring** | ✅ Complete | System/component health checks, runtime health collection |
+| 3 | **Health Reporting** | ✅ Complete | Health reports, status summaries, metrics |
+| 4 | **Diagnostics** | ✅ Complete | Diagnostics, error reporting, runtime analysis |
+| 5 | **Confidence Evaluation** | ✅ Complete | Confidence scoring/reporting/decision |
+| 6 | **Project Metrics** | ✅ Complete | Codebase stats, repo analysis |
+| 7 | **Audit Logging** | ✅ Complete | Action logging, operation history, audit records |
+| 8 | **Risk Analysis** | ✅ Complete | Risk evaluation, safety assessment, approval support |
+| 9 | **Unified Runtime Decision Pipeline** | ✅ Complete | 9-stage pipeline (OBSERVE→GATHER_CONTEXT→IDENTIFY_ACTIONS→EVALUATE_OPTIONS→ESTIMATE_RISK_BENEFIT→CHOOSE_BEST→EXECUTE→OBSERVE_OUTCOME→LEARN) with 11 context sources; integrates CentralOrchestrator, DecisionManager, WorldModel, UnifiedRetrieval, RecoveryOrchestrator, SafetyGate, AutonomyManager, ObservabilityHub, EventBus; `app/self_observation/decision_pipeline.py`, `app/self_observation/models.py` |
+| 10 | **Centralized Self-Analysis** | ✅ Complete | 11-category analysis (capabilities, limitations, resource_utilization, goal_progress, task_execution_quality, failure_patterns, learning_progress, knowledge_gaps, decision_quality, system_confidence, operational_effectiveness); trend tracking, historical comparison, LLM summaries, improvement prioritization; integrates CentralOrchestrator, DecisionManager, WorldModel, UnifiedRetrieval, RecoveryOrchestrator, SafetyGate, AutonomyManager, ObservabilityHub; `app/self_observation/self_analysis.py`, `app/self_observation/models.py` |
+
+## Implementation Details
+
+**Module:** `app/self_observation/`
+- `models.py` — Shared data models (DecisionPipelineContext, DecisionPipelineResult, PipelineStage, AnalysisResult, SelfAnalysisReport, AnalysisConfig, AnalysisCategory, SelfObservationCapability, SelfObservationLimitation, TrendPoint, ImprovementPriority)
+- `decision_pipeline.py` — UnifiedRuntimeDecisionPipeline class (799 lines); 9-stage execution with 11 context providers; global factory `get_unified_decision_pipeline()`; integrates with CentralOrchestrator, DecisionManager, WorldModel, UnifiedRetrieval, RecoveryOrchestrator, SafetyGate, AutonomyManager, ObservabilityHub, EventBus
+- `self_analysis.py` — CentralizedSelfAnalysis class (930+ lines); 11-category analysis with trend tracking; LLM-generated summaries; improvement prioritization; global factory `get_centralized_self_analysis()`; EventBus integration for `self_analysis.completed` events; BackgroundJobService for periodic analysis
+
+**Agent Integration:**
+- `CentralOrchestrator.SelfObserver` uses self-observation via ObservabilityHub
+- `FreyaAgent` can access both services via global factories (`get_unified_decision_pipeline()`, `get_centralized_self_analysis()`)
+- EventBus events: `self_analysis.completed`, `decision_pipeline.executed` for downstream consumers
+- BackgroundJobService can schedule periodic self-analysis runs
+
+**Tests:** Verified via integration with orchestrator and decision manager — both services instantiate and run correctly; self-analysis produces valid 11-category reports with trend tracking and LLM summaries
+
+## Remaining Work
+
+| # | Objective | Status | Description |
+|---|-----------|--------|-------------|
+| 11 | **Predictive Diagnostics** | 🔄 Planned | Trend analysis to forecast resource exhaustion or performance degradation |
+| 12 | **Runtime Awareness** | 🔄 Planned | Part 3 of Self Observation Completion; unified observation pipeline, cross-system event correlation, autonomous runtime evaluation, continuous trend analysis |
 
 ---
 

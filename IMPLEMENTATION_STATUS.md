@@ -1235,6 +1235,53 @@ Status: ✅ COMPLETE (100%)
 
 ---
 
+### Self Observation
+
+Status: ✅ COMPLETE (90%)
+
+**Implementation Date:** 2026-08-04 (Unified Runtime Decision Pipeline) / 2026-08-04 (Centralized Self-Analysis)
+
+**Core Components Implemented:**
+
+1. **Runtime Monitoring** — Execution monitoring, status collection, health metrics
+2. **Health Monitoring** — System/component health checks, runtime health collection
+3. **Health Reporting** — Health reports, status summaries, metrics
+4. **Diagnostics** — Diagnostics, error reporting, runtime analysis (90% complete — missing automatic diagnosis correlation)
+5. **Confidence Evaluation** — Confidence scoring/reporting/decision (90% complete — missing runtime decision integration)
+6. **Project Metrics** — Codebase stats, repo analysis (90% complete — missing continuous trend analysis)
+7. **Audit Logging** — Action logging, operation history, audit records
+8. **Risk Analysis** — Risk evaluation, safety assessment, approval support (90% complete — missing full runtime decision integration)
+
+**Unified Runtime Decision Pipeline** ✅ COMPLETE (100%)
+- **Implementation:** `app/self_observation/decision_pipeline.py`, `app/self_observation/models.py`
+- 9-stage pipeline: OBSERVE → GATHER_CONTEXT → IDENTIFY_ACTIONS → EVALUATE_OPTIONS → ESTIMATE_RISK_BENEFIT → CHOOSE_BEST → EXECUTE → OBSERVE_OUTCOME → LEARN
+- 11 context sources: runtime context, system resources, process monitoring, git awareness, file/symbol indexing, tool availability, health monitoring, diagnostics, metrics collection, alert management, world model snapshots
+- Integrates: CentralOrchestrator, DecisionManager, WorldModel, UnifiedRetrieval, RecoveryOrchestrator, SafetyGate, AutonomyManager, ObservabilityHub, EventBus
+- Global factory: `get_unified_decision_pipeline()`
+
+**Centralized Self-Analysis** ✅ COMPLETE (100%)
+- **Implementation:** `app/self_observation/self_analysis.py`, `app/self_observation/models.py`
+- 11-category analysis: capabilities, limitations, resource_utilization, goal_progress, task_execution_quality, failure_patterns, learning_progress, knowledge_gaps, decision_quality, system_confidence, operational_effectiveness
+- Trend tracking with historical comparison across analysis runs
+- LLM-generated summaries for each category and overall assessment
+- Improvement prioritization based on severity, confidence, and impact
+- Integrates: CentralOrchestrator, DecisionManager, WorldModel, UnifiedRetrieval, RecoveryOrchestrator, SafetyGate, AutonomyManager, ObservabilityHub
+- Global factory: `get_centralized_self_analysis()`
+
+**Integration Points:**
+- `CentralOrchestrator.SelfObserver` uses self-observation via ObservabilityHub
+- `FreyaAgent` can access both services via global factories
+- EventBus integration for self-analysis completion events
+- BackgroundJobService for scheduled self-analysis runs
+
+**Tests:** Verified via integration with orchestrator and decision manager — both services instantiate and run correctly
+
+**Remaining Work:**
+- Predictive diagnostics (trend analysis to forecast resource exhaustion or performance degradation)
+- Runtime Awareness (Part 3 of Self Observation Completion)
+
+---
+
 # Document Update Rules
 
 Whenever a capability changes:
