@@ -1,7 +1,7 @@
 # Freya Roadmap
 
 **Source of Truth:** Current Implementation
-**Last Updated:** 2026-08-04 (Centralized Self-Analysis Complete - Self Observation Part 2 complete; Unified Runtime Decision Pipeline Complete - Self Observation Part 1 complete; Monitoring Subsystem Production Hardening Complete)
+**Last Updated:** 2026-08-04 (Runtime Awareness Complete - Self Observation Part 3 complete; Centralized Self-Analysis Complete - Self Observation Part 2 complete; Unified Runtime Decision Pipeline Complete - Self Observation Part 1 complete; Monitoring Subsystem Production Hardening Complete)
 
 ---
 
@@ -31,7 +31,7 @@ The codebase already contains mature foundation modules across planning, memory,
 | Failure Recovery                | Complete (Foundation + High Priority)           |
 | World Model                     | 🟢 Mostly Complete (~85%)                       |
 | Autonomous Software Engineering | Core Complete                                   |
-| Self Observation                | ✅ **COMPLETE (90%)**                         |
+| Self Observation                | ✅ **COMPLETE (95%)**                         |
 | Learning System                 | ✅ **COMPLETE (100%)**                      |
 | Safe Self Improvement           | ✅ **COMPLETE (100%)**                        |
 | Task Scheduling                 | Complete (ASAP, PRIORITY_FIRST)                |
@@ -600,28 +600,30 @@ Implement Freya's ability to observe, analyze, and improve her own runtime behav
 | 8 | **Risk Analysis** | ✅ Complete | Risk evaluation, safety assessment, approval support |
 | 9 | **Unified Runtime Decision Pipeline** | ✅ Complete | 9-stage pipeline (OBSERVE→GATHER_CONTEXT→IDENTIFY_ACTIONS→EVALUATE_OPTIONS→ESTIMATE_RISK_BENEFIT→CHOOSE_BEST→EXECUTE→OBSERVE_OUTCOME→LEARN) with 11 context sources; integrates CentralOrchestrator, DecisionManager, WorldModel, UnifiedRetrieval, RecoveryOrchestrator, SafetyGate, AutonomyManager, ObservabilityHub, EventBus; `app/self_observation/decision_pipeline.py`, `app/self_observation/models.py` |
 | 10 | **Centralized Self-Analysis** | ✅ Complete | 11-category analysis (capabilities, limitations, resource_utilization, goal_progress, task_execution_quality, failure_patterns, learning_progress, knowledge_gaps, decision_quality, system_confidence, operational_effectiveness); trend tracking, historical comparison, LLM summaries, improvement prioritization; integrates CentralOrchestrator, DecisionManager, WorldModel, UnifiedRetrieval, RecoveryOrchestrator, SafetyGate, AutonomyManager, ObservabilityHub; `app/self_observation/self_analysis.py`, `app/self_observation/models.py` |
+| 11 | **Runtime Awareness** | ✅ Complete | Continuous operational view with 11 awareness components (current activity, running tasks, active goals, reasoning state, tool usage, resource consumption, system health, memory state, pending work, autonomous background activities, overall execution context); 10-second update interval; trend tracking; reuses existing monitoring data; integrates all subsystems via EventBus; `app/self_observation/runtime_awareness.py`, `app/self_observation/models.py` |
 
 ## Implementation Details
 
 **Module:** `app/self_observation/`
-- `models.py` — Shared data models (DecisionPipelineContext, DecisionPipelineResult, PipelineStage, AnalysisResult, SelfAnalysisReport, AnalysisConfig, AnalysisCategory, SelfObservationCapability, SelfObservationLimitation, TrendPoint, ImprovementPriority)
+- `models.py` — Shared data models (DecisionPipelineContext, DecisionPipelineResult, PipelineStage, AnalysisResult, SelfAnalysisReport, AnalysisConfig, AnalysisCategory, SelfObservationCapability, SelfObservationLimitation, TrendPoint, ImprovementPriority, AwarenessComponent, RuntimeAwarenessState, AwarenessConfig)
 - `decision_pipeline.py` — UnifiedRuntimeDecisionPipeline class (799 lines); 9-stage execution with 11 context providers; global factory `get_unified_decision_pipeline()`; integrates with CentralOrchestrator, DecisionManager, WorldModel, UnifiedRetrieval, RecoveryOrchestrator, SafetyGate, AutonomyManager, ObservabilityHub, EventBus
 - `self_analysis.py` — CentralizedSelfAnalysis class (930+ lines); 11-category analysis with trend tracking; LLM-generated summaries; improvement prioritization; global factory `get_centralized_self_analysis()`; EventBus integration for `self_analysis.completed` events; BackgroundJobService for periodic analysis
+- `runtime_awareness.py` — RuntimeAwareness class (700+ lines); continuous 10-second awareness updates; 11 awareness components; trend tracking; global factory `get_runtime_awareness()`; EventBus integration for `runtime_awareness.updated` events; subscribes to 12 event types for real-time updates
 
 **Agent Integration:**
 - `CentralOrchestrator.SelfObserver` uses self-observation via ObservabilityHub
-- `FreyaAgent` can access both services via global factories (`get_unified_decision_pipeline()`, `get_centralized_self_analysis()`)
-- EventBus events: `self_analysis.completed`, `decision_pipeline.executed` for downstream consumers
+- `FreyaAgent` can access all three services via global factories (`get_unified_decision_pipeline()`, `get_centralized_self_analysis()`, `get_runtime_awareness()`)
+- EventBus events: `self_analysis.completed`, `decision_pipeline.executed`, `runtime_awareness.updated` for downstream consumers
 - BackgroundJobService can schedule periodic self-analysis runs
+- Continuous awareness updates provide real-time operational view for decision-making
 
-**Tests:** Verified via integration with orchestrator and decision manager — both services instantiate and run correctly; self-analysis produces valid 11-category reports with trend tracking and LLM summaries
+**Tests:** Verified via integration with orchestrator and decision manager — all three services instantiate and run correctly; self-analysis produces valid 11-category reports with trend tracking and LLM summaries; 10 unit/integration tests passing for Runtime Awareness
 
 ## Remaining Work
 
 | # | Objective | Status | Description |
 |---|-----------|--------|-------------|
-| 11 | **Predictive Diagnostics** | 🔄 Planned | Trend analysis to forecast resource exhaustion or performance degradation |
-| 12 | **Runtime Awareness** | 🔄 Planned | Part 3 of Self Observation Completion; unified observation pipeline, cross-system event correlation, autonomous runtime evaluation, continuous trend analysis |
+| 12 | **Predictive Diagnostics** | 🔄 Planned | Trend analysis to forecast resource exhaustion or performance degradation |
 
 ---
 

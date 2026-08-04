@@ -370,6 +370,7 @@
 | Risk Analysis | 🟢 Mostly Complete | 90% | Risk evaluation, safety assessment, approval support; missing full runtime decision integration |
 | **Unified Runtime Decision Pipeline** | ✅ Complete | 100% | 9-stage pipeline (OBSERVE→GATHER_CONTEXT→IDENTIFY_ACTIONS→EVALUATE_OPTIONS→ESTIMATE_RISK_BENEFIT→CHOOSE_BEST→EXECUTE→OBSERVE_OUTCOME→LEARN) with 11 context sources; integrates CentralOrchestrator, DecisionManager, WorldModel, UnifiedRetrieval, RecoveryOrchestrator, SafetyGate, AutonomyManager, ObservabilityHub, EventBus; `app/self_observation/decision_pipeline.py`, `app/self_observation/models.py` |
 | **Centralized Self-Analysis** | ✅ Complete | 100% | 11-category analysis (capabilities, limitations, resource_utilization, goal_progress, task_execution_quality, failure_patterns, learning_progress, knowledge_gaps, decision_quality, system_confidence, operational_effectiveness); trend tracking, historical comparison, LLM summaries, improvement prioritization; integrates CentralOrchestrator, DecisionManager, WorldModel, UnifiedRetrieval, RecoveryOrchestrator, SafetyGate, AutonomyManager, ObservabilityHub; `app/self_observation/self_analysis.py`, `app/self_observation/models.py` |
+| **Runtime Awareness** | ✅ Complete | 100% | Continuous operational view: current activity, running tasks, active goals, reasoning state, tool usage, resource consumption, system health, memory state, pending work, autonomous background activities, overall execution context; 11-component awareness model; trend tracking; integrates all subsystems via EventBus; `app/self_observation/runtime_awareness.py`, `app/self_observation/models.py` |
 
 **Missing:**
 - Unified observation pipeline
@@ -377,7 +378,6 @@
 - Autonomous runtime evaluation
 - Continuous trend analysis
 - Predictive diagnostics
-- Runtime Awareness (Part 3 of Self Observation Completion)
 
 ---
 

@@ -49,7 +49,7 @@ This document should always reflect the current state of the codebase.
 | Failure Recovery | ✅ COMPLETE | 95% |
 | World Model | 🟢 MOSTLY COMPLETE | 75% |
 | Autonomous Software Engineering | ✅ COMPLETE | 100% |
-| Self Observation | ✅ COMPLETE | 90% |
+| Self Observation | ✅ COMPLETE | 95% |
 | Learning System | ✅ COMPLETE | 100% |
 | Safe Self Improvement | ✅ COMPLETE | 100% |
 | Task Scheduling | ✅ COMPLETE | 90% |
@@ -1268,17 +1268,38 @@ Status: ✅ COMPLETE (90%)
 - Integrates: CentralOrchestrator, DecisionManager, WorldModel, UnifiedRetrieval, RecoveryOrchestrator, SafetyGate, AutonomyManager, ObservabilityHub
 - Global factory: `get_centralized_self_analysis()`
 
+**Runtime Awareness** ✅ COMPLETE (100%)
+- **Implementation:** `app/self_observation/runtime_awareness.py`, `app/self_observation/models.py`
+- Continuous operational view with 11 awareness components:
+  - Current activity (from ActivityReporter)
+  - Running tasks (from TaskExecutor)
+  - Active goals (from GoalStorage)
+  - Current reasoning state (from DecisionManager, Planner)
+  - Tool usage (from capability registry)
+  - Resource consumption (from ObservabilityHub, WorldModel)
+  - System health (from ObservabilityHub)
+  - Memory state (from UnifiedRetrieval, GoalStorage)
+  - Pending work (from WorkflowComposer, TaskExecutor, JobService)
+  - Autonomous background activities (from AutonomyManager, LearningPipeline)
+  - Overall execution context (composite view)
+- 10-second update interval with configurable frequency
+- Trend tracking for all metrics (cpu, memory, tasks, goals, etc.)
+- Reuses existing monitoring/observability data — no duplication
+- Integrates: CentralOrchestrator, DecisionManager, WorldModel, UnifiedRetrieval, RecoveryOrchestrator, SafetyGate, AutonomyManager, ObservabilityHub, EventBus, GoalStorage, JobService
+- Global factory: `get_runtime_awareness()`
+- EventBus integration for `runtime_awareness.updated` events
+- Background continuous updates with thread-safe state management
+
 **Integration Points:**
 - `CentralOrchestrator.SelfObserver` uses self-observation via ObservabilityHub
-- `FreyaAgent` can access both services via global factories
+- `FreyaAgent` can access all three services via global factories
 - EventBus integration for self-analysis completion events
 - BackgroundJobService for scheduled self-analysis runs
 
-**Tests:** Verified via integration with orchestrator and decision manager — both services instantiate and run correctly
+**Tests:** Verified via integration with orchestrator and decision manager — all three services instantiate and run correctly; 10 unit/integration tests passing
 
 **Remaining Work:**
 - Predictive diagnostics (trend analysis to forecast resource exhaustion or performance degradation)
-- Runtime Awareness (Part 3 of Self Observation Completion)
 
 ---
 
