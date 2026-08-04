@@ -261,6 +261,7 @@ class EnvironmentSnapshot:
     resources: ResourceInfo = field(default_factory=ResourceInfo)
     tools: ToolInfo = field(default_factory=ToolInfo)
     health: HealthInfo = field(default_factory=HealthInfo)
+    services: List[Any] = field(default_factory=list)  # External services
 
     # Metadata
     snapshot_id: str = field(default_factory=lambda: f"snap_{int(time.time() * 1000)}")
@@ -277,6 +278,7 @@ class EnvironmentSnapshot:
             "resources": self.resources.to_dict(),
             "tools": self.tools.to_dict(),
             "health": self.health.to_dict(),
+            "services": [service.to_dict() for service in self.services],
         }
 
     def to_json(self) -> str:
@@ -351,6 +353,10 @@ class EnvironmentSnapshot:
             snapshot.tools = ToolInfo(**data["tools"])
         if "health" in data:
             snapshot.health = HealthInfo(**data["health"])
+        if "services" in data:
+            # Import here to avoid circular imports
+            from app.services.external_registry import ServiceMetadata
+            snapshot.services = [ServiceMetadata.from_dict(service_data) for service_data in data["services"]]
 
         return snapshot
 
@@ -571,6 +577,7 @@ class WorldModel:
         snapshot.resources = self._collect_resource_info()
         snapshot.tools = self._collect_tool_info()
         snapshot.health = self._collect_health_info()
+        snapshot.services = self._collect_service_info()
 
         snapshot.elapsed_ms = (time.perf_counter() - start_time) * 1000
 
@@ -864,6 +871,16 @@ class WorldModel:
         except Exception as e:
             logger.warning(f"[WorldModel] Error collecting health info: {e}")
             return HealthInfo()
+
+    def _collect_service_info(self) -> List[Any]:
+        """Collect external services information."""
+        try:
+            # Import here to avoid circular imports
+            from app.services.external_registry import service_registry
+            return service_registry.list()
+        except Exception as e:
+            logger.warning(f"[WorldModel] Error collecting service info: {e}")
+            return []
 
 
 def create_world_model(workspace: str = ".", **components) -> WorldModel:
