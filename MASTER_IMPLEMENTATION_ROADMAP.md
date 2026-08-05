@@ -56,8 +56,8 @@ Unified detection, root cause analysis, 6-stage recovery orchestration, retry wi
 ### Autonomous Learning ✅ Complete
 Full cycle: experience → analysis → extraction → validation → storage → gap detection → research. Includes goal-driven learning (dependency-aware, hierarchy support, prioritization) and multi-agent research sharing.
 
-### World Awareness 🟡 Mostly Complete (85%)
-Real-time environment snapshot: project metadata (framework, build system, config files), git state, system resources (CPU, memory, disk, GPU), tool availability, health diagnostics, and network/service health. **Missing:** External services registry (GitHub, Ollama, OpenAI, databases, MCP servers) and learned relevance ranking.
+### World Awareness 🟢 Mostly Complete (95%)
+Real-time environment snapshot: project metadata (framework, build system, config files), git state, system resources (CPU, memory, disk, GPU), tool availability, health diagnostics, and network/service health. **External Services Registry complete** — GitHub, Ollama, OpenAI, Anthropic, GitLab, Redis, Qdrant, Pinecone, Weaviate, ChromaDB, MinIO, S3, PostgreSQL, MySQL, MongoDB, MCP servers detected via environment variables with health tracking and NetworkMonitor integration. **Missing:** Learned relevance ranking.
 
 ### Self Observation ✅ Complete
 Three integrated services: **Runtime Awareness** (continuous operational view with 11 components + trend analysis + GPU metrics), **Centralized Self-Analysis** (11 categories with historical trends, LLM summaries, improvement prioritization), **Unified Decision Pipeline** (9-stage pipeline with 11 context sources), **Predictive Diagnostics** (resource exhaustion forecasting, performance degradation forecasting, anomaly detection with linear regression models). All components fully integrated with EventBus, ObservabilityHub, and BackgroundJobService.
@@ -77,12 +77,7 @@ Single EventBus, BackgroundJobService (consolidated 5 schedulers), Observability
 
 *Ordered by priority — highest first. Only includes work needed for a production-ready V1 release.*
 
-### 1. World Awareness: External Services Registry
-**Why it matters:** Freya needs to know what external services (GitHub, Ollama, OpenAI, databases, MCP servers) are available and healthy to make informed decisions.
-**Current Status:** Core world model complete; service detection not implemented.
-**Effort:** Medium
-
-### 2. World Awareness: Learned Relevance Ranking
+### 1. World Awareness: Learned Relevance Ranking
 **Why it matters:** Current task-based filtering uses static rules. Learning which environment facts matter for each task type improves context quality.
 **Current Status:** Static `TASK_RELEVANCE` mapping exists in `app/world_model/retrieval.py`; no learning component.
 **Effort:** Medium
@@ -103,7 +98,7 @@ Single EventBus, BackgroundJobService (consolidated 5 schedulers), Observability
 - [x] Long-term autonomy (autonomy manager, self-initiated work, maintenance, watchdog)
 - [x] Infrastructure & orchestration (EventBus, JobService, ObservabilityHub, Central Orchestrator)
 - [x] Comprehensive integration tests (29 tests passing)
-- [ ] External services registry in World Model
+- [x] External services registry in World Model
 - [x] Predictive diagnostics in Self Observation
 - [ ] Learned relevance ranking in World Model
 
@@ -127,5 +122,4 @@ Single EventBus, BackgroundJobService (consolidated 5 schedulers), Observability
 
 *Next 3–5 implementation tasks in priority order.*
 
-1. **External Services Registry** — Detect and monitor GitHub, Ollama, OpenAI, databases, MCP servers with health tracking
-2. **Learned Relevance Ranking** — Replace static task filtering with learned relevance scores in World Model retrieval
+1. **Learned Relevance Ranking** — Replace static task filtering with learned relevance scores in World Model retrieval
