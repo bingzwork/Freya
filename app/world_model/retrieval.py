@@ -5,6 +5,7 @@ returning only the information relevant to specific task types.
 """
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 from app.world_model.model import (
@@ -17,110 +18,29 @@ from app.world_model.model import (
     HealthInfo,
 )
 
-# Task type definitions for context-aware retrieval
-TASK_TYPES = {
-    "build": "Building/compiling the project",
-    "test": "Running tests",
-    "deploy": "Deploying the application",
-    "debug": "Debugging issues",
-    "refactor": "Refactoring code",
-    "develop": "General development",
-    "analyze": "Code analysis",
-    "install": "Installing dependencies",
-    "lint": "Linting/formatting",
-    "unknown": "Unknown task type",
-}
+# Import static relevance mappings from learned_relevance to avoid duplication
+from app.world_model.learned_relevance import (
+    TASK_TYPES,
+    TASK_RELEVANCE,
+    FIELD_RELEVANCE,
+)
 
-# Relevance mapping: task_type -> relevant snapshot fields
-TASK_RELEVANCE = {
-    "build": ["project", "runtime", "git", "tools", "resources", "health"],
-    "test": ["project", "runtime", "git", "tools", "resources", "health"],
-    "deploy": ["project", "runtime", "git", "tools", "resources", "health"],
-    "debug": ["project", "runtime", "git", "tools", "resources", "health"],
-    "refactor": ["project", "runtime", "git", "tools", "resources", "health"],
-    "develop": ["project", "runtime", "git", "tools", "resources", "health"],
-    "analyze": ["project", "runtime", "git", "tools", "resources", "health"],
-    "install": ["project", "runtime", "git", "tools", "resources", "health"],
-    "lint": ["project", "runtime", "git", "tools", "resources", "health"],
-    "unknown": ["project", "runtime", "git", "tools", "resources", "health"],
-}
+# Learned relevance integration
+try:
+    from app.world_model.learned_relevance import (
+        LearnedRelevanceEngine,
+        RetrievalOutcome,
+        create_learned_relevance_engine,
+    )
+    _LEARNED_RELEVANCE_AVAILABLE = True
+except ImportError:
+    _LEARNED_RELEVANCE_AVAILABLE = False
+    LearnedRelevanceEngine = None  # type: ignore
+    RetrievalOutcome = None  # type: ignore
+    create_learned_relevance_engine = None  # type: ignore
 
-# Field-specific relevance within a snapshot layer
-FIELD_RELEVANCE = {
-    "project": {
-        "build": ["name", "main_language", "build_system", "config_files", "entry_points"],
-        "test": ["name", "main_language", "config_files", "framework"],
-        "deploy": ["name", "main_language", "build_system", "framework", "entry_points", "config_files"],
-        "debug": ["name", "main_language", "entry_points", "config_files", "file_count"],
-        "refactor": ["name", "main_language", "file_count", "total_lines", "config_files"],
-        "develop": ["name", "main_language", "build_system", "framework", "entry_points"],
-        "analyze": ["name", "main_language", "file_count", "total_lines"],
-        "install": ["name", "main_language", "config_files", "build_system"],
-        "lint": ["name", "main_language", "config_files"],
-        "unknown": ["name", "main_language", "build_system", "framework", "entry_points", "config_files", "file_count", "total_lines"],
-    },
-    "runtime": {
-        "build": ["family", "version", "name"],
-        "test": ["family", "version", "name"],
-        "deploy": ["family", "version", "name", "working_directory"],
-        "debug": ["family", "version", "name", "working_directory", "environment"],
-        "refactor": ["family", "version"],
-        "develop": ["family", "version", "name", "working_directory"],
-        "analyze": ["family", "version"],
-        "install": ["family", "version", "working_directory"],
-        "lint": ["family", "version"],
-        "unknown": ["family", "version", "name", "working_directory", "environment"],
-    },
-    "git": {
-        "build": ["is_repo", "current_branch", "is_clean", "ahead", "behind"],
-        "test": ["is_repo", "current_branch", "is_clean"],
-        "deploy": ["is_repo", "current_branch", "is_clean", "ahead", "behind", "remotes"],
-        "debug": ["is_repo", "current_branch", "has_changes", "status"],
-        "refactor": ["is_repo", "current_branch", "is_clean", "has_changes"],
-        "develop": ["is_repo", "current_branch", "has_changes"],
-        "analyze": ["is_repo", "current_branch"],
-        "install": ["is_repo"],
-        "lint": ["is_repo", "has_changes"],
-        "unknown": ["is_repo", "current_branch", "is_clean", "ahead", "behind", "remotes", "has_changes", "status"],
-    },
-    "resources": {
-        "build": ["cpu.percent", "memory.percent", "disk.percent", "health_status"],
-        "test": ["cpu.percent", "memory.percent", "health_status"],
-        "deploy": ["cpu.percent", "memory.percent", "disk.percent", "health_status", "health_score"],
-        "debug": ["cpu.percent", "memory.percent", "disk.percent", "temperature", "health_status"],
-        "refactor": ["cpu.percent", "memory.percent", "health_status"],
-        "develop": ["cpu.percent", "memory.percent", "health_status"],
-        "analyze": ["cpu.percent", "memory.percent", "health_score"],
-        "install": ["cpu.percent", "memory.percent", "disk.percent"],
-        "lint": ["cpu.percent", "memory.percent"],
-        "unknown": ["cpu.percent", "memory.percent", "disk.percent", "health_status", "health_score", "temperature", "cpu.count", "memory.total_gb", "disk.total_gb", "processes.count", "processes.threads", "load_avg.1min", "load_avg.5min", "load_avg.15min"],
-    },
-    "tools": {
-        "build": ["available_tools", "tool_versions", "git_available"],
-        "test": ["available_tools", "tool_versions", "python_available", "git_available"],
-        "deploy": ["available_tools", "tool_versions", "git_available", "docker_available"],
-        "debug": ["available_tools", "tool_versions", "python_available", "node_available"],
-        "refactor": ["available_tools", "tool_versions", "python_available"],
-        "develop": ["available_tools", "tool_versions", "python_available", "git_available"],
-        "analyze": ["available_tools", "tool_versions"],
-        "install": ["available_tools", "tool_versions", "python_available", "npm_available", "docker_available"],
-        "lint": ["available_tools", "tool_versions", "python_available"],
-        "unknown": ["available_tools", "tool_versions", "git_available", "python_available", "node_available", "docker_available", "npm_available"],
-    },
-    "health": {
-        "build": ["overall_status", "health_score", "code_quality"],
-        "test": ["overall_status", "health_score", "test_metrics", "code_quality"],
-        "deploy": ["overall_status", "health_score", "code_quality", "test_metrics", "performance_metrics"],
-        "debug": ["overall_status", "health_score", "code_quality", "test_metrics", "performance_metrics"],
-        "refactor": ["overall_status", "health_score", "code_quality", "performance_metrics"],
-        "develop": ["overall_status", "health_score", "code_quality"],
-        "analyze": ["overall_status", "health_score", "code_quality", "performance_metrics"],
-        "install": ["overall_status", "health_score"],
-        "lint": ["overall_status", "health_score", "code_quality"],
-        # Unknown type - include all fields
-        "unknown": ["overall_status", "health_score", "metrics_count", "alerts_count", "code_quality", "test_metrics", "performance_metrics"],
-    },
-}
+# Global learned relevance engine instance
+_learned_relevance_engine: Optional["LearnedRelevanceEngine"] = None
 
 
 @dataclass
@@ -164,10 +84,37 @@ class TaskContext:
             return cls(task_type="develop", keywords=[])
 
 
+# Learned Relevance Engine Management
+
+def get_learned_relevance_engine() -> Optional["LearnedRelevanceEngine"]:
+    """Get the global learned relevance engine instance."""
+    global _learned_relevance_engine
+    if _learned_relevance_engine is None and _LEARNED_RELEVANCE_AVAILABLE:
+        _learned_relevance_engine = create_learned_relevance_engine()
+    return _learned_relevance_engine
+
+
+def set_learned_relevance_engine(engine: "LearnedRelevanceEngine") -> None:
+    """Set the global learned relevance engine instance."""
+    global _learned_relevance_engine
+    _learned_relevance_engine = engine
+
+
+def init_learned_relevance(storage_path: Optional[Path] = None, **kwargs) -> "LearnedRelevanceEngine":
+    """Initialize and set the global learned relevance engine."""
+    global _learned_relevance_engine
+    if not _LEARNED_RELEVANCE_AVAILABLE:
+        raise RuntimeError("Learned relevance engine not available")
+    _learned_relevance_engine = create_learned_relevance_engine(storage_path=storage_path, **kwargs)
+    return _learned_relevance_engine
+
+
 def filter_snapshot_for_task(
     snapshot: EnvironmentSnapshot,
     task_type: str,
     include_irrelevant: bool = False,
+    use_learned: bool = True,
+    relevance_threshold: float = 0.3,
 ) -> EnvironmentSnapshot:
     """Filter an environment snapshot to only include information relevant to a task type.
 
@@ -178,6 +125,8 @@ def filter_snapshot_for_task(
         snapshot: The full environment snapshot to filter.
         task_type: The type of task (e.g., "build", "test", "deploy", "debug").
         include_irrelevant: If True, include fields marked as irrelevant (but empty).
+        use_learned: If True, use learned relevance weights (when available).
+        relevance_threshold: Minimum relevance score to include a layer/field.
 
     Returns:
         A filtered EnvironmentSnapshot with only relevant data.
@@ -185,11 +134,16 @@ def filter_snapshot_for_task(
     if task_type not in TASK_RELEVANCE:
         task_type = "unknown"
 
-    relevant_layers = TASK_RELEVANCE.get(task_type, TASK_RELEVANCE["unknown"])
+    # Get relevant layers - use learned if available and requested
+    engine = get_learned_relevance_engine() if use_learned else None
+    if engine is not None:
+        relevant_layers = engine.get_relevant_layers(task_type, threshold=relevance_threshold)
+    else:
+        relevant_layers = TASK_RELEVANCE.get(task_type, TASK_RELEVANCE["unknown"])
 
-    # FIELD_RELEVANCE is structured as {layer_name: {task_type: [fields]}}
-    # We need to get the relevant fields for each layer
     def get_relevant_fields(layer: str) -> List[str]:
+        if engine is not None:
+            return engine.get_relevant_fields(task_type, layer, threshold=relevance_threshold)
         return FIELD_RELEVANCE.get(layer, {}).get(task_type, [])
 
     # Create a new snapshot with filtered data
@@ -347,6 +301,8 @@ def _filter_nested_dict(data: Dict[str, Any], relevant_fields: List[str]) -> Dic
 def get_relevant_context(
     snapshot: EnvironmentSnapshot,
     task_context: TaskContext,
+    use_learned: bool = True,
+    relevance_threshold: float = 0.3,
 ) -> Dict[str, Any]:
     """Get relevant context from a snapshot for a given task context.
 
@@ -356,11 +312,18 @@ def get_relevant_context(
     Args:
         snapshot: The full environment snapshot.
         task_context: The task context specifying what's relevant.
+        use_learned: If True, use learned relevance weights (when available).
+        relevance_threshold: Minimum relevance score to include a layer/field.
 
     Returns:
         Dictionary with relevant environment information.
     """
-    filtered = filter_snapshot_for_task(snapshot, task_context.task_type)
+    filtered = filter_snapshot_for_task(
+        snapshot,
+        task_context.task_type,
+        use_learned=use_learned,
+        relevance_threshold=relevance_threshold,
+    )
 
     context = {
         "task_type": task_context.task_type,
@@ -385,12 +348,31 @@ def get_relevant_context(
     return context
 
 
-def get_relevant_summary(snapshot: EnvironmentSnapshot, task_type: str) -> str:
+def get_relevant_summary(
+    snapshot: EnvironmentSnapshot,
+    task_type: str,
+    use_learned: bool = True,
+    relevance_threshold: float = 0.3,
+) -> str:
     """Get a concise text summary of relevant environment info for a task type.
 
     Useful for quick context injection into LLM prompts.
+
+    Args:
+        snapshot: The full environment snapshot.
+        task_type: The type of task.
+        use_learned: If True, use learned relevance weights (when available).
+        relevance_threshold: Minimum relevance score to include a layer/field.
+
+    Returns:
+        Text summary of relevant environment information.
     """
-    filtered = filter_snapshot_for_task(snapshot, task_type)
+    filtered = filter_snapshot_for_task(
+        snapshot,
+        task_type,
+        use_learned=use_learned,
+        relevance_threshold=relevance_threshold,
+    )
 
     lines = [f"=== Environment ({task_type}) ==="]
 
@@ -439,3 +421,78 @@ def list_supported_task_types() -> List[str]:
 def get_task_type_description(task_type: str) -> str:
     """Get description for a task type."""
     return TASK_TYPES.get(task_type, "Unknown task type")
+
+
+# Learned Relevance Outcome Recording
+
+def record_retrieval_outcome(
+    task_type: str,
+    query: str,
+    retrieved_layers: List[str],
+    retrieved_fields: Dict[str, List[str]],
+    success: bool,
+    user_feedback: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Record a retrieval outcome for learning relevance weights.
+
+    This function feeds back the result of a retrieval operation so the
+    learned relevance engine can adapt its weights based on what worked.
+
+    Args:
+        task_type: The type of task
+        query: The query that was executed
+        retrieved_layers: List of layers that were retrieved
+        retrieved_fields: Dict mapping layer to list of fields retrieved
+        success: Whether the retrieval led to a successful task outcome
+        user_feedback: Optional user feedback ("positive", "negative")
+        metadata: Additional metadata about the retrieval
+    """
+    engine = get_learned_relevance_engine()
+    if engine is None:
+        return
+
+    outcome = RetrievalOutcome(
+        task_type=task_type,
+        query=query,
+        retrieved_layers=retrieved_layers,
+        retrieved_fields=retrieved_fields,
+        success=success,
+        user_feedback=user_feedback,
+        metadata=metadata or {},
+    )
+    engine.record_outcome(outcome)
+
+
+def get_learned_relevance_summary(task_type: str) -> Dict[str, Any]:
+    """Get a summary of learned relevance weights for a task type.
+
+    Args:
+        task_type: The type of task
+
+    Returns:
+        Dictionary with learned weights and metadata, or empty dict if not available
+    """
+    engine = get_learned_relevance_engine()
+    if engine is None:
+        return {}
+    return engine.get_weight_summary(task_type)
+
+
+def get_all_learned_relevance() -> Dict[str, Dict[str, Any]]:
+    """Get all learned relevance weights for all task types."""
+    engine = get_learned_relevance_engine()
+    if engine is None:
+        return {}
+    return engine.get_all_weights()
+
+
+def reset_learned_relevance(task_type: str) -> None:
+    """Reset learned relevance weights for a task type to static defaults.
+
+    Args:
+        task_type: The type of task to reset
+    """
+    engine = get_learned_relevance_engine()
+    if engine is not None:
+        engine.reset_task_weights(task_type)

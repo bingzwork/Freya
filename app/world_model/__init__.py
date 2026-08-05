@@ -22,6 +22,17 @@ from app.world_model.retrieval import (
     get_relevant_summary,
     list_supported_task_types,
     get_task_type_description,
+    init_learned_relevance,
+    record_retrieval_outcome,
+    get_learned_relevance_summary,
+    get_all_learned_relevance,
+    reset_learned_relevance,
+)
+from app.world_model.learned_relevance import (
+    LearnedRelevanceEngine,
+    TaskRelevanceWeights,
+    RetrievalOutcome,
+    create_learned_relevance_engine,
 )
 from app.world_model.project_metadata import (
     ProjectMetadata,
@@ -52,6 +63,15 @@ __all__ = [
     "get_relevant_summary",
     "list_supported_task_types",
     "get_task_type_description",
+    "init_learned_relevance",
+    "record_retrieval_outcome",
+    "get_learned_relevance_summary",
+    "get_all_learned_relevance",
+    "reset_learned_relevance",
+    "LearnedRelevanceEngine",
+    "TaskRelevanceWeights",
+    "RetrievalOutcome",
+    "create_learned_relevance_engine",
     "ProjectMetadata",
     "DependencyInfo",
     "DependencySet",
