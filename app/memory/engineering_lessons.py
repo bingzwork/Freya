@@ -173,7 +173,6 @@ class EngineeringLessonStorage:
 
         self._load()
 
-        # Register with observability
         self._register_with_observability()
 
         # Schedule periodic persistence
@@ -184,7 +183,7 @@ class EngineeringLessonStorage:
         if self._observability:
             self._observability.add_health_check(HealthCheck(
                 name="engineering_lessons_health",
-                component="memory",
+                component="memory.lessons",
                 check_func=self._health_check,
                 interval_seconds=60.0,
             ))
@@ -206,7 +205,7 @@ class EngineeringLessonStorage:
 
         return HealthResult(
             name="engineering_lessons_health",
-            component="memory",
+            component="memory.lessons",
             status=HealthStatus.HEALTHY,
             message=f"{lesson_count} lessons, {categories} categories, {tags} tags",
             details={
@@ -242,12 +241,6 @@ class EngineeringLessonStorage:
             name="Engineering Lessons Persistence",
             priority=JobPriority.LOW,
         )
-
-        # Register with observability
-        self._register_with_observability()
-
-        # Schedule periodic persistence
-        self._schedule_persistence()
 
     def _configure_allowlist_for_workspace(self):
         """Configure the file allowlist with workspace-specific rules."""

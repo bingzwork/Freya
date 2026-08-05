@@ -95,6 +95,11 @@ class AutonomyConfig:
     log_level: str = "INFO"
     log_cycle_details: bool = False
 
+    # Background job intervals (seconds)
+    learning_interval_seconds: float = 300.0  # 5 minutes for learning pipeline job
+    watchdog_checkpoint_interval_seconds: float = 60.0  # 1 minute for watchdog checkpoints
+    self_initiated_work_interval_seconds: float = 600.0  # 10 minutes for self-initiated work discovery
+
     updated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 

@@ -27,7 +27,6 @@ from uuid import uuid4
 
 from app.core.events import get_event_bus, Event
 from app.core.observability import get_observability_hub, ComponentInfo, ComponentType
-from app.orchestrator.orchestrator import get_orchestrator, CentralOrchestrator
 from app.decision.manager import DecisionManager, get_default_manager
 from app.world_model.model import WorldModel, create_world_model
 from app.memory.unified_retrieval import UnifiedRetrieval
@@ -41,6 +40,11 @@ from .models import (
     RuntimeAwarenessState,
     ConfidenceLevel,
 )
+
+# Type checking imports to avoid circular dependency
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from app.orchestrator.orchestrator import CentralOrchestrator
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +79,7 @@ class RuntimeAwareness:
 
     def __init__(
         self,
-        orchestrator: Optional[CentralOrchestrator] = None,
+        orchestrator: "Optional[CentralOrchestrator]" = None,
         decision_manager: Optional[DecisionManager] = None,
         world_model: Optional[WorldModel] = None,
         memory_retrieval: Optional[UnifiedRetrieval] = None,
@@ -352,7 +356,7 @@ class RuntimeAwareness:
                     state.tool_success_rates[cap.name] = 1.0  # placeholder
 
     def _gather_resource_consumption(self, state: RuntimeAwarenessState) -> None:
-        """Gather resource consumption from ObservabilityHub and WorldModel."""
+        """Gather resource consumption from ObservabilityHub, WorldModel, and GPU monitor."""
         # Get system metrics
         system_metrics = self._observability.get_system_metrics()
         state.cpu_usage = system_metrics.get("system.cpu.percent", 0.0)
@@ -365,6 +369,55 @@ class RuntimeAwareness:
             snapshot = self._world_model.get_snapshot()
             state.cpu_usage = snapshot.resources.cpu_percent
             state.memory_usage_mb = snapshot.resources.memory_used_gb * 1024
+
+        # Get GPU metrics if available
+        self._gather_gpu_metrics(state)
+
+    def _gather_gpu_metrics(self, state: RuntimeAwarenessState) -> None:
+        """Gather GPU metrics from GPU monitor."""
+        try:
+            from app.monitoring.gpu_monitor import get_gpu_monitor
+            gpu_monitor = get_gpu_monitor()
+            if gpu_monitor and gpu_monitor.enabled:
+                gpu_metrics = gpu_monitor.get_current_metrics()
+                if gpu_metrics:
+                    total_util = 0.0
+                    total_mem_used = 0.0
+                    total_mem_total = 0.0
+                    max_temp = None
+
+                    for m in gpu_metrics:
+                        gpu_info = {
+                            "index": m.index,
+                            "vendor": m.vendor.value if hasattr(m.vendor, 'value') else str(m.vendor),
+                            "name": m.name,
+                            "utilization_percent": m.gpu_utilization_percent,
+                            "memory_percent": m.memory_utilization_percent,
+                            "memory_used_mb": m.memory_used_mb,
+                            "memory_total_mb": m.memory_total_mb,
+                            "temperature_celsius": m.temperature_celsius,
+                            "power_draw_watts": m.power_draw_watts,
+                        }
+                        state.gpu_devices.append(gpu_info)
+
+                        total_util += m.gpu_utilization_percent
+                        total_mem_used += m.memory_used_mb
+                        total_mem_total += m.memory_total_mb
+
+                        if m.temperature_celsius is not None:
+                            if max_temp is None or m.temperature_celsius > max_temp:
+                                max_temp = m.temperature_celsius
+
+                    # Compute averages
+                    if gpu_metrics:
+                        state.gpu_utilization_percent = total_util / len(gpu_metrics)
+                        state.gpu_memory_used_mb = total_mem_used
+                        state.gpu_memory_total_mb = total_mem_total
+                        state.gpu_temperature_celsius = max_temp
+
+        except Exception:
+            # GPU monitoring not available or error
+            pass
 
     def _gather_system_health(self, state: RuntimeAwarenessState) -> None:
         """Gather system health from ObservabilityHub."""
@@ -456,6 +509,14 @@ class RuntimeAwareness:
                 "awareness.background_jobs": state.background_jobs,
                 "awareness.session_duration": state.session_duration_seconds,
             }
+
+            # Add GPU metrics if available
+            if state.gpu_devices:
+                metrics["awareness.gpu_utilization_percent"] = state.gpu_utilization_percent
+                metrics["awareness.gpu_memory_used_mb"] = state.gpu_memory_used_mb
+                metrics["awareness.gpu_memory_total_mb"] = state.gpu_memory_total_mb
+                if state.gpu_temperature_celsius is not None:
+                    metrics["awareness.gpu_temperature_celsius"] = state.gpu_temperature_celsius
 
             for key, value in metrics.items():
                 if key not in self._metric_cache:
@@ -597,7 +658,7 @@ class RuntimeAwareness:
             return {"status": "no_data"}
 
         s = self._current_state
-        return {
+        summary = {
             "activity": s.current_activity,
             "description": s.activity_description,
             "running_tasks": len(s.running_tasks),
@@ -619,6 +680,17 @@ class RuntimeAwareness:
             "total_failures": s.total_failures,
         }
 
+        # Add GPU info if available
+        if s.gpu_devices:
+            summary["gpu_devices"] = len(s.gpu_devices)
+            summary["gpu_utilization"] = f"{s.gpu_utilization_percent:.1f}%"
+            summary["gpu_memory_used_mb"] = f"{s.gpu_memory_used_mb:.0f}"
+            summary["gpu_memory_total_mb"] = f"{s.gpu_memory_total_mb:.0f}"
+            if s.gpu_temperature_celsius is not None:
+                summary["gpu_temperature_celsius"] = f"{s.gpu_temperature_celsius:.1f}"
+
+        return summary
+
 
 # Global instance
 _runtime_awareness: Optional[RuntimeAwareness] = None
@@ -626,7 +698,7 @@ _awareness_lock = threading.Lock()
 
 
 def get_runtime_awareness(
-    orchestrator: Optional[CentralOrchestrator] = None,
+    orchestrator: "Optional[CentralOrchestrator]" = None,
     decision_manager: Optional[DecisionManager] = None,
     world_model: Optional[WorldModel] = None,
     memory_retrieval: Optional[UnifiedRetrieval] = None,

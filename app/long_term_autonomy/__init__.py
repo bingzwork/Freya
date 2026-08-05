@@ -18,7 +18,6 @@ from app.long_term_autonomy.models import (
     LearningUpdate,
     AutonomousTask
 )
-from app.long_term_autonomy.scheduler import BackgroundScheduler, ScheduledJob, JobStatus
 from app.long_term_autonomy.storage import AutonomyStorage
 from app.long_term_autonomy.watchdog import Watchdog, WatchdogConfig, WatchdogAction, TaskHealth
 from app.long_term_autonomy.self_initiated import (
@@ -58,9 +57,6 @@ __all__ = [
     "DecisionOutput",
     "LearningUpdate",
     "AutonomousTask",
-    "BackgroundScheduler",
-    "ScheduledJob",
-    "JobStatus",
     "AutonomyStorage",
     "Watchdog",
     "WatchdogConfig",

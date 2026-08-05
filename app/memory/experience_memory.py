@@ -138,7 +138,7 @@ class ExperienceMemory:
         if self._observability:
             self._observability.add_health_check(HealthCheck(
                 name="experience_memory_health",
-                component="memory",
+                component="memory.experience",
                 check_func=self._health_check,
                 interval_seconds=60.0,
             ))
@@ -160,7 +160,7 @@ class ExperienceMemory:
 
         return HealthResult(
             name="experience_memory_health",
-            component="memory",
+            component="memory.experience",
             status=HealthStatus.HEALTHY,
             message=f"{entry_count} entries, {categories} categories, {tags} tags",
             details={

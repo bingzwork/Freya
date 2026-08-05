@@ -329,7 +329,7 @@ class CrossMemoryReferences:
         if self._observability:
             self._observability.add_health_check(HealthCheck(
                 name="cross_references_health",
-                component="memory",
+                component="memory.cross_references",
                 check_func=self._health_check,
                 interval_seconds=60.0,
             ))
@@ -348,7 +348,7 @@ class CrossMemoryReferences:
         stats = self.get_stats()
         return HealthResult(
             name="cross_references_health",
-            component="memory",
+            component="memory.cross_references",
             status=HealthStatus.HEALTHY,
             message=f"{stats['nodes']} nodes, {stats['edges']} edges",
             details=stats,

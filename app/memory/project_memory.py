@@ -128,7 +128,7 @@ class ProjectMemory:
         if self._observability:
             self._observability.add_health_check(HealthCheck(
                 name="project_memory_health",
-                component="memory",
+                component="memory.project",
                 check_func=self._health_check,
                 interval_seconds=60.0,
             ))
@@ -151,7 +151,7 @@ class ProjectMemory:
 
         return HealthResult(
             name="project_memory_health",
-            component="memory",
+            component="memory.project",
             status=HealthStatus.HEALTHY,
             message=f"{entry_count} entries, embeddings: {has_embeddings}, vector_db: {has_vector_db}",
             details={

@@ -858,6 +858,36 @@ class GPUMonitor:
         self.stop_monitoring()
 
 
+_gpu_monitor: Optional[GPUMonitor] = None
+_gpu_monitor_lock = threading.Lock()
+
+
+def get_gpu_monitor(
+    workspace: str = ".",
+    event_bus: Optional[EventBus] = None,
+    poll_interval_seconds: float = 5.0,
+    enabled: bool = True,
+) -> GPUMonitor:
+    """Get or create the global GPU monitor instance."""
+    global _gpu_monitor
+    with _gpu_monitor_lock:
+        if _gpu_monitor is None:
+            _gpu_monitor = GPUMonitor(
+                workspace=workspace,
+                event_bus=event_bus,
+                poll_interval_seconds=poll_interval_seconds,
+                enabled=enabled,
+            )
+        return _gpu_monitor
+
+
+def set_gpu_monitor(monitor: GPUMonitor) -> None:
+    """Set the global GPU monitor instance."""
+    global _gpu_monitor
+    with _gpu_monitor_lock:
+        _gpu_monitor = monitor
+
+
 def create_gpu_monitor(
     workspace: str = ".",
     event_bus: Optional[EventBus] = None,

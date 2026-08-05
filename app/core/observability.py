@@ -65,6 +65,8 @@ class HealthCheck:
     timeout_seconds: float = 5.0
     critical: bool = False
     tags: Dict[str, str] = field(default_factory=dict)
+    # Runtime state (not part of constructor)
+    _last_run_time: float = field(default=0.0, init=False, repr=False)
 
 
 @dataclass
@@ -77,6 +79,14 @@ class HealthResult:
     timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     duration_ms: float = 0.0
     metadata: Dict[str, Any] = field(default_factory=dict)
+    details: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self):
+        # Sync details and metadata for backward compatibility
+        if self.details and not self.metadata:
+            self.metadata = self.details
+        elif self.metadata and not self.details:
+            self.details = self.metadata
 
 
 @dataclass
@@ -202,6 +212,8 @@ class HealthMonitor:
         self._lock = threading.RLock()
         self._running = False
         self._monitor_thread: Optional[threading.Thread] = None
+        # Track previous statuses for change detection
+        self._previous_statuses: Dict[str, HealthStatus] = {}
 
     def register_component(self, component: ComponentInfo) -> None:
         """Register a component for monitoring."""
@@ -237,29 +249,44 @@ class HealthMonitor:
                 return True
         return False
 
-    def run_check(self, check_name: str) -> Optional[HealthResult]:
+    def run_check(self, check_name: str, force: bool = False) -> Optional[HealthResult]:
         """Run a single health check."""
         with self._lock:
             check = self._checks.get(check_name)
             if not check:
                 return None
 
+            # Respect check interval unless forced
+            now = time.time()
+            if not force and check._last_run_time + check.interval_seconds > now:
+                # Return cached result if available
+                return self._results.get(check_name)
+
+            check._last_run_time = now
+
         start = time.time()
         try:
             result = check.check_func()
             duration = (time.time() - start) * 1000
 
-            status = HealthStatus.HEALTHY if result else HealthStatus.UNHEALTHY
-            if check.critical and not result:
-                status = HealthStatus.UNHEALTHY
+            # Handle both bool and HealthResult return types
+            if isinstance(result, HealthResult):
+                health_result = result
+                health_result.name = check.name
+                health_result.component = check.component
+                health_result.duration_ms = duration
+            else:
+                status = HealthStatus.HEALTHY if result else HealthStatus.UNHEALTHY
+                if check.critical and not result:
+                    status = HealthStatus.UNHEALTHY
 
-            health_result = HealthResult(
-                name=check.name,
-                component=check.component,
-                status=status,
-                message="OK" if result else "Check failed",
-                duration_ms=duration,
-            )
+                health_result = HealthResult(
+                    name=check.name,
+                    component=check.component,
+                    status=status,
+                    message="OK" if result else "Check failed",
+                    duration_ms=duration,
+                )
         except Exception as e:
             duration = (time.time() - start) * 1000
             health_result = HealthResult(
@@ -268,9 +295,15 @@ class HealthMonitor:
                 status=HealthStatus.UNHEALTHY,
                 message=f"Check error: {e}",
                 duration_ms=duration,
+                metadata={"error": str(e), "type": type(e).__name__},
             )
 
         with self._lock:
+            # Check if status changed
+            prev_status = self._previous_statuses.get(check_name)
+            status_changed = prev_status != health_result.status
+            self._previous_statuses[check_name] = health_result.status
+
             self._results[check.name] = health_result
 
             # Update component status
@@ -279,7 +312,8 @@ class HealthMonitor:
                 # Determine overall component status from all its checks
                 component_checks = [r for r in self._results.values() if r.component == check.component]
                 if component_checks:
-                    status_order = [HealthStatus.HEALTHY, HealthStatus.DEGRADED, HealthStatus.UNKNOWN, HealthStatus.UNHEALTHY]
+                    status_order = [HealthStatus.HEALTHY, HealthStatus.DEGRADED, HealthStatus.UNKNOWN, 
+HealthStatus.UNHEALTHY]
                     worst = min(
                         (c.status for c in component_checks),
                         key=lambda s: status_order.index(s)
@@ -287,28 +321,37 @@ class HealthMonitor:
                     component.status = worst
                     component.last_heartbeat = datetime.now(timezone.utc).isoformat()
 
-        # Emit event
-        self._event_bus.emit(
-            "health.check.completed",
-            data={
-                "check_name": check_name,
-                "component": check.component,
-                "status": health_result.status.value,
-                "duration_ms": duration,
-            },
-            source="HealthMonitor",
-        )
+        # Emit event only on status change or forced
+        if status_changed or force:
+            self._event_bus.emit(
+                "health.check.completed",
+                data={
+                    "check_name": check_name,
+                    "component": check.component,
+                    "status": health_result.status.value,
+                    "duration_ms": duration,
+                    "status_changed": status_changed,
+                    "message": health_result.message,
+                },
+                source="HealthMonitor",
+            )
+
+            # Log only on status change
+            if status_changed:
+                logger.info(f"Health check {check_name} status changed: {health_result.status.value} - {health_result.message}")
+            elif force:
+                logger.debug(f"Health check {check_name}: {health_result.status.value} - {health_result.message}")
 
         return health_result
 
-    def run_all_checks(self) -> List[HealthResult]:
+    def run_all_checks(self, force: bool = False) -> List[HealthResult]:
         """Run all health checks."""
         with self._lock:
             checks = list(self._checks.keys())
 
         results = []
         for check_name in checks:
-            result = self.run_check(check_name)
+            result = self.run_check(check_name, force=force)
             if result:
                 results.append(result)
         return results
@@ -399,12 +442,18 @@ class HealthMonitor:
 
     def _monitor_loop(self, interval_seconds: float) -> None:
         """Background monitoring loop."""
+        # Sleep in smaller increments to allow quick shutdown
+        sleep_chunk = min(5.0, interval_seconds / 5.0) if interval_seconds > 5.0 else 1.0
         while self._running:
             try:
                 self.run_all_checks()
             except Exception as e:
                 logger.error(f"Error in health monitor loop: {e}")
-            time.sleep(interval_seconds)
+            # Sleep in chunks, checking _running frequently
+            elapsed = 0.0
+            while self._running and elapsed < interval_seconds:
+                time.sleep(sleep_chunk)
+                elapsed += sleep_chunk
 
 
 class SystemMetricsCollector:
@@ -417,7 +466,7 @@ class SystemMetricsCollector:
         self._thread: Optional[threading.Thread] = None
         self._last_disk_io = None
         self._last_net_io = None
-        self._last_time = time.time()
+        self._last_time = 0.0
 
     def start(self) -> None:
         """Start system metrics collection."""

@@ -15,10 +15,26 @@ across extended sessions.
 import json
 import re
 import threading
+import math
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Any, Optional, Tuple, Union
+
+# Vector database imports for cross-session search
+try:
+    from app.vector_db import get_vector_db, VectorDB
+    VECTOR_DB_AVAILABLE = True
+except ImportError:
+    VECTOR_DB_AVAILABLE = False
+    VectorDB = None
+
+# Embedding model for semantic search
+try:
+    from sentence_transformers import SentenceTransformer
+    SENTENCE_TRANSFORMERS_AVAILABLE = True
+except ImportError:
+    SENTENCE_TRANSFORMERS_AVAILABLE = False
 
 
 @dataclass
@@ -91,6 +107,9 @@ class ConversationMemory:
         summarization_threshold: int = 40,
         max_summaries: int = 10,
         _bypass_min_turns: bool = False,  # Internal: allow <20 for backward compatibility
+        vector_db_name: str = "conversation_vectors",
+        embedding_dim: int = 384,
+        _skip_vector_db_init: bool = False,
         _skip_auto_load: bool = False,  # Internal: skip automatic loading from disk
     ):
         """Initialize Conversation Memory.
@@ -104,6 +123,9 @@ class ConversationMemory:
             summarization_threshold: Turn count at which to auto-summarize (default 40)
             max_summaries: Maximum number of summaries to retain (default 10)
             _bypass_min_turns: (Internal) Skip minimum 20 turns enforcement for backward compat
+            vector_db_name: (Internal) Vector database collection name
+            embedding_dim: (Internal) Embedding dimension for vector storage
+            _skip_vector_db_init: (Internal) Skip vector database initialization for testing
             _skip_auto_load: (Internal) Skip automatic loading from disk for testing
         """
         self.workspace = Path(workspace).resolve()
@@ -119,12 +141,47 @@ class ConversationMemory:
         self.summarization_threshold = summarization_threshold
         self.max_summaries = max_summaries
 
+        # Vector database settings
+        self.vector_db_name = vector_db_name
+        self.embedding_dim = embedding_dim
+        self._skip_vector_db_init = _skip_vector_db_init
+        self._skip_auto_load = _skip_auto_load
+        self._vector_db = None  # Vector database for cross-session search
+
+        # Embedding model for semantic search
+        self.embedding_model = None
+        if SENTENCE_TRANSFORMERS_AVAILABLE:
+            try:
+                self.embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+                self._embedding_dimension = self.embedding_model.get_sentence_embedding_dimension()
+            except Exception:
+                self.embedding_model = None
+
+        # Initialize vector database if available and not skipped
+        if not _skip_vector_db_init and VECTOR_DB_AVAILABLE:
+            self._initialize_vector_db()
+
+    def _initialize_vector_db(self) -> None:
+        """Initialize the vector database for cross-session conversation search."""
+        try:
+            # Create vector database in the workspace under data/vector_db/
+            vector_db_path = self.workspace / "data" / "vector_db"
+            self._vector_db = get_vector_db(
+                name=self.vector_db_name,
+                workspace=str(vector_db_path),
+                embedding_dim=self.embedding_dim
+            )
+        except Exception as e:
+            # Log error but don't fail initialization
+            print(f"Warning: Failed to initialize vector database for conversation search: {e}")
+            self._vector_db = None
+
         self._lock = threading.RLock()
         self._turns: List[ConversationTurn] = []
         self._entity_index: Dict[str, List[Tuple[int, str]]] = {}  # entity -> [(turn_index, entity_value)]
         self._summaries: List[ConversationSummary] = []
         self._summary_storage_path = self.storage_path.parent / "conversation_summaries.json"
-        if not _skip_auto_load:
+        if not self._skip_auto_load:
             self._load()
             self._load_summaries()
 
@@ -263,6 +320,289 @@ class ConversationMemory:
         with open(temp_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
         temp_path.replace(self._summary_storage_path)
+
+        # Store new summaries in vector database
+        # We'll store all summaries since the last save to avoid duplicates
+        # For simplicity, we'll store all summaries each time (they'll be deduplicated by ID)
+        if self._vector_db is not None:
+            for summary in self._summaries:
+                self._store_summary_in_vector_db(summary)
+
+    # =========================================================================
+    # Vector Database Methods for Cross-Session Search
+    # =========================================================================
+
+    def _compute_embedding(self, text: str):
+        """Compute embedding for text using the sentence transformer model."""
+        if self.embedding_model is None:
+            return None
+
+        try:
+            embedding = self.embedding_model.encode(
+                [text],
+                convert_to_numpy=True,
+                normalize_embeddings=True,
+            )[0]
+            return embedding
+        except Exception:
+            return None
+
+    def _store_turn_in_vector_db(self, turn: ConversationTurn, turn_index: int) -> None:
+        """Store a conversation turn in the vector database for cross-session search.
+
+        Args:
+            turn: The conversation turn to store
+            turn_index: The index of the turn in the conversation
+        """
+        if self._vector_db is None or self.embedding_model is None:
+            return
+
+        try:
+            # Create content for vector embedding - combine role and content
+            content_for_embedding = f"{turn.role}: {turn.content}"
+
+            # Compute embedding
+            embedding = self._compute_embedding(content_for_embedding)
+            if embedding is None:
+                return
+
+            # Prepare metadata
+            metadata = {
+                "conversation_id": str(id(self)),  # Unique identifier for this conversation instance
+                "turn_index": turn_index,
+                "role": turn.role,
+                "timestamp": turn.timestamp,
+                "content": turn.content,
+                "entities": str(turn.entities),  # Convert dict to string for storage
+                "type": "conversation_turn"
+            }
+
+            # Add to vector database
+            self._vector_db.add(embedding, metadata)
+        except Exception:
+            # Silently fail to avoid disrupting conversation flow
+            pass
+
+    def _store_summary_in_vector_db(self, summary: ConversationSummary) -> None:
+        """Store a conversation summary in the vector database for cross-session search.
+
+        Args:
+            summary: The conversation summary to store
+        """
+        if self._vector_db is None or self.embedding_model is None:
+            return
+
+        try:
+            # Create content for vector embedding
+            content_for_embedding = f"Summary: {summary.summary_text}\nTopics: {', '.join(summary.key_topics)}\nDecisions: {', '.join(summary.key_decisions)}\nFacts: {', '.join(summary.key_facts)}"
+
+            # Compute embedding
+            embedding = self._compute_embedding(content_for_embedding)
+            if embedding is None:
+                return
+
+            # Prepare metadata
+            metadata = {
+                "conversation_id": str(id(self)),  # Unique identifier for this conversation instance
+                "summary_id": summary.summary_id,
+                "start_turn_index": summary.start_turn_index,
+                "end_turn_index": summary.end_turn_index,
+                "turn_count": summary.turn_count,
+                "timestamp": summary.updated_at,
+                "key_topics": str(summary.key_topics),
+                "key_decisions": str(summary.key_decisions),
+                "key_facts": str(summary.key_facts),
+                "active_goals": str(summary.active_goals),
+                "unfinished_tasks": str(summary.unfinished_tasks),
+                "user_preferences": str(summary.user_preferences),
+                "type": "conversation_summary"
+            }
+
+            # Add to vector database
+            self._vector_db.add(embedding, metadata)
+        except Exception:
+            # Silently fail to avoid disrupting conversation flow
+            pass
+
+    def search_conversations(self, query: str, max_results: int = 10, min_similarity: float = 0.3) -> List[Dict[str, Any]]:
+        """Search conversation history across sessions using semantic search.
+
+        Args:
+            query: The search query
+            max_results: Maximum number of results to return
+            min_similarity: Minimum similarity score (0-1) for results
+
+        Returns:
+            List of matching conversation snippets with metadata
+        """
+        if self._vector_db is None or self.embedding_model is None or not query.strip():
+            return []
+
+        try:
+            # Compute query embedding
+            query_embedding = self._compute_embedding(query)
+            if query_embedding is None:
+                return []
+
+            # Search the vector database
+            results = self._vector_db.search(query_embedding, limit=max_results)
+
+            # Process and format results
+            formatted_results = []
+            for item in results:
+                if len(item) >= 3:
+                    vector_id, score, metadata = item[0], item[1], item[2]
+                else:
+                    # Handle different return formats
+                    vector_id, score = item[0], item[1]
+                    metadata = {}
+
+                # Convert score to similarity (assuming higher is better)
+                similarity = float(score) if isinstance(score, (int, float)) else 0.0
+
+                if similarity >= min_similarity:
+                    result_item = {
+                        "id": str(vector_id),
+                        "similarity": similarity,
+                        "content": metadata.get("content", ""),
+                        "role": metadata.get("role", ""),
+                        "timestamp": metadata.get("timestamp", ""),
+                        "type": metadata.get("type", "unknown"),
+                        "metadata": metadata
+                    }
+
+                    # Parse stringified fields back to appropriate types if needed
+                    if "entities" in metadata and isinstance(metadata["entities"], str):
+                        try:
+                            import ast
+                            result_item["entities"] = ast.literal_eval(metadata["entities"])
+                        except:
+                            result_item["entities"] = {}
+
+                    for field in ["key_topics", "key_decisions", "key_facts", "active_goals", "unfinished_tasks", "user_preferences"]:
+                        if field in metadata and isinstance(metadata[field], str):
+                            try:
+                                import ast
+                                result_item[field] = ast.literal_eval(metadata[field])
+                            except:
+                                result_item[field] = [] if field != "user_preferences" else ""
+
+                    formatted_results.append(result_item)
+
+            return formatted_results
+        except Exception:
+            return []
+
+    def search_conversations_by_topic(self, topic: str, max_results: int = 10,
+                                    time_weight_factor: float = 0.1) -> List[Dict[str, Any]]:
+        """Search conversations by topic with temporal weighting.
+
+        Args:
+            topic: The topic to search for
+            max_results: Maximum number of results to return
+            time_weight_factor: How much to weight recent conversations (0-1)
+
+        Returns:
+            List of matching conversation snippets with temporal weighting applied
+        """
+        if self._vector_db is None or self.embedding_model is None or not topic.strip():
+            return []
+
+        try:
+            # Compute topic embedding
+            topic_embedding = self._compute_embedding(topic)
+            if topic_embedding is None:
+                return []
+
+            # Search for the topic
+            results = self._vector_db.search(topic_embedding, limit=max_results * 2)  # Get more to filter
+
+            # Process results with temporal weighting
+            now = datetime.now(timezone.utc).timestamp()
+            weighted_results = []
+
+            for item in results:
+                if len(item) >= 3:
+                    vector_id, score, metadata = item[0], item[1], item[2]
+                else:
+                    vector_id, score = item[0], item[1]
+                    metadata = {}
+
+                similarity = float(score) if isinstance(score, (int, float)) else 0.0
+
+                # Apply temporal weighting if weigthed_score = similarity
+                if "timestamp" in metadata and metadata["timestamp"]:
+                    try:
+                        # Parse timestamp and calculate age in days
+                        ts = datetime.fromisoformat(metadata["timestamp"].replace('Z', '+00:00'))
+                        age_days = (datetime.now(timezone.utc) - ts).total_seconds() / (24 * 3600)
+                        # Apply exponential decay: newer items get higher weight
+                        time_weight = math.exp(-time_weight_factor * age_days)
+                        weighted_score = similarity * (0.7 + 0.3 * time_weight)  # Base 70% similarity + 30% time weight
+                    except:
+                        weighted_score = similarity
+                else:
+                    weighted_score = similarity
+
+                if weighted_score >= 0.2:  # Minimum threshold after weighting
+                    result_item = {
+                        "id": str(vector_id),
+                        "similarity": similarity,
+                        "weighted_score": weighted_score,
+                        "content": metadata.get("content", ""),
+                        "role": metadata.get("role", ""),
+                        "timestamp": metadata.get("timestamp", ""),
+                        "type": metadata.get("type", "unknown"),
+                        "metadata": metadata
+                    }
+
+                    # Parse stringified fields
+                    for field in ["entities", "key_topics", "key_decisions", "key_facts", "active_goals", "unfinished_tasks", "user_preferences"]:
+                        if field in metadata and isinstance(metadata[field], str):
+                            try:
+                                import ast
+                                result_item[field] = ast.literal_eval(metadata[field])
+                            except:
+                                result_item[field] = [] if field != "user_preferences" else ""
+
+                    weighted_results.append(result_item)
+
+            # Sort by weighted score and limit results
+            weighted_results.sort(key=lambda x: x["weighted_score"], reverse=True)
+            return weighted_results[:max_results]
+        except Exception:
+            return []
+
+    def get_conversation_thread(self, target_turn_index: int, context_size: int = 2) -> List[Dict[str, Any]]:
+        """Get a conversation thread around a specific turn for context.
+
+        Args:
+            target_turn_index: The index of the target turn
+            context_size: Number of turns before and after to include
+
+        Returns:
+            List of conversation turns in the thread
+        """
+        with self._lock:
+            if not self._turns:
+                return []
+
+            start_idx = max(0, target_turn_index - context_size)
+            end_idx = min(len(self._turns) - 1, target_turn_index + context_size)
+
+            thread = []
+            for i in range(start_idx, end_idx + 1):
+                turn = self._turns[i]
+                turn_dict = {
+                    "index": i,
+                    "role": turn.role,
+                    "content": turn.content,
+                    "timestamp": turn.timestamp,
+                    "entities": turn.entities
+                }
+                thread.append(turn_dict)
+
+            return thread
 
     def _generate_summary(self, start_index: int, end_index: int) -> Optional[ConversationSummary]:
         """Generate a summary of conversation turns from start_index to end_index (inclusive).
@@ -626,6 +966,11 @@ class ConversationMemory:
             )
             self._turns.append(turn)
             self._update_entity_index(len(self._turns) - 1, turn.entities)
+
+            # Store the turn in vector database for cross-search
+            turn_index = len(self._turns) - 1
+            self._store_turn_in_vector_db(turn, turn_index)
+
             self._check_and_summarize()  # Check if we need to summarize (before trimming)
             self._trim()
             self._save()

@@ -19,6 +19,19 @@ from app.planner.scheduler import Scheduler, Schedule, SchedulingStrategy
 from app.planner.resource_allocator import ResourceAllocator, Resource, ResourceType
 from app.planner.progress_tracker import ProgressTracker, ProgressSnapshot
 from app.planner.plan_visualizer import PlanVisualizer, VisualizationOptions
+from app.planner.duration_estimation import DurationEstimator, PlanDurationEstimator, DurationEstimationConfig
+
+# Goals integration for complexity levels
+try:
+    from app.memory.goals.models import ComplexityLevel
+except ImportError:
+    from enum import Enum
+    class ComplexityLevel(Enum):
+        TRIVIAL = "trivial"
+        SIMPLE = "simple"
+        MODERATE = "moderate"
+        COMPLEX = "complex"
+        VERY_COMPLEX = "very_complex"
 
 from app.core.logger import logger
 
@@ -463,6 +476,10 @@ class PlanManager:
         # Active plan
         self._active_plan: Optional[Plan] = None
 
+        # Duration estimation
+        self._duration_estimator = DurationEstimator()
+        self._plan_duration_estimator = PlanDurationEstimator(self._duration_estimator)
+
         # Register with observability
         self._register_with_observability()
 
@@ -616,6 +633,136 @@ class PlanManager:
     def list_plans(self) -> List[Plan]:
         """List all loaded plans."""
         return list(self._plans.values())
+
+    # --- Duration Estimation Integration ---
+
+    def estimate_plan_duration(
+        self,
+        plan_id: str,
+        resource_constraints: Optional[Dict[ResourceType, float]] = None,
+    ) -> Dict[str, Any]:
+        """Estimate total duration for a plan.
+
+        Args:
+            plan_id: ID of the plan to estimate
+            resource_constraints: Optional resource constraints (type -> available fraction)
+
+        Returns:
+            Dictionary with total estimated duration, critical path, and task estimates
+        """
+        plan = self._plans.get(plan_id)
+        if not plan:
+            return {"error": "Plan not found"}
+
+        return self._plan_duration_estimator.estimate_plan_duration(
+            plan.tasks,
+            resource_constraints=resource_constraints,
+        )
+
+    def estimate_task_duration(
+        self,
+        task_id: str,
+        plan_id: Optional[str] = None,
+        resource_constraints: Optional[Dict[ResourceType, float]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Estimate duration for a specific task.
+
+        Args:
+            task_id: ID of the task
+            plan_id: Optional plan ID (uses active plan if not provided)
+            resource_constraints: Optional resource constraints
+
+        Returns:
+            Duration estimate or None if task not found
+        """
+        plan = self._plans.get(plan_id) if plan_id else self._active_plan
+        if not plan:
+            return None
+
+        task = next((t for t in plan.tasks if t.id == task_id), None)
+        if not task:
+            return None
+
+        estimate = self._duration_estimator.estimate_task_duration(
+            task,
+            resource_constraints=resource_constraints,
+        )
+
+        if hasattr(estimate, 'to_dict'):
+            return estimate.to_dict()
+        return estimate
+
+    def record_task_actual_duration(
+        self,
+        task_id: str,
+        actual_seconds: float,
+        plan_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Record actual duration for a task and update estimates.
+
+        Args:
+            task_id: ID of the task
+            actual_seconds: Actual time taken in seconds
+            plan_id: Optional plan ID (uses active plan if not provided)
+
+        Returns:
+            Updated duration estimate or None if task not found
+        """
+        plan = self._plans.get(plan_id) if plan_id else self._active_plan
+        if not plan:
+            return None
+
+        task = next((t for t in plan.tasks if t.id == task_id), None)
+        if not task:
+            return None
+
+        # Update task with actual duration
+        from datetime import timedelta
+        task.actual_duration = timedelta(seconds=actual_seconds)
+        task.end_time = datetime.now(timezone.utc).isoformat()
+
+        # Record in estimator
+        updated = self._duration_estimator.record_actual_duration(task, actual_seconds)
+
+        # Store estimate on task for reference
+        task.metadata["duration_estimate"] = (
+            updated.to_dict() if hasattr(updated, 'to_dict') else updated
+        )
+
+        self._update_plan_timestamp(plan)
+        self._save_plan(plan)
+
+        # Publish event
+        self._publish_event("task.duration_recorded", {
+            "task_id": task_id,
+            "plan_id": plan.id,
+            "actual_seconds": actual_seconds,
+            "updated_estimate": task.metadata["duration_estimate"],
+        })
+
+        return task.metadata["duration_estimate"]
+
+    def get_duration_history_stats(
+        self,
+        category: Optional[str] = None,
+        complexity: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Get statistics from duration estimation history."""
+        cat = TaskCategory(category) if category else None
+        comp = ComplexityLevel(complexity) if complexity else None
+
+        # Import here to avoid circular
+        from app.planner.task import TaskCategory
+        from app.memory.goals.models import ComplexityLevel
+
+        return self._duration_estimator.get_historical_stats(
+            category=cat,
+            complexity=comp,
+        )
+
+    def _update_plan_timestamp(self, plan: Plan) -> None:
+        """Update plan timestamp."""
+        plan.updated_at = datetime.now(timezone.utc).isoformat()
 
     def delete_plan(self, plan_id: str) -> bool:
         """Delete a plan.

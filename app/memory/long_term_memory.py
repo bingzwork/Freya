@@ -141,7 +141,7 @@ class LongTermMemory:
         if self._observability:
             self._observability.add_health_check(HealthCheck(
                 name="long_term_memory_health",
-                component="memory",
+                component="memory.long_term",
                 check_func=self._health_check,
                 interval_seconds=60.0,
             ))
@@ -163,7 +163,7 @@ class LongTermMemory:
 
         return HealthResult(
             name="long_term_memory_health",
-            component="memory",
+            component="memory.long_term",
             status=HealthStatus.HEALTHY,
             message=f"{entry_count} entries, {categories} categories, {sources} sources",
             details={

@@ -54,6 +54,8 @@ from app.monitoring.gpu_monitor import (
     GPUMetrics,
     GPUVendor,
     create_gpu_monitor,
+    get_gpu_monitor,
+    set_gpu_monitor,
 )
 from app.monitoring.monitoring_report import (
     MonitoringReport,
@@ -94,5 +96,7 @@ __all__ = [
     "GPUMetrics",
     "GPUVendor",
     "create_gpu_monitor",
+    "get_gpu_monitor",
+    "set_gpu_monitor",
     "MonitoringReport",
 ]

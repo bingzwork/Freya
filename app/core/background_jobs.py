@@ -233,7 +233,7 @@ class Job:
         with self._lock:
             self.result_history.append(result)
             if len(self.result_history) > self.max_result_history:
-                self.result_history = self.result_history[-self.max_result_history:]
+                self.result_history = self.result_history[-self.max_result_height:]
 
     def get_summary(self) -> Dict[str, Any]:
         """Get job summary."""
@@ -915,6 +915,201 @@ class BackgroundJobService:
         if limit:
             history = history[:limit]
         return history
+
+    def get_success_rate_trend(self, job_id: Optional[str] = None, window_hours: int = 24) -> List[Dict[str, Any]]:
+        """Get success rate trend over time.
+
+        Args:
+            job_id: Optional job ID to filter by. If None, considers all jobs.
+            window_hours: Number of hours to look back from now.
+
+        Returns:
+            List of dictionaries, each representing a time bucket with keys:
+                start_time, end_time, success_rate, total_jobs, successful_jobs
+        """
+        now = datetime.now(timezone.utc)
+        start_time = now - timedelta(hours=window_hours)
+
+        # Get history for the job (if specified) in chronological order (oldest first)
+        history = self.get_job_history(job_id=job_id, limit=None)
+        chronological_history = list(reversed(history))
+
+        # Filter to records within the time window
+        filtered_history = []
+        for record in chronological_history:
+            try:
+                record_time = datetime.fromisoformat(record["timestamp"])
+            except ValueError:
+                # If timestamp format is invalid, skip
+                continue
+            if start_time <= record_time <= now:
+                filtered_history.append(record)
+
+        # If no data, return empty list
+        if not filtered_history:
+            return []
+
+        # Create time buckets of 1 hour each
+        bucket_size = timedelta(hours=1)
+        # Calculate number of buckets needed to cover the window
+        num_buckets = int((now - start_time).total_seconds() // bucket_size.total_seconds()) + 1
+
+        # Initialize buckets
+        buckets = []
+        for i in range(num_buckets):
+            bucket_start = start_time + i * bucket_size
+            bucket_end = bucket_start + bucket_size
+            buckets.append({
+                "start": bucket_start,
+                "end": bucket_end,
+                "success_count": 0,
+                "total_count": 0
+            })
+
+        # Assign each record to a bucket
+        for record in filtered_history:
+            record_time = datetime.fromisoformat(record["timestamp"])
+            delta = record_time - start_time
+            if delta.total_seconds() < 0:
+                # Should not happen due to filtering, but just in case
+                continue
+            index = int(delta.total_seconds() // bucket_size.total_seconds())
+            if index >= num_buckets:
+                index = num_buckets - 1
+            bucket = buckets[index]
+            bucket["total_count"] += 1
+            if record.get("success", False):
+                bucket["success_count"] += 1
+
+        # Build result
+        result = []
+        for bucket in buckets:
+            if bucket["total_count"] > 0:
+                success_rate = bucket["success_count"] / bucket["total_count"]
+            else:
+                success_rate = 0.0
+            result.append({
+                "start_time": bucket["start"].isoformat(),
+                "end_time": bucket["end"].isoformat(),
+                "success_rate": success_rate,
+                "total_jobs": bucket["total_count"],
+                "successful_jobs": bucket["success_count"]
+            })
+
+        return result
+
+    def get_retry_statistics(self, job_id: Optional[str] = None) -> Dict[str, Any]:
+        """Get retry statistics.
+
+        Args:
+            job_id: Optional job ID to filter by. If None, considers all jobs.
+
+        Returns:
+            Dictionary with retry statistics:
+                total_retries: total number of retries across all executions
+                executions_with_retries: number of executions that had at least one retry
+                average_retries_per_execution: average retries per execution (across all executions)
+                average_retries_per_retry_execution: average retries per execution that had retries
+                max_retries_per_execution: maximum retries in a single execution
+                success_after_retry_rate: percentage of retried executions that eventually succeeded
+        """
+        # Get history for the job (if specified) in chronological order (oldest first)
+        history = self.get_job_history(job_id=job_id, limit=None)
+        chronological_history = list(reversed(history))
+
+        total_executions = len(chronological_history)
+        if total_executions == 0:
+            return {
+                "total_retries": 0,
+                "executions_with_retries": 0,
+                "average_retries_per_execution": 0.0,
+                "average_retries_per_retry_execution": 0.0,
+                "max_retries_per_execution": 0,
+                "success_after_retry_rate": 0.0
+            }
+
+        retries = [record.get("retry_count", 0) for record in chronological_history]
+        total_retries = sum(retries)
+        executions_with_retries = sum(1 for r in retries if r > 0)
+        avg_retries_per_execution = total_retries / total_executions if total_executions > 0 else 0.0
+        avg_retries_per_retry_execution = total_retries / executions_with_retries if executions_with_retries > 0 else 0.0
+        max_retries = max(retries) if retries else 0
+
+        # Count executions that had retries and eventually succeeded
+        success_after_retry = 0
+        for record in chronological_history:
+            if record.get("retry_count", 0) > 0 and record.get("success", False):
+                success_after_retry += 1
+        success_after_retry_rate = (
+            success_after_retry / executions_with_retries
+            if executions_with_retries > 0
+            else 0.0
+        )
+
+        return {
+            "total_retries": total_retries,
+            "executions_with_retries": executions_with_retries,
+            "average_retries_per_execution": avg_retries_per_execution,
+            "average_retries_per_retry_execution": avg_retries_per_retry_execution,
+            "max_retries_per_execution": max_retries,
+            "success_after_retry_rate": success_after_retry_rate
+        }
+
+    def get_job_statistics(self, job_id: Optional[str] = None) -> Dict[str, Any]:
+        """Get job execution statistics.
+
+        Args:
+            job_id: Optional job ID to filter by. If None, considers all jobs.
+
+        Returns:
+            Dictionary with job statistics:
+                total_executions: total number of executions
+                successful_executions: number of successful executions
+                failed_executions: number of failed executions
+                success_rate: success rate (successful/total)
+                average_duration_seconds: average execution duration
+                min_duration_seconds: minimum execution duration
+                max_duration_seconds: maximum execution duration
+                total_retries: total number of retries across all executions
+        """
+        # Get history for the job (if specified) in chronological order (oldest first)
+        history = self.get_job_history(job_id=job_id, limit=None)
+        chronological_history = list(reversed(history))
+
+        total_executions = len(chronological_history)
+        if total_executions == 0:
+            return {
+                "total_executions": 0,
+                "successful_executions": 0,
+                "failed_executions": 0,
+                "success_rate": 0.0,
+                "average_duration_seconds": 0.0,
+                "min_duration_seconds": 0.0,
+                "max_duration_seconds": 0.0,
+                "total_retries": 0
+            }
+
+        success_count = sum(1 for record in chronological_history if record.get("success", False))
+        fail_count = total_executions - success_count
+        success_rate = success_count / total_executions if total_executions > 0 else 0.0
+
+        durations = [record.get("duration_seconds", 0.0) for record in chronological_history]
+        avg_duration = sum(durations) / len(durations) if durations else 0.0
+        min_duration = min(durations) if durations else 0.0
+        max_duration = max(durations) if durations else 0.0
+
+        total_retries = sum(record.get("retry_count", 0) for record in chronological_history)
+
+        return {
+            "total_executions": total_executions,
+            "successful_executions": success_count,
+            "failed_executions": fail_count,
+            "success_rate": success_rate,
+            "average_duration_seconds": avg_duration,
+            "min_duration_seconds": min_duration,
+            "max_duration_seconds": max_duration,
+            "total_retries": total_retries
+        }
 
 
     def shutdown(self, wait: bool = True, timeout: float = 30.0) -> None:

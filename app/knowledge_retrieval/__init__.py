@@ -77,6 +77,8 @@ from app.knowledge_retrieval.sources import (
     EngineeringLessonsAdapter,
     ExtractedKnowledgeAdapter,
     DocumentationAdapter,
+    VectorSearchAdapter,
+    ConversationMemoryAdapter,
     create_adapters_from_agent,
 )
 
@@ -154,6 +156,8 @@ __all__ = [
     "EngineeringLessonsAdapter",
     "ExtractedKnowledgeAdapter",
     "DocumentationAdapter",
+    "VectorSearchAdapter",
+    "ConversationMemoryAdapter",
     "create_adapters_from_agent",
 
     # Pipeline

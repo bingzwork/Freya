@@ -166,7 +166,7 @@ class ProgressTracker:
             from app.core.observability import HealthCheck, ComponentInfo, ComponentType
             self._observability.add_health_check(HealthCheck(
                 name="progress_tracker_health",
-                component="progress",
+                component="ProgressTracker",
                 check_func=self._health_check,
                 interval_seconds=60.0,
             ))
@@ -186,7 +186,8 @@ class ProgressTracker:
         snapshot_count = len(self._snapshots)
 
         return HealthResult(
-            name="progress_tracker",
+            name="progress_tracker_health",
+            component="ProgressTracker",
             status=HealthStatus.HEALTHY,
             message=f"Tracking {task_count} tasks, {snapshot_count} snapshots",
             details={

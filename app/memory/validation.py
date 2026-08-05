@@ -42,7 +42,6 @@ from app.memory.cross_references import (
     MemoryType,
 )
 from app.knowledge_retrieval.models import KnowledgeSourceType
-from app.knowledge_retrieval.sources import create_adapters_from_agent
 
 # Shared infrastructure imports
 from app.core.events import get_event_bus
@@ -343,7 +342,7 @@ class KnowledgeValidator:
         if self._observability:
             self._observability.add_health_check(HealthCheck(
                 name="knowledge_validator_health",
-                component="memory",
+                component="memory.validation",
                 check_func=self._health_check,
                 interval_seconds=60.0,
             ))
@@ -362,7 +361,7 @@ class KnowledgeValidator:
         try:
             return HealthResult(
                 name="knowledge_validator_health",
-                component="memory",
+                component="memory.validation",
                 status=HealthStatus.HEALTHY,
                 message="KnowledgeValidator operational",
                 metadata={
@@ -373,7 +372,7 @@ class KnowledgeValidator:
         except Exception as e:
             return HealthResult(
                 name="knowledge_validator_health",
-                component="memory",
+                component="memory.validation",
                 status=HealthStatus.UNHEALTHY,
                 message=f"Health check failed: {e}",
                 metadata={"error": str(e)}

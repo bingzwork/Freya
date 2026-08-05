@@ -16,7 +16,7 @@ from app.knowledge_retrieval.models import (
     KnowledgeSourceType,
     RankingConfig,
 )
-from .vector_search import VectorSearchAdapter
+from app.memory.conversation_memory import ConversationMemory
 
 logger = logging.getLogger(__name__)
 
@@ -687,6 +687,199 @@ class ExtractedKnowledgeAdapter(KnowledgeSourceAdapter):
 
     def get_source_quality(self) -> float:
         return 0.80
+
+
+class ConversationMemoryAdapter(KnowledgeSourceAdapter):
+    """Adapter for Conversation Memory.
+
+    Searches across conversation turns and summaries for relevant
+    conversational content.
+    """
+
+    def __init__(self, conversation_memory: ConversationMemory):
+        self.memory = conversation_memory
+
+    @property
+    def source_type(self) -> KnowledgeSourceType:
+        return KnowledgeSourceType.CONVERSATION_MEMORY
+
+    def is_available(self) -> bool:
+        if self.memory is None:
+            return False
+        # Check if we have any conversation turns or summaries
+        history = self.memory.get_history()
+        summaries = self.memory.get_summaries()
+        return len(history) > 0 or len(summaries) > 0
+
+    def retrieve_candidates(
+        self,
+        query: RetrievalQuery,
+        max_results: int = 50,
+    ) -> List[KnowledgeRetrievalResult]:
+        if not self.is_available() or not query.query:
+            return []
+
+        query_lower = query.query.lower()
+        query_words = set(query_lower.split())
+        results: List[KnowledgeRetrievalResult] = []
+
+        # Search recent turns
+        turns = self.memory.get_history()
+        for idx, turn in enumerate(turns):
+            content_lower = turn.content.lower()
+            # Simple relevance: fraction of query words found in content
+            if query_words:
+                words_in_content = set(content_lower.split())
+                matches = len(query_words & words_in_content)
+                relevance = matches / len(query_words) if query_words else 0.0
+            else:
+                relevance = 0.0
+            if relevance == 0.0:
+                continue
+
+            # Recency boost: more recent turns get higher boost
+            recency_boost = 0.0
+            if query.boost_recent and turns:
+                # Normalize index to 0..1 where newest is 1.0
+                recency_boost = (idx + 1) / len(turns)  # older->lower
+                # We want newer to have higher score, so we keep as is
+                # Combine with relevance: weighted average
+                relevance = relevance * 0.7 + recency_boost * 0.3
+
+            # Base confidence from relevance, scaled
+            raw_confidence = min(0.9, 0.5 + relevance * 0.4)  # range 0.5-0.9
+            # Ensure within bounds
+            raw_confidence = max(0.0, min(1.0, raw_confidence))
+
+            result = KnowledgeRetrievalResult(
+                content=turn.content,
+                title=turn.content[:100] + ("..." if len(turn.content) > 100 else ""),
+                summary=turn.content[:200] + ("..." if len(turn.content) > 200 else ""),
+                source_type=self.source_type,
+                source_id=f"turn_{idx}",
+                raw_confidence=raw_confidence,
+                calibrated_confidence=raw_confidence,
+                category="conversation",
+                last_updated=turn.timestamp,
+                source_metadata={
+                    "turn_index": idx,
+                    "role": turn.role,
+                    "entities": turn.entities,
+                },
+            )
+            results.append(result)
+
+        # Search summaries
+        summaries = self.memory.get_summaries()
+        for summary in summaries:
+            summary_lower = summary.summary_text.lower()
+            if query_words:
+                words_in_summary = set(summary_lower.split())
+                matches = len(query_words & words_in_summary)
+                relevance = matches / len(query_words) if query_words else 0.0
+            else:
+                relevance = 0.0
+            if relevance == 0.0:
+                continue
+
+            # Recency based on summary timestamp
+            recency_boost = 0.0
+            if query.boost_recent and summaries:
+                # We'll just use position in list (newer summaries appended later)
+                idx = summaries.index(summary)  # O(n) but small list
+                recency_boost = (idx + 1) / len(summaries)
+                relevance = relevance * 0.7 + recency_boost * 0.3
+
+            raw_confidence = min(0.9, 0.5 + relevance * 0.4)
+            raw_confidence = max(0.0, min(1.0, raw_confidence))
+
+            result = KnowledgeRetrievalResult(
+                content=summary.summary_text,
+                title=f"Summary: {summary.summary_id}",
+                summary=summary.summary_text[:200] + ("..." if len(summary.summary_text) > 200 else ""),
+                source_type=self.source_type,
+                source_id=f"summary_{summary.summary_id}",
+                raw_confidence=raw_confidence,
+                calibrated_confidence=raw_confidence,
+                category="conversation_summary",
+                last_updated=summary.updated_at,
+                source_metadata={
+                    "summary_id": summary.summary_id,
+                    "turn_count": summary.turn_count,
+                    "key_topics": summary.key_topics,
+                },
+            )
+            results.append(result)
+
+        # Sort by raw_confidence descending
+        results.sort(key=lambda r: r.raw_confidence, reverse=True)
+        return results[:max_results]
+
+    def get_source_quality(self) -> float:
+        return 0.65  # matches RankingConfig default
+
+
+class VectorSearchAdapter(KnowledgeSourceAdapter):
+    """Adapter for Vector Search (FAISS-based semantic search)."""
+
+    def __init__(self, vector_db):
+        self.vector_db = vector_db
+
+    @property
+    def source_type(self) -> KnowledgeSourceType:
+        return KnowledgeSourceType.VECTOR_SEARCH
+
+    def is_available(self) -> bool:
+        return self.vector_db is not None and not self.vector_db.is_empty()
+
+    def retrieve_candidates(
+        self,
+        query: RetrievalQuery,
+        max_results: int = 50,
+    ) -> List[KnowledgeRetrievalResult]:
+        if not self.is_available() or not query.query:
+            return []
+
+        # Perform vector search
+        results = self.vector_db.search(query.query, limit=max_results)
+        k_results: List[KnowledgeRetrievalResult] = []
+
+        for item in results:
+            # Assuming item is (id, score, metadata) as per test
+            if len(item) >= 3:
+                vec_id, score, metadata = item[0], item[1], item[2]
+            else:
+                # Fallback: treat as (id, score) with empty metadata
+                vec_id, score = item[0], item[1]
+                metadata = {}
+            content = str(metadata.get("content", ""))
+            title = str(metadata.get("title", ""))
+            summary = content[:200] + ("..." if len(content) > 200 else "")
+            # Ensure score is float between 0 and 1
+            try:
+                raw_conf = float(score)
+            except (ValueError, TypeError):
+                raw_conf = 0.0
+            raw_conf = max(0.0, min(1.0, raw_conf))
+            # Use raw_conf as calibrated (will be calibrated later)
+            result_obj = KnowledgeRetrievalResult(
+                content=content,
+                title=title,
+                summary=summary,
+                source_type=self.source_type,
+                source_id=str(vec_id),
+                raw_confidence=raw_conf,
+                calibrated_confidence=raw_conf,
+                # Optionally set category, tags, etc. from metadata if available
+                last_updated=metadata.get("updated_at") or metadata.get("timestamp"),
+                source_metadata=metadata,
+            )
+            k_results.append(result_obj)
+
+        return k_results
+
+    def get_source_quality(self) -> float:
+        return 0.85  # matches RankingConfig default
 
 
 class DocumentationAdapter(KnowledgeSourceAdapter):

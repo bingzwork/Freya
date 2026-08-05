@@ -6,6 +6,7 @@ from app.planner.plan_manager import PlanManager, Plan, TaskCategory
 from app.planner.task import Task, TaskStatus
 from pathlib import Path
 from typing import Optional, Dict, List, Any
+import asyncio
 from app.core.logger import logger
 from app.core.project_index import ProjectIndex
 from app.core.symbol_index import SymbolIndex
@@ -79,6 +80,10 @@ from app.core.file_watcher import get_file_watcher, FileEventType
 from app.core.events import get_event_bus, Event, EventPriority
 from app.core.background_jobs import get_job_service, JobType, RetryConfig
 from app.core.observability import get_observability_hub, ComponentInfo, ComponentType, HealthCheck, HealthStatus
+
+# External Services Registry
+from app.services.external_registry import ExternalServiceRegistry, ServiceHealth
+from app.monitoring.network_monitor import NetworkMonitor, ServiceStatus
 
 try:
     from app.retrieval.enhanced_retriever import EnhancedRetriever
@@ -423,10 +428,7 @@ class FreyaAgent:
         self.event_bus = get_event_bus()
         self.job_service = get_job_service()
         self.observability = get_observability_hub()
-
-        # Start observability hub if not already started
-        if hasattr(self.observability, '_started') and not self.observability._started:
-            self.observability.start()
+        self._registered_component_names = set()
 
         # Register this agent as a monitored component
         self._register_with_observability()
@@ -436,7 +438,47 @@ class FreyaAgent:
 
         # Initialize and start FileWatcher for real-time filesystem monitoring
         self._init_file_watcher()
+
+        # Start observability hub (which begins health monitoring) ONLY after
+        # all components are fully initialized
+        if hasattr(self.observability, '_started') and not self.observability._started:
+            self.observability.start()
         # ==== End Shared Infrastructure Initialization ====
+
+        # ==== External Services Registry Initialization ====
+        # Initialize NetworkMonitor for health monitoring
+        self.network_monitor = NetworkMonitor(workspace=self.workspace)
+        # Initialize ExternalServiceRegistry
+        self.service_registry = ExternalServiceRegistry()
+        # Connect registry with NetworkMonitor for background health monitoring
+        self.service_registry.set_network_monitor(self.network_monitor)
+        # Auto-discover and register services from environment
+        discovered = self.service_registry.auto_discover_and_register()
+        logger.info(f"[ServiceRegistry] Auto-discovered {len(discovered)} external services")
+        # Register default services (e.g., local Ollama)
+        defaults = self.service_registry.register_default_services()
+        if defaults:
+            logger.info(f"[ServiceRegistry] Registered {len(defaults)} default services")
+        # Sync with NetworkMonitor and start background health monitoring
+        self.service_registry.sync_with_network_monitor()
+        self.service_registry.start_health_monitoring()
+        # Start NetworkMonitor background tasks
+        self.job_service.add_recurring_job(
+            func=self._run_network_monitor_checks,
+            interval_seconds=60.0,
+            name="network_monitor_health_checks",
+            tags={"subsystem": "monitoring", "type": "health_check"},
+        )
+        # Schedule periodic registry persistence
+        self.job_service.add_recurring_job(
+            func=self._persist_service_registry,
+            interval_seconds=300.0,  # 5 minutes
+            name="service_registry_persist",
+            tags={"subsystem": "services", "type": "persistence"},
+        )
+        # Try to load persisted registry
+        self._load_service_registry()
+        # ==== End External Services Registry Initialization ====
 
         logger.info("Freya Agent initialized")
 
@@ -629,13 +671,15 @@ class FreyaAgent:
         """Register this agent and its subsystems with the ObservabilityHub."""
         try:
             # Register main agent component
-            self.observability.register_component(ComponentInfo(
-                name="FreyaAgent",
-                component_type=ComponentType.AGENT,
-                version="1.0.0",
-                description="Main autonomous software engineering agent",
-                metadata={"workspace": self.workspace},
-            ))
+            if "FreyaAgent" not in self._registered_component_names:
+                self.observability.register_component(ComponentInfo(
+                    name="FreyaAgent",
+                    component_type=ComponentType.AGENT,
+                    version="1.0.0",
+                    description="Main autonomous software engineering agent",
+                    metadata={"workspace": self.workspace},
+                ))
+                self._registered_component_names.add("FreyaAgent")
 
             # Register key subsystems as components
             subsystems = [
@@ -652,13 +696,15 @@ class FreyaAgent:
             ]
 
             for name, comp_type, desc in subsystems:
-                self.observability.register_component(ComponentInfo(
-                    name=name,
-                    component_type=comp_type,
-                    version="1.0.0",
-                    description=desc,
-                    tags={"parent": "FreyaAgent"},
-                ))
+                if name not in self._registered_component_names:
+                    self.observability.register_component(ComponentInfo(
+                        name=name,
+                        component_type=comp_type,
+                        version="1.0.0",
+                        description=desc,
+                        tags={"parent": "FreyaAgent"},
+                    ))
+                    self._registered_component_names.add(name)
 
             # Add health checks for critical subsystems
             self._add_subsystem_health_checks()
@@ -2599,6 +2645,49 @@ Estimated Hours: {task.estimated_hours or 'Not set'}""")
             except Exception as e:
                 logger.error(f"[FreyaAgent] Autonomy state persistence error: {e}")
 
+    def _run_network_monitor_checks(self) -> None:
+        """Run health checks for all registered services via NetworkMonitor."""
+        if not hasattr(self, 'network_monitor') or not self.network_monitor:
+            return
+        if not hasattr(self, 'service_registry') or not self.service_registry:
+            return
+        try:
+            import asyncio
+            # Run async health checks in event loop
+            async def run_checks():
+                await self.network_monitor.check_all_services()
+            asyncio.create_task(run_checks())
+        except Exception as e:
+            logger.error(f"[FreyaAgent] Network monitor health checks error: {e}")
+
+    def _persist_service_registry(self) -> None:
+        """Persist service registry to disk periodically."""
+        if not hasattr(self, 'service_registry') or not self.service_registry:
+            return
+        try:
+            from pathlib import Path
+            registry_path = Path(self.workspace) / "data" / "services" / "registry.json"
+            self.service_registry.save_to_file(str(registry_path))
+            logger.debug("[FreyaAgent] Service registry persisted")
+        except Exception as e:
+            logger.error(f"[FreyaAgent] Service registry persistence error: {e}")
+
+    def _load_service_registry(self) -> None:
+        """Load service registry from disk if exists."""
+        if not hasattr(self, 'service_registry') or not self.service_registry:
+            return
+        try:
+            from pathlib import Path
+            registry_path = Path(self.workspace) / "data" / "services" / "registry.json"
+            if registry_path.exists():
+                count = self.service_registry.load_from_file(str(registry_path))
+                if count > 0:
+                    logger.info(f"[FreyaAgent] Loaded {count} services from persisted registry")
+                    # Re-sync with NetworkMonitor after loading
+                    self.service_registry.sync_with_network_monitor()
+        except Exception as e:
+            logger.warning(f"[FreyaAgent] Failed to load service registry: {e}")
+
     def shutdown(self) -> None:
         """Gracefully shutdown the agent and all subsystems."""
         logger.info("[FreyaAgent] Shutting down...")
@@ -2611,6 +2700,25 @@ Estimated Hours: {task.estimated_hours or 'Not set'}""")
 
         # Stop file watcher
         self.stop_file_watcher()
+
+        # Stop network monitor and persist registry
+        if hasattr(self, 'network_monitor') and self.network_monitor:
+            try:
+                import asyncio
+                asyncio.create_task(self.network_monitor.stop_monitoring())
+                logger.info("[FreyaAgent] Network monitor stopped")
+            except Exception as e:
+                logger.warning(f"[FreyaAgent] Error stopping network monitor: {e}")
+
+        # Persist service registry on shutdown
+        if hasattr(self, 'service_registry') and self.service_registry:
+            try:
+                from pathlib import Path
+                registry_path = Path(self.workspace) / "data" / "services" / "registry.json"
+                self.service_registry.save_to_file(str(registry_path))
+                logger.info("[FreyaAgent] Service registry persisted on shutdown")
+            except Exception as e:
+                logger.warning(f"[FreyaAgent] Error persisting service registry: {e}")
 
         # Stop observability
         if hasattr(self, 'observability'):

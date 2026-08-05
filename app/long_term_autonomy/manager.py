@@ -103,7 +103,7 @@ class AutonomyManager:
         self.engineering_lessons = EngineeringLessonStorage(workspace)
         self.long_term_memory = LongTermMemory(workspace)
         self.semantic_memory = SemanticMemory(workspace)
-        self.knowledge_validator = KnowledgeValidator(workspace)
+        self.knowledge_validator = KnowledgeValidator(storage_path=workspace)
 
         # Initialize core systems
         self.goal_storage = GoalStorage(workspace)
@@ -177,9 +177,9 @@ class AutonomyManager:
                 return HealthResult(
                     name="long_term_autonomy_health",
                     component="long_term_autonomy",
-                    status=HealthStatus.UNHEALTHY,
-                    message="Autonomy manager is not running",
-                    metadata={"running": False}
+                    status=HealthStatus.DEGRADED,
+                    message="Autonomy manager is initialized but not running",
+                    metadata={"running": False, "enabled": self.config.enabled}
                 )
 
             # Check if main thread is alive

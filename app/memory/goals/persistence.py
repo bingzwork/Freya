@@ -57,7 +57,7 @@ class GoalPersistence:
         if self.observability:
             self.observability.add_health_check(HealthCheck(
                 name="goal_storage_health",
-                component="memory",
+                component="memory.goals",
                 check_func=self._health_check,
                 interval_seconds=30.0,
             ))
@@ -76,7 +76,7 @@ class GoalPersistence:
         try:
             return HealthResult(
                 name="goal_storage_health",
-                component="memory",
+                component="memory.goals",
                 status=HealthStatus.HEALTHY,
                 message="GoalStorage operational",
                 metadata={"goal_count": len(self._goals), "storage_exists": self.storage_path.exists()}
@@ -84,7 +84,7 @@ class GoalPersistence:
         except Exception as e:
             return HealthResult(
                 name="goal_storage_health",
-                component="memory",
+                component="memory.goals",
                 status=HealthStatus.UNHEALTHY,
                 message=f"Health check failed: {e}",
                 metadata={"error": str(e)}

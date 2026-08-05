@@ -43,6 +43,15 @@ from app.planner.task_graph import TaskGraph
 from app.world_model.model import WorldModel
 from app.memory.unified_retrieval import UnifiedRetrieval
 from app.conversational_control import ConversationControlHandler
+from app.failure_recovery.orchestrator import RecoveryOrchestrator
+from app.autonomous_learning.pipeline import AutonomousLearningPipeline
+from app.long_term_autonomy.manager import AutonomyManager
+from app.memory.goals import GoalStorage
+
+# Self-Observation components
+from app.self_observation.runtime_awareness import RuntimeAwareness, AwarenessConfig, get_runtime_awareness
+from app.self_observation.self_analysis import CentralizedSelfAnalysis, AnalysisConfig, get_self_analysis
+from app.self_observation.predictive_diagnostics import PredictiveDiagnostics, PredictiveDiagnosticsConfig, get_predictive_diagnostics
 
 
 logger = logging.getLogger(__name__)
@@ -104,6 +113,14 @@ class OrchestratorConfig:
     # Conversation control
     enable_conversation_control: bool = True
 
+    # Self-Observation
+    enable_runtime_awareness: bool = True
+    enable_self_analysis: bool = True
+    enable_predictive_diagnostics: bool = True
+    runtime_awareness_interval_seconds: float = 10.0
+    self_analysis_interval_seconds: float = 300.0
+    predictive_diagnostics_interval_seconds: float = 60.0
+
 
 class CentralOrchestrator:
     """
@@ -160,6 +177,11 @@ class CentralOrchestrator:
         self._shared_context: Dict[str, Any] = {}  # Shared execution context
         self._context_lock = threading.RLock()
 
+        # Self-Observation components
+        self._runtime_awareness: Optional[RuntimeAwareness] = None
+        self._self_analysis: Optional[CentralizedSelfAnalysis] = None
+        self._predictive_diagnostics: Optional[PredictiveDiagnostics] = None
+
         # Register with observability
         self._observability.register_component(ComponentInfo(
             name="CentralOrchestrator",
@@ -212,6 +234,18 @@ class CentralOrchestrator:
     @property
     def conversation_control(self) -> Optional[ConversationControlHandler]:
         return self._conversation_control
+
+    @property
+    def runtime_awareness(self) -> Optional[RuntimeAwareness]:
+        return self._runtime_awareness
+
+    @property
+    def self_analysis(self) -> Optional[CentralizedSelfAnalysis]:
+        return self._self_analysis
+
+    @property
+    def predictive_diagnostics(self) -> Optional[PredictiveDiagnostics]:
+        return self._predictive_diagnostics
 
     def set_conversation_control(self, handler: ConversationControlHandler) -> None:
         """Set the ConversationControlHandler externally.
@@ -423,6 +457,41 @@ class CentralOrchestrator:
             capability_registry=self._capability_registry,
         )
 
+        # Self-Observation: Runtime Awareness
+        if self.config.enable_runtime_awareness:
+            self._runtime_awareness = get_runtime_awareness(
+                orchestrator=self,
+                decision_manager=self._decision_manager,
+                world_model=self._world_model,
+                memory_retrieval=self._memory_retrieval,
+                failure_recovery=self._failure_recovery._recovery_orchestrator if self._failure_recovery else None,
+                autonomous_learning=None,  # Set externally by FreyaAgent if needed
+                autonomy_manager=None,  # Set externally by FreyaAgent if needed
+                goal_storage=None,  # Set externally by FreyaAgent if needed
+                config=AwarenessConfig(update_interval_seconds=self.config.runtime_awareness_interval_seconds),
+            )
+
+        # Self-Observation: Centralized Self-Analysis
+        if self.config.enable_self_analysis and self._runtime_awareness:
+            self._self_analysis = get_self_analysis(
+                orchestrator=self,
+                decision_manager=self._decision_manager,
+                world_model=self._world_model,
+                memory_retrieval=self._memory_retrieval,
+                failure_recovery=self._failure_recovery._recovery_orchestrator if self._failure_recovery else None,
+                autonomous_learning=None,  # Set externally by FreyaAgent if needed
+                autonomy_manager=None,  # Set externally by FreyaAgent if needed
+                config=AnalysisConfig(analysis_interval_seconds=self.config.self_analysis_interval_seconds),
+            )
+
+        # Self-Observation: Predictive Diagnostics
+        if self.config.enable_predictive_diagnostics and self._runtime_awareness and self._self_analysis:
+            self._predictive_diagnostics = get_predictive_diagnostics(
+                runtime_awareness=self._runtime_awareness,
+                self_analysis=self._self_analysis,
+                config=PredictiveDiagnosticsConfig(update_interval_seconds=self.config.predictive_diagnostics_interval_seconds),
+            )
+
         # Note: Built-in capabilities are registered in start() after registry is started
 
     def _start_components(self):
@@ -454,10 +523,34 @@ class CentralOrchestrator:
         if self._self_observer:
             self._self_observer.start()
 
+        # Self-Observation: Runtime Awareness
+        if self._runtime_awareness:
+            self._runtime_awareness.start()
+
+        # Self-Observation: Centralized Self-Analysis
+        if self._self_analysis:
+            self._self_analysis.start()
+
+        # Self-Observation: Predictive Diagnostics
+        if self._predictive_diagnostics:
+            self._predictive_diagnostics.start()
+
         # Activity reporter starts automatically via event subscriptions
 
     def _stop_components(self):
         """Stop all components."""
+        # Self-Observation: Predictive Diagnostics
+        if self._predictive_diagnostics:
+            self._predictive_diagnostics.stop()
+
+        # Self-Observation: Centralized Self-Analysis
+        if self._self_analysis:
+            self._self_analysis.stop()
+
+        # Self-Observation: Runtime Awareness
+        if self._runtime_awareness:
+            self._runtime_awareness.stop()
+
         if self._self_observer:
             self._self_observer.stop()
 
@@ -503,6 +596,27 @@ class CentralOrchestrator:
             priority=JobPriority.LOW,
             replace_existing=True,
         )
+
+        # Predictive Diagnostics - run analysis and generate predictions
+        if self.config.enable_predictive_diagnostics:
+            self._job_service.schedule(
+                job_id="orchestrator_predictive_diagnostics",
+                func=self._predictive_diagnostics_job,
+                trigger=JobTriggerConfig(type=JobTriggerType.RECURRING, interval_seconds=self.config.predictive_diagnostics_interval_seconds),
+                priority=JobPriority.NORMAL,
+                replace_existing=True,
+            )
+
+    def _predictive_diagnostics_job(self):
+        """Background job for predictive diagnostics."""
+        if not self._predictive_diagnostics:
+            return
+        try:
+            # Run predictive diagnostics analysis - this triggers the service to run
+            import asyncio
+            asyncio.create_task(self._predictive_diagnostics.run_diagnostics())
+        except Exception as e:
+            logger.error(f"Predictive diagnostics job failed: {e}")
 
     def _capability_health_check_job(self):
         """Background job for capability health checks."""

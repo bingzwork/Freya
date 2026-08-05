@@ -14,7 +14,8 @@ from uuid import uuid4
 
 from app.core.events import get_event_bus, Event
 from app.core.observability import get_observability_hub
-from app.orchestrator.orchestrator import get_orchestrator, CentralOrchestrator
+# Lazy imports to avoid circular dependency
+# from app.orchestrator.orchestrator import get_orchestrator, CentralOrchestrator
 from app.decision.manager import DecisionManager, get_default_manager
 from app.world_model.model import WorldModel, create_world_model
 from app.memory.unified_retrieval import UnifiedRetrieval
@@ -26,6 +27,11 @@ from .models import (
     DecisionPipelineStage,
     DecisionPipelineResult,
 )
+
+# Type checking imports to avoid circular dependency
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from app.orchestrator.orchestrator import CentralOrchestrator
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +69,7 @@ class UnifiedRuntimeDecisionPipeline:
 
     def __init__(
         self,
-        orchestrator: Optional[CentralOrchestrator] = None,
+        orchestrator: "Optional[CentralOrchestrator]" = None,
         decision_manager: Optional[DecisionManager] = None,
         world_model: Optional[WorldModel] = None,
         memory_retrieval: Optional[UnifiedRetrieval] = None,
@@ -807,7 +813,7 @@ _pipeline_lock = threading.Lock()
 
 
 def get_unified_pipeline(
-    orchestrator: Optional[CentralOrchestrator] = None,
+    orchestrator: "Optional[CentralOrchestrator]" = None,
     decision_manager: Optional[DecisionManager] = None,
     world_model: Optional[WorldModel] = None,
     memory_retrieval: Optional[UnifiedRetrieval] = None,

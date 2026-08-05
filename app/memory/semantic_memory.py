@@ -189,7 +189,7 @@ class SemanticMemory:
         if self._observability:
             self._observability.add_health_check(HealthCheck(
                 name="semantic_memory_health",
-                component="memory",
+                component="memory.semantic",
                 check_func=self._health_check,
                 interval_seconds=60.0,
             ))
@@ -211,7 +211,7 @@ class SemanticMemory:
 
         return HealthResult(
             name="semantic_memory_health",
-            component="memory",
+            component="memory.semantic",
             status=HealthStatus.HEALTHY,
             message=f"{entry_count} entries, {categories} categories, {languages} languages",
             details={
