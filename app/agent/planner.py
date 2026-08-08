@@ -4,6 +4,7 @@ from typing import Union, List, Tuple
 
 from app.core.logger import logger
 from app.planner.plan_manager import Plan, PlanConfig, PlanManager, Task, TaskPriority, TaskCategory, PlanningHorizon
+from app.agent.planner_base import PlannerProtocol
 
 
 # Rule-based category mapping shared with ``_classify_engineering_category``
@@ -31,7 +32,7 @@ def _classify_lesson_category(task: str) -> str:
     return "task"
 
 
-class Planner:
+class Planner(PlannerProtocol):
     # Severities the planner surfaces. INFO is intentionally omitted because
     # it adds noise without influencing planning decisions.
     _LESSON_SEVERITY_WHITELIST = ("critical", "important", "recommended")

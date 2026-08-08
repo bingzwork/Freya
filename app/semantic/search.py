@@ -1,4 +1,4 @@
-"""Semantic search using sentence transformers for code retrieval.
+﻿"""Semantic search using sentence transformers for code retrieval.
 
 This module provides semantic search capabilities over code symbols using
 sentence transformers. It supports both in-memory caching and persistent
@@ -14,11 +14,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, List, Dict, Any, Optional, Tuple
 import numpy as np
 
-try:
-    from sentence_transformers import SentenceTransformer
-    SENTENCE_TRANSFORMERS_AVAILABLE = True
-except ImportError:
-    SENTENCE_TRANSFORMERS_AVAILABLE = False
+# sentence-transformers disconnected to avoid Hugging Face dependency
+SENTENCE_TRANSFORMERS_AVAILABLE = False
+SentenceTransformer = None  # Type stub
 
 # Try to import VectorDB
 try:
@@ -469,3 +467,5 @@ class SemanticSearch:
             "model_name": self.model_name,
             "embedding_dimension": self._embedding_dimension,
         }
+
+

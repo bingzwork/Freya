@@ -841,10 +841,13 @@ class WorldModel:
         """Collect health and diagnostics information."""
         try:
             hm = self.health_monitor
+            # Must call check_metrics() first to populate _current_metrics,
+            # otherwise get_health_score() returns 0.0 and status is CRITICAL
+            hm.check_metrics()
             summary = hm.get_summary()
 
-            # Get detailed metrics
-            metrics = hm.collect_metrics()
+            # Get detailed metrics (already collected by check_metrics)
+            metrics = hm.get_metrics()
 
             code_quality = {}
             test_metrics = {}

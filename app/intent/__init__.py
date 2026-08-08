@@ -1,4 +1,4 @@
-"""Intent Classification Module.
+﻿"""Intent Classification and Routing Module.
 
 This module provides intent classification for user messages to determine
 the appropriate processing pipeline. Not all user messages should trigger
@@ -37,6 +37,14 @@ from app.intent.classifier import (
     should_include_runtime_context,
     is_control_intent,
     is_low_confidence,
+)
+from app.intent.router import (
+    IntentRouter,
+    RouteDecision,
+    get_intent_router,
+    route_intent,
+    is_engineering_task,
+    should_clarify_intent,
 )
 from app.intent.runtime_context import (
     RuntimeContext,
@@ -91,6 +99,13 @@ __all__ = [
     "should_include_runtime_context",
     "is_control_intent",
     "is_low_confidence",
+    # Intent Router (consolidates IntentClassifier + CapabilityRouter)
+    "IntentRouter",
+    "RouteDecision",
+    "get_intent_router",
+    "route_intent",
+    "is_engineering_task",
+    "should_clarify_intent",
     # Runtime context
     "RuntimeContext",
     "get_runtime_context",

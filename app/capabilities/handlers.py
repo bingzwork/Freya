@@ -21,6 +21,205 @@ from app.core.logger import logger
 from app.intent.runtime_context import get_runtime_context
 from app.providers.health import ProviderHealthChecker
 from app.providers.factory import ProviderFactory
+from app.memory.goals.manager import GoalStorage
+from app.memory.task_memory import create_task_memory
+from pathlib import Path
+
+
+# =============================================================================
+# Router-facing wrapper handlers (thin wrappers around existing implementations)
+# =============================================================================
+
+def handle_show_capabilities(ctx: Dict[str, Any]) -> CapabilityResult:
+    """Show all registered capabilities."""
+    caps = router.get_capabilities()
+    cap_details = []
+    for name in caps:
+        cap = router.get_capability(name)
+        if cap:
+            cap_details.append({
+                "name": name,
+                "description": cap.description,
+                "keywords": cap.keywords,
+            })
+    return CapabilityResult(
+        success=True,
+        data={
+            "count": len(cap_details),
+            "capabilities": cap_details,
+        },
+        message=f"Found {len(cap_details)} registered capabilities",
+    )
+
+
+def handle_show_memory(ctx: Dict[str, Any]) -> CapabilityResult:
+    """Show memory contents."""
+    try:
+        workspace = Path.cwd()
+        # Check if memory directory exists
+        memory_dir = workspace / "data" / "memory"
+        has_memory_dir = memory_dir.exists()
+        return CapabilityResult(
+            success=True,
+            data={
+                "memory_root": str(memory_dir),
+                "has_memory_dir": has_memory_dir,
+            },
+            message="Memory system is available" if has_memory_dir else "Memory directory not found",
+        )
+    except Exception as e:
+        logger.debug(f"[handle_show_memory] Error: {e}")
+        return CapabilityResult(
+            success=False,
+            message=f"Error showing memory: {e}",
+        )
+
+
+def handle_show_goals(ctx: Dict[str, Any]) -> CapabilityResult:
+    """Show current goals."""
+    try:
+        workspace = Path.cwd()
+        storage = GoalStorage(workspace=str(workspace))
+        goals = storage.all()
+        
+        goal_list = []
+        for goal in goals:
+            goal_list.append({
+                "id": goal.id,
+                "name": goal.name,
+                "description": goal.description,
+                "status": goal.status,
+                "priority": goal.priority,
+                "created_at": goal.created_at,
+                "updated_at": goal.updated_at,
+            })
+        
+        active_id = storage.active_goal_id
+        
+        return CapabilityResult(
+            success=True,
+            data={
+                "goals": goal_list,
+                "active_goal_id": active_id,
+                "count": len(goal_list),
+            },
+            message=f"Found {len(goal_list)} goals" + (f" (active: {active_id})" if active_id else ""),
+        )
+    except Exception as e:
+        logger.debug(f"[handle_show_goals] Error: {e}")
+        return CapabilityResult(
+            success=False,
+            message=f"Error showing goals: {e}",
+        )
+
+
+def handle_show_tasks(ctx: Dict[str, Any]) -> CapabilityResult:
+    """Show active/planned tasks."""
+    try:
+        workspace = Path.cwd()
+        task_memory = create_task_memory(workspace=str(workspace))
+        
+        all_tasks = task_memory.get_all_tasks()
+        active_task = task_memory.get_active_task()
+        
+        task_list = []
+        for task in all_tasks:
+            progress = task.get_progress()
+            task_list.append({
+                "task_id": task.task_id,
+                "description": task.description,
+                "status": task.status,
+                "progress": progress,
+                "created_at": task.created_at,
+                "updated_at": task.updated_at,
+            })
+        
+        return CapabilityResult(
+            success=True,
+            data={
+                "tasks": task_list,
+                "active_task_id": active_task.task_id if active_task else None,
+                "count": len(task_list),
+            },
+            message=f"Found {len(task_list)} tasks" + (f" (active: {active_task.task_id})" if active_task else ""),
+        )
+    except Exception as e:
+        logger.debug(f"[handle_show_tasks] Error: {e}")
+        return CapabilityResult(
+            success=False,
+            message=f"Error showing tasks: {e}",
+        )
+
+
+# Thin wrapper handlers that delegate to existing implementations
+
+def handle_python_version(ctx: Dict[str, Any]) -> CapabilityResult:
+    """Wrapper for get_python_version."""
+    return CapabilityResult(
+        success=True,
+        data=get_python_version(),
+        message="Python version retrieved successfully",
+    )
+
+
+def handle_os_info(ctx: Dict[str, Any]) -> CapabilityResult:
+    """Wrapper for get_os_info."""
+    return CapabilityResult(
+        success=True,
+        data=get_os_info(),
+        message="OS information retrieved successfully",
+    )
+
+
+def handle_current_time(ctx: Dict[str, Any]) -> CapabilityResult:
+    """Wrapper for getting current time."""
+    from datetime import datetime
+    return CapabilityResult(
+        success=True,
+        data={
+            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "date": datetime.now().strftime("%Y-%m-%d"),
+            "time_only": datetime.now().strftime("%H:%M:%S"),
+            "timestamp": datetime.now().isoformat(),
+        },
+        message="Current time retrieved successfully",
+    )
+
+
+def handle_working_directory(ctx: Dict[str, Any]) -> CapabilityResult:
+    """Wrapper for get_working_directory."""
+    return CapabilityResult(
+        success=True,
+        data=get_working_directory(),
+        message="Working directory retrieved successfully",
+    )
+
+
+def handle_current_model(ctx: Dict[str, Any]) -> CapabilityResult:
+    """Wrapper for get_current_model."""
+    return CapabilityResult(
+        success=True,
+        data=get_current_model(),
+        message="Current model retrieved successfully",
+    )
+
+
+def handle_ollama_status(ctx: Dict[str, Any]) -> CapabilityResult:
+    """Wrapper for get_ollama_status."""
+    return CapabilityResult(
+        success=True,
+        data=get_ollama_status(),
+        message="Ollama status retrieved successfully",
+    )
+
+
+def handle_git_status(ctx: Dict[str, Any]) -> CapabilityResult:
+    """Wrapper for get_git_status."""
+    return CapabilityResult(
+        success=True,
+        data=get_git_status(),
+        message="Git status retrieved successfully",
+    )
 
 
 def get_ollama_status() -> Dict[str, Any]:
@@ -61,8 +260,6 @@ def get_ollama_status() -> Dict[str, Any]:
             "base_url": "http://localhost:11434",
             "error": str(e),
         }
-
-
 def get_provider_info() -> Dict[str, Any]:
     """Get information about the current LLM provider."""
     return {
@@ -436,6 +633,38 @@ def get_disk_usage() -> Dict[str, Any]:
         return {
             "error": str(e),
         }
+
+
+# =============================================================================
+# System Status Handler (aggregates runtime, ollama, git)
+# =============================================================================
+
+
+def handle_system_status(ctx: Dict[str, Any]) -> CapabilityResult:
+    """Handle system status query - returns aggregated system health."""
+    from app.intent.runtime_context import get_runtime_context
+
+    runtime = get_runtime_context().to_dict()
+    ollama = get_ollama_status()
+    git = get_git_status()
+
+    data = {
+        "runtime": runtime,
+        "ollama": ollama,
+        "git": git,
+    }
+
+    # Determine if system is healthy
+    is_healthy = (
+        ollama.get("healthy", False) and
+        git.get("is_git_repo", False) is not False
+    )
+
+    return CapabilityResult(
+        success=True,
+        data=data,
+        message="System status retrieved successfully" if is_healthy else "System status retrieved (some components unavailable)",
+    )
 
 
 # =============================================================================
@@ -1018,4 +1247,6 @@ def _handle_control_status(ctx: Dict[str, Any]) -> CapabilityResult:
 
 # Register the conversational control handler with the global router
 ConversationalControlHandler.register(router)
+
+
 

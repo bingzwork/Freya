@@ -1,4 +1,4 @@
-"""Central Autonomous Orchestrator for Freya.
+﻿"""Central Autonomous Orchestrator for Freya.
 
 This package provides the core orchestration components:
 - CapabilityRegistry: Runtime capability management with lifecycle, dependencies, health
@@ -7,6 +7,7 @@ This package provides the core orchestration components:
 - SafetyGate: Risk analysis, decision integration, human oversight
 - SelfObserver: Self-observation via ObservabilityHub
 - CentralOrchestrator: Main coordination class integrating all components
+- WorkflowOrchestrator: Streamlined workflow orchestration using extracted components
 - ActivityReporter: Plain English execution updates for GUI/conversational feedback
 - OrchestratorGUIInterface: Stable GUI-compatible interfaces
 - FailureRecoveryIntegration: Automatic failure detection and recovery
@@ -118,6 +119,14 @@ from app.orchestrator.failure_recovery_integration import (
     create_failure_recovery_integration,
 )
 
+from app.orchestrator.workflow_orchestrator import (
+    WorkflowOrchestrator,
+    WorkflowOrchestratorConfig,
+    OrchestratorState as WorkflowOrchestratorState,
+    get_workflow_orchestrator,
+    reset_workflow_orchestrator,
+)
+
 __all__ = [
     # Capability Registry
     "Capability",
@@ -214,6 +223,13 @@ __all__ = [
     "RecoveryAction",
     "FailureSeverity",
     "create_failure_recovery_integration",
+
+    # Workflow Orchestrator
+    "WorkflowOrchestrator",
+    "WorkflowOrchestratorConfig",
+    "WorkflowOrchestratorState",
+    "get_workflow_orchestrator",
+    "reset_workflow_orchestrator",
 ]
 
 # Version

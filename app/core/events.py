@@ -344,10 +344,9 @@ class EventBus:
         matching_subs = self._find_matching_subscriptions(event)
 
         if not matching_subs:
-            logger.debug(f"No subscribers for event '{event.name}'")
+            # Expected behavior - many events have no subscribers during normal operation
+            # Only log at trace level or when debugging
             return
-
-        logger.debug(f"Dispatching event '{event.name}' to {len(matching_subs)} subscribers")
 
         # Dispatch synchronously
         for sub in matching_subs:
@@ -398,10 +397,8 @@ class EventBus:
         matching_subs = self._find_matching_subscriptions(event)
 
         if not matching_subs:
-            logger.debug(f"No subscribers for event '{event.name}'")
+            # Expected behavior - many events have no subscribers during normal operation
             return
-
-        logger.debug(f"Async dispatching event '{event.name}' to {len(matching_subs)} subscribers")
 
         # Create async semaphore if needed
         if self._async_semaphore is None:

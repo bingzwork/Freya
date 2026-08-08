@@ -1,4 +1,4 @@
-"""
+﻿"""
 Persistent project memory with semantic similarity search capabilities.
 
 This module provides project-level memory that persists between sessions,
@@ -23,11 +23,9 @@ except ImportError:
     NUMPY_AVAILABLE = False
     np = None  # Placeholder
 
-try:
-    from sentence_transformers import SentenceTransformer
-    SENTENCE_TRANSFORMERS_AVAILABLE = True
-except ImportError:
-    SENTENCE_TRANSFORMERS_AVAILABLE = False
+# sentence-transformers disabled to avoid Hugging Face dependency
+SENTENCE_TRANSFORMERS_AVAILABLE = False
+SentenceTransformer = None  # Type stub
 
 # Try to import VectorDB
 try:
@@ -580,3 +578,6 @@ class ProjectMemory:
         temporary = self.path.with_suffix(".tmp")
         temporary.write_text(json.dumps(entries, indent=2, ensure_ascii=False), encoding="utf-8")
         temporary.replace(self.path)
+
+
+

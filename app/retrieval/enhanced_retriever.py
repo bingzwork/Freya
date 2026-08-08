@@ -31,7 +31,7 @@ class EnhancedRetriever:
     semantic similarity.
     """
 
-    def __init__(self, symbol_index: SymbolIndex, enable_semantic: bool = True):
+    def __init__(self, symbol_index: SymbolIndex, enable_semantic: bool = False):
         """
         Initialize the enhanced retriever.
         
@@ -176,3 +176,4 @@ class EnhancedRetriever:
             hit_copy["source"] = snippet
             enhanced.append(hit_copy)
         return enhanced
+

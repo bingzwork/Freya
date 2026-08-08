@@ -154,8 +154,10 @@ class ProgressTracker:
         self._job_service = job_service or get_job_service()
         self._observability = observability or get_observability_hub()
 
-        # Register with observability
-        self._register_with_observability()
+        # NOTE: Do NOT auto-register with observability.
+        # PlanManager (singleton) registers the planner subsystem as a whole.
+        # Individual ProgressTracker instances are internal and would cause
+        # duplicate health check/component registrations with identical names.
 
         # Schedule periodic snapshot
         self._schedule_periodic_snapshots()

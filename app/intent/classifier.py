@@ -405,7 +405,6 @@ class IntentClassifier:
             for pattern in follow_up_patterns:
                 if re.search(pattern, message_lower, re.IGNORECASE):
                     # Boost SYSTEM_STATUS score for follow-ups
-                    logger.info(f"[Intent] Follow-up detected, boosting SYSTEM_STATUS for: '{message}'")
                     break
 
         # Score each intent type
@@ -425,7 +424,6 @@ class IntentClassifier:
             if any(indicator in message_lower for indicator in follow_up_indicators):
                 current_score, current_keywords = scores[IntentType.SYSTEM_STATUS]
                 scores[IntentType.SYSTEM_STATUS] = (min(current_score + 0.4, 1.0), current_keywords + ["follow-up"])
-                logger.info(f"[Intent] Boosted SYSTEM_STATUS score for follow-up: '{message}'")
 
         # Find the best match
         # Prefer SYSTEM_STATUS over QUESTION on ties (secondary key: prefer higher priority intent)
@@ -457,9 +455,6 @@ class IntentClassifier:
 
         if best_keywords:
             reason += f" (keywords: {', '.join(best_keywords[:3])})"
-
-        logger.info("[Intent]")
-        logger.info(best_intent_type.value)
 
         return IntentClassification(
             intent=best_intent_type,

@@ -170,8 +170,6 @@ class MultiIntentDetector:
         # Determine execution order
         execution_order = self._determine_execution_order(detected)
 
-        logger.info(f"[MultiIntent] Detected {len(detected)} intents in: '{message[:80]}...'")
-
         return MultiIntentResult(
             original_message=message,
             detected_intents=detected,

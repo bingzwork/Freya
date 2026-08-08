@@ -87,6 +87,8 @@ from app.memory.validation import (
     create_source_from_user,
     create_source_from_memory,
 )
+from app.memory.manager import MemoryManager, create_memory_manager
+
 
 __all__ = [
     "ConversationMemory",
@@ -188,4 +190,7 @@ __all__ = [
     "create_source_from_article",
     "create_source_from_user",
     "create_source_from_memory",
+    # Memory Manager Abstraction
+    "MemoryManager",
+    "create_memory_manager",
 ]

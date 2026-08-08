@@ -158,6 +158,37 @@ class CapabilityRouter:
             del self._capabilities[name]
             logger.debug(f"[CapabilityRouter] Unregistered capability: {name}")
 
+
+
+    def register_capability(
+        self,
+        name: str,
+        handler,
+        description: str,
+        patterns = None,
+        keywords = None,
+        intent_types = None,
+    ) -> None:
+        """Convenience method to register a capability by parameters.
+        
+        Args:
+            name: Capability name
+            handler: Handler function
+            description: Capability description
+            patterns: Regex patterns for matching
+            keywords: Keywords for matching
+            intent_types: Intent types this capability handles
+        """
+        capability = Capability(
+            name=name,
+            description=description,
+            handler=handler,
+            patterns=patterns or [],
+            keywords=keywords or [],
+            intent_types=intent_types or [],
+        )
+        self.register(capability)
+
     def get_capabilities(self) -> List[str]:
         """Get list of registered capability names.
 

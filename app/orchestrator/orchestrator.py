@@ -776,7 +776,6 @@ class CentralOrchestrator:
             intent_result = self._intent_classifier.classify(user_input)
             intent = intent_result.intent
             intent_confidence = intent_result.confidence
-            logger.info(f"Classified intent: {intent.value} (confidence: {intent_confidence})")
 
             execution_context["intent"] = intent.value if intent else None
             execution_context["intent_confidence"] = intent_confidence

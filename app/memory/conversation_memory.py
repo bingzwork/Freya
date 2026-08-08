@@ -1,4 +1,4 @@
-"""Conversation Memory for Freya AI.
+﻿"""Conversation Memory for Freya AI.
 
 This module provides the working conversation memory that stores the current
 user/assistant dialogue with automatic context windowing (minimum 20 turns).
@@ -29,12 +29,9 @@ except ImportError:
     VECTOR_DB_AVAILABLE = False
     VectorDB = None
 
-# Embedding model for semantic search
-try:
-    from sentence_transformers import SentenceTransformer
-    SENTENCE_TRANSFORMERS_AVAILABLE = True
-except ImportError:
-    SENTENCE_TRANSFORMERS_AVAILABLE = False
+# Embedding model for semantic search - disconnected to avoid Hugging Face dependency
+SENTENCE_TRANSFORMERS_AVAILABLE = False
+SentenceTransformer = None  # Type stub
 
 
 @dataclass
@@ -1201,3 +1198,5 @@ def create_conversation_memory(
         max_characters=16000,
         _bypass_min_turns=True,  # Allow < 20 turns for backward compat
     )
+
+

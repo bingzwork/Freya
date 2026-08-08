@@ -445,11 +445,10 @@ class FileAllowlist:
                 self._stats["requires_approval"] += 1
 
     def _log_access(self, result: AccessResult, context: AccessContext) -> None:
-        """Log access attempt."""
+        """Log access attempt (only denials and approvals, not allowed accesses)."""
         should_log = (
-            (result.decision == AccessDecision.ALLOWED and self.config.log_allowed) or
-            (result.decision == AccessDecision.DENIED and self.config.log_denied) or
-            (result.decision == AccessDecision.REQUIRES_APPROVAL)
+            (result.decision == AccessDecision.DENIED and self.config.log_denied)
+            or (result.decision == AccessDecision.REQUIRES_APPROVAL)
         )
 
         if not should_log:

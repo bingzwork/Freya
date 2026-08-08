@@ -1,4 +1,4 @@
-"""Unified Retrieval Layer for Freya AI.
+﻿"""Unified Retrieval Layer for Freya AI.
 
 This module provides a single retrieval interface that queries all available
 memory systems and returns merged, relevance-ranked results.
@@ -570,7 +570,7 @@ class LongTermMemoryRetriever(MemoryRetriever):
 
                 content = f"Long-Term [{entry.category}] {entry.key}: {entry.value}"
                 if entry.description:
-                    content += f" — {entry.description}"
+                    content += f" â€” {entry.description}"
 
                 results.append(RetrievalResult(
                     content=content,
@@ -1174,23 +1174,63 @@ class UnifiedRetrieval:
         return [r.source_name for r in self._retrievers if r.is_available()]
 
 
-# Convenience function to create unified retrieval from FreyaAgent
-def create_unified_retrieval(agent) -> UnifiedRetrieval:
-    """Create a UnifiedRetrieval instance from a FreyaAgent.
+# Convenience function to create unified retrieval from FreyaAgent or memory modules
+def create_unified_retrieval(
+    agent=None,
+    *,
+    conversation_memory=None,
+    working_memory=None,
+    project_memory=None,
+    experience_memory=None,
+    engineering_lessons=None,
+    goal_memory=None,
+    knowledge_base=None,
+    task_memory=None,
+    long_term_memory=None,
+    episodic_memory=None,
+    semantic_memory=None,
+) -> UnifiedRetrieval:
+    """Create a UnifiedRetrieval instance from a FreyaAgent or individual memory modules.
 
-    Automatically detects available memory modules from the agent.
+    Can be called in two ways:
+    1. create_unified_retrieval(agent) - automatically detects memory modules from agent
+    2. create_unified_retrieval(working_memory=..., task_memory=..., ...) - explicit keyword args
+
+    All memory modules are optional.
     """
+    # If agent is provided, extract memory modules from it
+    if agent is not None:
+        if any(arg is not None for arg in [conversation_memory, working_memory, project_memory,
+                                            experience_memory, engineering_lessons, goal_memory,
+                                            knowledge_base, task_memory, long_term_memory,
+                                            episodic_memory, semantic_memory]):
+            raise ValueError("Cannot specify both agent and individual memory modules")
+        return UnifiedRetrieval(
+            conversation_memory=getattr(agent, 'conversation', None),
+            working_memory=getattr(agent, 'working_memory', None),
+            project_memory=getattr(agent, 'memory', None),
+            experience_memory=getattr(agent, 'experience_memory', None),
+            engineering_lessons=getattr(agent, 'engineering_lessons', None),
+            goal_memory=getattr(agent, 'goal_storage', None),
+            knowledge_base=getattr(agent, 'knowledge_base', None),
+            # Phase B: Extended Memory
+            task_memory=getattr(agent, 'task_memory', None),
+            long_term_memory=getattr(agent, 'long_term_memory', None),
+            episodic_memory=getattr(agent, 'episodic_memory', None),
+            semantic_memory=getattr(agent, 'semantic_memory', None),
+        )
+
+    # Otherwise use explicitly provided keyword arguments
     return UnifiedRetrieval(
-        conversation_memory=getattr(agent, 'conversation', None),
-        working_memory=getattr(agent, 'working_memory', None),
-        project_memory=getattr(agent, 'memory', None),
-        experience_memory=getattr(agent, 'experience_memory', None),
-        engineering_lessons=getattr(agent, 'engineering_lessons', None),
-        goal_memory=getattr(agent, 'goal_storage', None),
-        knowledge_base=getattr(agent, 'knowledge_base', None),
-        # Phase B: Extended Memory
-        task_memory=getattr(agent, 'task_memory', None),
-        long_term_memory=getattr(agent, 'long_term_memory', None),
-        episodic_memory=getattr(agent, 'episodic_memory', None),
-        semantic_memory=getattr(agent, 'semantic_memory', None),
+        conversation_memory=conversation_memory,
+        working_memory=working_memory,
+        project_memory=project_memory,
+        experience_memory=experience_memory,
+        engineering_lessons=engineering_lessons,
+        goal_memory=goal_memory,
+        knowledge_base=knowledge_base,
+        task_memory=task_memory,
+        long_term_memory=long_term_memory,
+        episodic_memory=episodic_memory,
+        semantic_memory=semantic_memory,
     )

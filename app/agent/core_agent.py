@@ -58,6 +58,8 @@ from app.decision.models import (
     DecisionCategory,
 )
 
+from app.core.chat_activity import FreyaChatActivityProvider
+
 # Phase 1: Failure Recovery
 from app.failure_recovery.detector import FailureDetector, FailureEvent
 from app.failure_recovery.analyzer import RootCauseAnalyzer
@@ -89,6 +91,15 @@ try:
     from app.retrieval.enhanced_retriever import EnhancedRetriever
 except ImportError:
     EnhancedRetriever = SimpleRetriever # Fallback if enhanced version not available
+
+# NEW: Unified components for canonical execution path
+from app.routing.unified_router import UnifiedRouter
+from app.execution.engine import ExecutionEngine
+from app.memory.coordinator import MemoryCoordinator
+from app.core.priority_llm import PriorityLLMProvider
+from app.core.events import EventBus
+from app.core.background_jobs import BackgroundJobService
+from app.core.observability import ObservabilityHub
 
 
 def _has_sufficient_context(task: str, intent: IntentType) -> bool:
@@ -253,234 +264,357 @@ def _classify_engineering_category(task: str) -> str:
 
 
 class FreyaAgent:
-    def __init__(self, workspace=".", max_conversation_history=20, conversation_persistence_path: Optional[str] = None):
+    def __init__(
+        self,
+        workspace=".",
+        max_conversation_history=20,
+        conversation_persistence_path: Optional[str] = None,
+        # Unified components (optional) - when provided, use canonical execution path
+        router: Optional[UnifiedRouter] = None,
+        execution_engine: Optional[ExecutionEngine] = None,
+        memory_coordinator: Optional[MemoryCoordinator] = None,
+        conversation_control: Optional[ConversationControlHandler] = None,
+        chat_activity: Optional[FreyaChatActivityProvider] = None,
+        priority_llm: Optional[PriorityLLMProvider] = None,
+        event_bus: Optional[EventBus] = None,
+        job_service: Optional[BackgroundJobService] = None,
+        observability: Optional[ObservabilityHub] = None,
+    ):
         self.workspace = workspace
-        self.llm = LLM()
-        self.tools = ToolManager(workspace)
-        self.memory = ProjectMemory(workspace)
-        self.experience_memory = ExperienceMemory(workspace)
-        self.engineering_lessons = EngineeringLessonStorage(workspace)
-        self.goal_storage = GoalStorage(workspace)
-        self.plan_manager = PlanManager(workspace)
-        self.executor = Executor(self.llm, self.tools, engineering_lessons=self.engineering_lessons)
-        self.patch_engine = PatchEngine()
-        self.patch_generator = PatchGenerator(self.llm, self.patch_engine)
-        self.verifier = VerificationRunner(workspace)
-        self.planner = Planner(self.llm, self.memory, engineering_lessons=self.engineering_lessons)
 
-        # Conversation Memory - using ConversationState for backward compatibility
+        # Flag to track if using unified (canonical) path
+        self._use_unified = all([
+            router is not None,
+            execution_engine is not None,
+            memory_coordinator is not None,
+            chat_activity is not None,
+            priority_llm is not None,
+        ])
+
+        if self._use_unified:
+            # Use injected unified components (canonical path)
+            self._router = router
+            self._execution_engine = execution_engine
+            self._memory_coordinator = memory_coordinator
+            self._chat_activity = chat_activity
+            self._priority_llm = priority_llm
+
+            # Use provided infrastructure or create minimal
+            self.event_bus = event_bus or get_event_bus()
+            self.job_service = job_service or get_job_service()
+            self.observability = observability or get_observability_hub()
+
+            # For backward compatibility, create lightweight wrappers/aliases
+            # These delegate to unified components
+            self._init_unified_compat(
+                conversation_persistence_path=conversation_persistence_path,
+                max_conversation_history=max_conversation_history,
+            )
+        else:
+            # Legacy path - create all components locally (backward compatibility)
+            self.llm = LLM()
+            self.tools = ToolManager(workspace)
+            self.memory = ProjectMemory(workspace)
+            self.engineering_lessons = EngineeringLessonStorage(workspace)
+            self.goal_storage = GoalStorage(workspace)
+            self.plan_manager = PlanManager(workspace)
+            self.executor = Executor(self.llm, self.tools, engineering_lessons=self.engineering_lessons)
+            self.patch_engine = PatchEngine()
+            self.patch_generator = PatchGenerator(self.llm, self.patch_engine)
+            self.verifier = VerificationRunner(workspace)
+            self.planner = Planner(self.llm, self.memory, engineering_lessons=self.engineering_lessons)
+
+            # Conversation Memory - using ConversationState for backward compatibility
+            self.conversation = ConversationState(
+                max_history=max_conversation_history,
+                persistence_path=conversation_persistence_path,
+                workspace=workspace,
+            )
+
+            # Working Memory - scratchpad for active task execution
+            self.working_memory = get_working_memory()
+
+            # Phase B: Extended Memory Systems
+            # Task Memory - persistent storage for active task execution state
+            self.task_memory = create_task_memory(workspace)
+
+            # Long-Term Memory - user preferences, permanent facts, cross-project knowledge
+            self.long_term_memory = create_long_term_memory(workspace)
+
+            # Episodic Memory - append-only event log for "what happened when"
+            self.episodic_memory = create_episodic_memory(workspace)
+
+            # Semantic Memory - general programming knowledge base
+            self.semantic_memory = create_semantic_memory(workspace)
+
+            # Unified Retrieval Layer - single interface for all memories
+            self.unified_retrieval = create_unified_retrieval(self)
+
+            # Phase C: Memory Optimization
+            # Consolidation Engine - promotes high-value experiences/lessons to long-term memory
+            self.consolidation_engine = create_consolidation_engine(
+                experience_memory=self.experience_memory,
+                engineering_lessons=self.engineering_lessons,
+                long_term_memory=self.long_term_memory,
+                project_memory=self.memory,
+            )
+
+            # Forgetting Engine - controlled TTL-based expiration and archival
+            self.forgetting_engine = create_forgetting_engine(
+                experience_memory=self.experience_memory,
+                engineering_lessons=self.engineering_lessons,
+                project_memory=self.memory,
+                task_memory=self.task_memory,
+                episodic_memory=self.episodic_memory,
+                semantic_memory=self.semantic_memory,
+                long_term_memory=self.long_term_memory,
+                working_memory=self.working_memory,
+            )
+
+            # Cross-Memory References - traceability between memory types
+            self.cross_references = create_cross_memory_references()
+
+            # Knowledge Validation - validates knowledge before storage
+            self.knowledge_validator = create_knowledge_validator(
+                cross_refs=self.cross_references,
+                semantic_memory=self.semantic_memory,
+                experience_memory=self.experience_memory,
+                engineering_lessons=self.engineering_lessons,
+                long_term_memory=self.long_term_memory,
+            )
+
+            # Ranking Engine - advanced relevance ranking for unified retrieval
+            self.ranking_engine = create_ranking_engine(
+                vector_db=None,  # Could be enhanced with vector DB later
+                long_term_memory=self.long_term_memory,
+            )
+            self.ranked_retrieval = RankedUnifiedRetrieval(self.unified_retrieval, self.ranking_engine)
+
+            # Phase 1: Decision Management
+            # Central decision orchestrator integrating confidence, risk, goals, planning, memory
+            self.decision_manager = DecisionManager(
+                workspace=workspace,
+                config=DecisionManagerConfig(
+                    min_confidence_for_auto_execute=0.6,
+                    min_confidence_for_recommendation=0.4,
+                    max_risk_for_auto_execute="medium",
+                    require_approval_above_risk="high",
+                    enable_explainable_decisions=True,
+                    enable_human_oversight=True,
+                    record_all_decisions=True,
+                    calibrate_confidence_from_outcomes=True,
+                    use_confidence_scoring=True,
+                    use_risk_assessment=True,
+                    use_goal_scheduling=True,
+                    use_memory_retrieval=True,
+                    use_intent_classification=True,
+                ),
+                goal_storage=self.goal_storage,
+                unified_retrieval=self.unified_retrieval,
+                intent_classifier=classify_intent,
+                planner=self.planner,
+                plan_manager=self.plan_manager,
+            )
+
+            # Phase 1: Failure Recovery
+            # Unified failure detection, root cause analysis, and recovery orchestration
+            self.failure_detector = FailureDetector(workspace=workspace)
+            self.root_cause_analyzer = RootCauseAnalyzer()
+            self.recovery_orchestrator = RecoveryOrchestrator(
+                failure_detector=self.failure_detector,
+                root_cause_analyzer=self.root_cause_analyzer,
+                decision_manager=self.decision_manager,
+                verification_callback=lambda: self.verifier.dry_run_verify(),
+                max_recovery_attempts=3,
+                workspace=workspace,
+            )
+
+            # Self-Evaluation - runs before declaring task completion
+            self.evaluation_manager = EvaluationManager(
+                workspace=workspace,
+                agent=self,
+                decision_manager=self.decision_manager,
+                verifier=self.verifier,
+            )
+
+            # Long-Term Autonomy
+            self.autonomy_manager = AutonomyManager(workspace=workspace)
+
+            # Config Hot-Reload - watches .env file for changes and reloads configuration
+            self.config_hot_reload: Optional[ConfigHotReload] = None
+
+            # File Watcher - watches filesystem for changes and emits events
+            self.file_watcher = None
+
+            # World Model - unified environment snapshot facade
+            self._world_model = None
+
+            # Reflection engine for post-task learning
+
+            # Progress tracking - stores the last execution's progress snapshot
+            self.last_execution_progress: Optional[Dict[str, Any]] = None
+
+            self.project_index = ProjectIndex(workspace)
+            self.symbol_index = SymbolIndex(workspace)
+            logger.info("Building project index...")
+            self.project_index.build()
+            logger.info("Building symbol index...")
+            self.symbol_index.build()
+
+            self.file_locator = FileLocator(self.symbol_index)
+            self.lexical_search = LexicalSearch(self.symbol_index)
+            self.dependency_graph = DependencyGraph(self.symbol_index)
+            self.dependency_graph.build()
+            self.context_builder = ContextBuilder(self.symbol_index, self.dependency_graph)
+            self.retriever = EnhancedRetriever(self.symbol_index)
+            logger.info(f"Indexed {len(self.project_index.files)} files.")
+            logger.info(f"Indexed {len(self.symbol_index.symbols)} Python files.")
+
+            # Initialize centralized conversational control handler
+            self.conversation_control = create_conversation_control_handler(
+                plan_manager=self.plan_manager,
+                executor=self.executor,
+                conversation_memory=self.conversation._memory if hasattr(self.conversation, '_memory') else None,
+            )
+            # Register execution callback for interruption
+            self.conversation_control.register_execution_callback(self._request_execution_stop)
+
+            # ==== Shared Infrastructure Initialization ====
+            # Initialize EventBus, BackgroundJobService, and ObservabilityHub
+            self.event_bus = get_event_bus()
+            self.job_service = get_job_service()
+            self.observability = get_observability_hub()
+            self._registered_component_names = set()
+
+            # Register this agent as a monitored component
+            self._register_with_observability()
+
+            # Set up event subscriptions for cross-subsystem communication
+            self._setup_event_subscriptions()
+
+            # Initialize and start FileWatcher for real-time filesystem monitoring
+            self._init_file_watcher()
+
+            # Start observability hub (which begins health monitoring) ONLY after
+            # all components are fully initialized
+            if hasattr(self.observability, '_started') and not self.observability._started:
+                self.observability.start()
+            # ==== End Shared Infrastructure Initialization ====
+
+            # ==== External Services Registry Initialization ====
+            # Initialize NetworkMonitor for health monitoring
+            self.network_monitor = NetworkMonitor(workspace=self.workspace)
+            # Initialize ExternalServiceRegistry
+            self.service_registry = ExternalServiceRegistry()
+            # Connect registry with NetworkMonitor for background health monitoring
+            self.service_registry.set_network_monitor(self.network_monitor)
+            # Auto-discover and register services from environment
+            discovered = self.service_registry.auto_discover_and_register()
+            logger.info(f"[ServiceRegistry] Auto-discovered {len(discovered)} external services")
+            # Register default services (e.g., local Ollama)
+            defaults = self.service_registry.register_default_services()
+            if defaults:
+                logger.info(f"[ServiceRegistry] Registered {len(defaults)} default services")
+            # Sync with NetworkMonitor and start background health monitoring
+            self.service_registry.sync_with_network_monitor()
+            self.service_registry.start_health_monitoring()
+            # Start NetworkMonitor background tasks
+            self.job_service.add_recurring_job(
+                func=self._run_network_monitor_checks,
+                interval_seconds=60.0,
+                name="network_monitor_health_checks",
+                tags={"subsystem": "monitoring", "type": "health_check"},
+            )
+            # Schedule periodic registry persistence
+            self.job_service.add_recurring_job(
+                func=self._persist_service_registry,
+                interval_seconds=300.0,  # 5 minutes
+                name="service_registry_persist",
+                tags={"subsystem": "services", "type": "persistence"},
+            )
+            # Try to load persisted registry
+            self._load_service_registry()
+            # ==== End External Services Registry Initialization ====
+
+            logger.info("Freya Agent initialized (legacy path)")
+
+    def _init_unified_compat(
+        self,
+        conversation_persistence_path=None,
+        max_conversation_history=20,
+    ):
+        """Initialize backward-compat attributes that delegate to unified components."""
+        # LLM for backward compat (delegates to priority_llm)
+        class _LLMDelegate:
+            def __init__(self, priority_llm):
+                self._priority_llm = priority_llm
+            def ask(self, prompt, system=None, **kwargs):
+                return self._priority_llm.ask(
+                    prompt=prompt,
+                    system=system,
+                    priority=0,  # CHAT priority
+                )
+        self.llm = _LLMDelegate(self._priority_llm)
+
+        # Tools for backward compat
+        self.tools = ToolManager(self.workspace)
+
+        # Memory coordinator provides all memory modules
+        self._memory_coord = self._memory_coordinator
+        self.memory = self._memory_coord.project_memory
+        self.experience_memory = self._memory_coord.experience_memory
+        self.engineering_lessons = self._memory_coord.engineering_lessons
+        self.goal_storage = self._memory_coord.goal_storage
+        self.working_memory = self._memory_coord.working_memory
+        self.task_memory = self._memory_coord.task_memory
+        self.long_term_memory = self._memory_coord.long_term_memory
+        self.episodic_memory = self._memory_coord.episodic_memory
+        self.semantic_memory = self._memory_coord.semantic_memory
+        self.unified_retrieval = self._memory_coord.unified_retrieval
+
+        # Conversation state
         self.conversation = ConversationState(
             max_history=max_conversation_history,
             persistence_path=conversation_persistence_path,
-            workspace=workspace,
+            workspace=self.workspace,
         )
 
-        # Working Memory - scratchpad for active task execution
-        self.working_memory = get_working_memory()
+        # Plan manager for backward compat
+        self.plan_manager = self._execution_engine.plan_manager
 
-        # Phase B: Extended Memory Systems
-        # Task Memory - persistent storage for active task execution state
-        self.task_memory = create_task_memory(workspace)
+        # Patch engine and generator
+        self.patch_engine = PatchEngine()
+        self.patch_generator = PatchGenerator(self.llm, self.patch_engine)
+        self.verifier = VerificationRunner(self.workspace)
 
-        # Long-Term Memory - user preferences, permanent facts, cross-project knowledge
-        self.long_term_memory = create_long_term_memory(workspace)
+        # Conversation control - use provided or create from execution engine
+        if hasattr(self, '_conversation_control') and self._conversation_control:
+            self.conversation_control = self._conversation_control
+        else:
+            self.conversation_control = ConversationControlHandler(
+                executor=self._execution_engine,
+                plan_manager=self.plan_manager,
+                memory=self.conversation._memory if hasattr(self.conversation, '_memory') else None,
+            )
 
-        # Episodic Memory - append-only event log for "what happened when"
-        self.episodic_memory = create_episodic_memory(workspace)
-
-        # Semantic Memory - general programming knowledge base
-        self.semantic_memory = create_semantic_memory(workspace)
-
-        # Unified Retrieval Layer - single interface for all memories
-        self.unified_retrieval = create_unified_retrieval(self)
-
-        # Phase C: Memory Optimization
-        # Consolidation Engine - promotes high-value experiences/lessons to long-term memory
-        self.consolidation_engine = create_consolidation_engine(
-            experience_memory=self.experience_memory,
-            engineering_lessons=self.engineering_lessons,
-            long_term_memory=self.long_term_memory,
-            project_memory=self.memory,
-        )
-
-        # Forgetting Engine - controlled TTL-based expiration and archival
-        self.forgetting_engine = create_forgetting_engine(
-            experience_memory=self.experience_memory,
-            engineering_lessons=self.engineering_lessons,
-            project_memory=self.memory,
-            task_memory=self.task_memory,
-            episodic_memory=self.episodic_memory,
-            semantic_memory=self.semantic_memory,
-            long_term_memory=self.long_term_memory,
-            working_memory=self.working_memory,
-        )
-
-        # Cross-Memory References - traceability between memory types
-        self.cross_references = create_cross_memory_references()
-
-        # Knowledge Validation - validates knowledge before storage
-        self.knowledge_validator = create_knowledge_validator(
-            cross_refs=self.cross_references,
-            semantic_memory=self.semantic_memory,
-            experience_memory=self.experience_memory,
-            engineering_lessons=self.engineering_lessons,
-            long_term_memory=self.long_term_memory,
-        )
-
-        # Ranking Engine - advanced relevance ranking for unified retrieval
-        self.ranking_engine = create_ranking_engine(
-            vector_db=None,  # Could be enhanced with vector DB later
-            long_term_memory=self.long_term_memory,
-        )
-        self.ranked_retrieval = RankedUnifiedRetrieval(self.unified_retrieval, self.ranking_engine)
-
-        # Phase 1: Decision Management
-        # Central decision orchestrator integrating confidence, risk, goals, planning, memory
-        self.decision_manager = DecisionManager(
-            workspace=workspace,
-            config=DecisionManagerConfig(
-                min_confidence_for_auto_execute=0.6,
-                min_confidence_for_recommendation=0.4,
-                max_risk_for_auto_execute="medium",
-                require_approval_above_risk="high",
-                enable_explainable_decisions=True,
-                enable_human_oversight=True,
-                record_all_decisions=True,
-                calibrate_confidence_from_outcomes=True,
-                use_confidence_scoring=True,
-                use_risk_assessment=True,
-                use_goal_scheduling=True,
-                use_memory_retrieval=True,
-                use_intent_classification=True,
-            ),
-            goal_storage=self.goal_storage,
-            unified_retrieval=self.unified_retrieval,
-            intent_classifier=classify_intent,
-            planner=self.planner,
-            plan_manager=self.plan_manager,
-        )
-
-        # Phase 1: Failure Recovery
-        # Unified failure detection, root cause analysis, and recovery orchestration
-        self.failure_detector = FailureDetector(workspace=workspace)
-        self.root_cause_analyzer = RootCauseAnalyzer()
-        self.recovery_orchestrator = RecoveryOrchestrator(
-            failure_detector=self.failure_detector,
-            root_cause_analyzer=self.root_cause_analyzer,
-            decision_manager=self.decision_manager,
-            verification_callback=lambda: self.verifier.dry_run_verify(),
-            max_recovery_attempts=3,
-            workspace=workspace,
-        )
-
-        # Self-Evaluation - runs before declaring task completion
-        self.evaluation_manager = EvaluationManager(
-            workspace=workspace,
-            agent=self,
-            decision_manager=self.decision_manager,
-            verifier=self.verifier,
-        )
-
-        # Long-Term Autonomy
-        self.autonomy_manager = AutonomyManager(workspace=workspace)
-
-        # Config Hot-Reload - watches .env file for changes and reloads configuration
-        self.config_hot_reload: Optional[ConfigHotReload] = None
-
-        # File Watcher - watches filesystem for changes and emits events
-        self.file_watcher = None
-
-        # World Model - unified environment snapshot facade
-        self._world_model = None
-
-        # Reflection engine for post-task learning
-
-        # Progress tracking - stores the last execution's progress snapshot
-        self.last_execution_progress: Optional[Dict[str, Any]] = None
-
-        self.project_index = ProjectIndex(workspace)
-        self.symbol_index = SymbolIndex(workspace)
-        logger.info("Building project index...")
-        self.project_index.build()
-        logger.info("Building symbol index...")
-        self.symbol_index.build()
-
-        self.file_locator = FileLocator(self.symbol_index)
-        self.lexical_search = LexicalSearch(self.symbol_index)
-        self.dependency_graph = DependencyGraph(self.symbol_index)
-        self.dependency_graph.build()
-        self.context_builder = ContextBuilder(self.symbol_index, self.dependency_graph)
-        self.retriever = EnhancedRetriever(self.symbol_index)
-        logger.info(f"Indexed {len(self.project_index.files)} files.")
-        logger.info(f"Indexed {len(self.symbol_index.symbols)} Python files.")
-
-        # Initialize centralized conversational control handler
-        self.conversation_control = create_conversation_control_handler(
-            plan_manager=self.plan_manager,
-            executor=self.executor,
-            conversation_memory=self.conversation._memory if hasattr(self.conversation, '_memory') else None,
-        )
         # Register execution callback for interruption
         self.conversation_control.register_execution_callback(self._request_execution_stop)
 
-        # ==== Shared Infrastructure Initialization ====
-        # Initialize EventBus, BackgroundJobService, and ObservabilityHub
-        self.event_bus = get_event_bus()
-        self.job_service = get_job_service()
-        self.observability = get_observability_hub()
-        self._registered_component_names = set()
+        # Infrastructure (already set in __init__)
+        # self.event_bus, self.job_service, self.observability already set
 
-        # Register this agent as a monitored component
-        self._register_with_observability()
+        # Project/symbol indexes - build lazily if needed
+        self.project_index = None
+        self.symbol_index = None
+        self._index_built = False
 
-        # Set up event subscriptions for cross-subsystem communication
-        self._setup_event_subscriptions()
+        # Decision manager - lightweight delegate
+        self.decision_manager = None
 
-        # Initialize and start FileWatcher for real-time filesystem monitoring
-        self._init_file_watcher()
+        # Autonomy manager
+        self.autonomy_manager = None
 
-        # Start observability hub (which begins health monitoring) ONLY after
-        # all components are fully initialized
-        if hasattr(self.observability, '_started') and not self.observability._started:
-            self.observability.start()
-        # ==== End Shared Infrastructure Initialization ====
-
-        # ==== External Services Registry Initialization ====
-        # Initialize NetworkMonitor for health monitoring
-        self.network_monitor = NetworkMonitor(workspace=self.workspace)
-        # Initialize ExternalServiceRegistry
-        self.service_registry = ExternalServiceRegistry()
-        # Connect registry with NetworkMonitor for background health monitoring
-        self.service_registry.set_network_monitor(self.network_monitor)
-        # Auto-discover and register services from environment
-        discovered = self.service_registry.auto_discover_and_register()
-        logger.info(f"[ServiceRegistry] Auto-discovered {len(discovered)} external services")
-        # Register default services (e.g., local Ollama)
-        defaults = self.service_registry.register_default_services()
-        if defaults:
-            logger.info(f"[ServiceRegistry] Registered {len(defaults)} default services")
-        # Sync with NetworkMonitor and start background health monitoring
-        self.service_registry.sync_with_network_monitor()
-        self.service_registry.start_health_monitoring()
-        # Start NetworkMonitor background tasks
-        self.job_service.add_recurring_job(
-            func=self._run_network_monitor_checks,
-            interval_seconds=60.0,
-            name="network_monitor_health_checks",
-            tags={"subsystem": "monitoring", "type": "health_check"},
-        )
-        # Schedule periodic registry persistence
-        self.job_service.add_recurring_job(
-            func=self._persist_service_registry,
-            interval_seconds=300.0,  # 5 minutes
-            name="service_registry_persist",
-            tags={"subsystem": "services", "type": "persistence"},
-        )
-        # Try to load persisted registry
-        self._load_service_registry()
-        # ==== End External Services Registry Initialization ====
-
-        logger.info("Freya Agent initialized")
+        logger.info("Freya Agent initialized (unified canonical path)")
 
     @property
     def world_model(self):
@@ -894,6 +1028,61 @@ class FreyaAgent:
 
     def run(self, task, allow_mutations=True):
         """Plan, execute bounded workspace actions, and summarize the result. Mutating tools will prompt for confirmation before each use."""
+        # If using unified canonical path, delegate to unified components
+        if getattr(self, '_use_unified', False):
+            self._chat_activity.chat_started()
+            try:
+                # Route through unified router
+                route_result = self._router.route(task)
+                from app.routing.unified_router import ControlCommand
+                
+                if route_result.is_control:
+                    # Handle control commands (stop, pause, resume, etc.)
+                    from app.conversational_control import ControlCommand as CC
+                    if route_result.control_command == CC.STOP:
+                        result = self.conversation_control.handle_stop()
+                    elif route_result.control_command == CC.CANCEL:
+                        result = self.conversation_control.handle_cancel()
+                    elif route_result.control_command == CC.PAUSE:
+                        result = self.conversation_control.handle_pause()
+                    elif route_result.control_command == CC.RESUME:
+                        result = self.conversation_control.handle_resume()
+                    elif route_result.control_command == CC.UNDO:
+                        result = self.conversation_control.handle_undo()
+                    elif route_result.control_command == CC.REDO:
+                        result = self.conversation_control.handle_redo()
+                    elif route_result.control_command == CC.STATUS:
+                        result = self.conversation_control.handle_status()
+                    else:
+                        result = {"message": "Done."}
+                    return result.get("message", "Done.")
+                elif route_result.is_direct_answer:
+                    # Direct answer (chat, questions, capabilities)
+                    if route_result.capability_name:
+                        cap_result = self._router.execute_capability(route_result.capability_name, task)
+                        if cap_result.success:
+                            return cap_result.message
+                    # Use LLM for direct answer
+                    system_prompt = """You are Freya, an expert software engineering assistant.
+Answer the user's question directly and concisely. Do not create plans or execute tasks
+unless explicitly asked to do so."""
+                    return self._priority_llm.ask(
+                        prompt=task,
+                        system=system_prompt,
+                        priority=0,
+                    )
+                elif route_result.is_clarification:
+                    # Ask for clarification
+                    from app.intent.entity_extractor import get_missing_slots_prompt
+                    from app.intent import classify_intent
+                    classification = classify_intent(task)
+                    return get_missing_slots_prompt(classification.intent, classification.entities)
+                else:
+                    # Engineering task - execute via execution engine
+                    return self._execution_engine.execute_plan(task, allow_mutations)
+            finally:
+                self._chat_activity.chat_ended()
+
         # Start long-term autonomy on first run if not already running
         self.start_autonomy()
         classification = classify_intent(

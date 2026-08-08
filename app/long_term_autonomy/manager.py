@@ -48,6 +48,20 @@ from app.failure_recovery.orchestrator import RecoveryOrchestrator as FailureRec
 from app.core.logger import logger
 
 
+class ChatActivityProvider:
+    """
+    Interface for checking chat activity status.
+    Allows AutonomyManager to yield to chat without tight coupling.
+    """
+    def is_chat_active(self) -> bool:
+        """Check if chat is currently active."""
+        return False
+
+    def wait_for_chat_idle(self, timeout: float = 0.1) -> bool:
+        """Wait for chat to become idle. Returns True if idle, False if timeout."""
+        return True
+
+
 class AutonomyPhase(Enum):
     """Phases of the autonomous decision loop."""
     OBSERVE = "observe"
@@ -145,6 +159,9 @@ class AutonomyManager:
         self.continuous_operation.register_subsystem("self_initiated_work", self.self_initiated_work)
         self.continuous_operation.register_subsystem("maintenance", self.maintenance)
 
+        # Chat activity provider - used to yield to chat/conversation
+        self._chat_activity_provider: ChatActivityProvider = ChatActivityProvider()
+
         # Register with shared observability
         self._register_with_observability()
 
@@ -173,40 +190,43 @@ class AutonomyManager:
     def _autonomy_health_check(self) -> HealthResult:
         """Health check for the AutonomyManager subsystem."""
         try:
-            if not self._running:
-                return HealthResult(
-                    name="long_term_autonomy_health",
-                    component="long_term_autonomy",
-                    status=HealthStatus.DEGRADED,
-                    message="Autonomy manager is initialized but not running",
-                    metadata={"running": False, "enabled": self.config.enabled}
-                )
-
-            # Check if main thread is alive
-            if self._main_thread and not self._main_thread.is_alive():
+            # Not running is a valid state (started on-demand), not a failure.
+            # The manager is healthy if it's properly initialized.
+            if not hasattr(self, '_running'):
                 return HealthResult(
                     name="long_term_autonomy_health",
                     component="long_term_autonomy",
                     status=HealthStatus.UNHEALTHY,
-                    message="Main autonomy thread has died",
-                    metadata={"running": self._running, "cycle_count": self._cycle_count}
+                    message="Autonomy manager not properly initialized",
+                    metadata={"initialized": False}
                 )
 
-            # Check error count
-            if self._error_count > 10:
-                return HealthResult(
-                    name="long_term_autonomy_health",
-                    component="long_term_autonomy",
-                    status=HealthStatus.UNHEALTHY,
-                    message=f"High error count: {self._error_count}",
-                    metadata={"error_count": self._error_count, "cycle_count": self._cycle_count}
-                )
+            # Check if main thread is alive (only if running)
+            if self._running:
+                if self._main_thread and not self._main_thread.is_alive():
+                    return HealthResult(
+                        name="long_term_autonomy_health",
+                        component="long_term_autonomy",
+                        status=HealthStatus.UNHEALTHY,
+                        message="Main autonomy thread has died",
+                        metadata={"running": self._running, "cycle_count": self._cycle_count}
+                    )
+
+                # Check error count
+                if self._error_count > 10:
+                    return HealthResult(
+                        name="long_term_autonomy_health",
+                        component="long_term_autonomy",
+                        status=HealthStatus.UNHEALTHY,
+                        message=f"High error count: {self._error_count}",
+                        metadata={"error_count": self._error_count, "cycle_count": self._cycle_count}
+                    )
 
             return HealthResult(
                 name="long_term_autonomy_health",
                 component="long_term_autonomy",
                 status=HealthStatus.HEALTHY,
-                message="Autonomy manager running normally",
+                message="Autonomy manager operational" if self._running else "Autonomy manager initialized (on-demand mode)",
                 metadata={
                     "running": self._running,
                     "cycle_count": self._cycle_count,
@@ -228,55 +248,39 @@ class AutonomyManager:
         """Register all recurring background jobs with the shared BackgroundJobService."""
         job_service = self.job_service
 
-        # State persistence job
-        job_service.schedule(
-            job_id="autonomy_persist_state",
-            func=self._autonomy_persist_state,
-            trigger=JobTriggerConfig(type=JobTriggerType.RECURRING, interval_seconds=self.config.state_persistence_interval_seconds),
-            priority=JobPriority.LOW,
-            max_retries=3,
-            replace_existing=True,
-        )
+        # Job configurations: (job_id, func, interval_seconds, priority, max_retries)
+        job_configs = [
+            ("autonomy_persist_state", self._autonomy_persist_state,
+             self.config.state_persistence_interval_seconds, JobPriority.LOW, 3),
+            ("autonomy_learning_pipeline", self._run_learning_pipeline_job,
+             self.config.learning_interval_seconds, JobPriority.NORMAL, 3),
+            ("autonomy_maintenance", self._autonomy_maintenance_job,
+             3600, JobPriority.LOW, 1),
+            ("autonomy_watchdog_checkpoint", self._autonomy_watchdog_checkpoint,
+             self.config.watchdog_checkpoint_interval_seconds, JobPriority.HIGH, 1),
+            ("autonomy_self_initiated_work", self._autonomy_self_initiated_work_job,
+             self.config.self_initiated_work_interval_seconds, JobPriority.NORMAL, 1),
+            ("autonomy_health_check", self._autonomy_health_check_job,
+             60.0, JobPriority.NORMAL, 1),
+            ("autonomy_persist_state_5min", self._autonomy_persist_state,
+             300.0, JobPriority.LOW, 3),
+        ]
 
-        # Learning pipeline job
-        job_service.schedule(
-            job_id="autonomy_learning_pipeline",
-            func=self._run_learning_pipeline_job,
-            trigger=JobTriggerConfig(type=JobTriggerType.RECURRING, interval_seconds=self.config.learning_interval_seconds),
-            priority=JobPriority.NORMAL,
-            max_retries=3,
-            replace_existing=True,
-        )
+        for job_id, func, interval, priority, max_retries in job_configs:
+            # Check if job already exists and is active - skip if so
+            existing_job = job_service.get_job(job_id)
+            if existing_job and existing_job.status in (JobStatus.SCHEDULED, JobStatus.RUNNING, JobStatus.PENDING):
+                logger.debug(f"Job '{job_id}' already registered and active, skipping")
+                continue
 
-        # Maintenance job (cleanup old tasks, etc.)
-        job_service.schedule(
-            job_id="autonomy_maintenance",
-            func=self._autonomy_maintenance_job,
-            trigger=JobTriggerConfig(type=JobTriggerType.RECURRING, interval_seconds=3600),  # Every hour
-            priority=JobPriority.LOW,
-            max_retries=1,
-            replace_existing=True,
-        )
-
-        # Watchdog checkpoint job
-        job_service.schedule(
-            job_id="autonomy_watchdog_checkpoint",
-            func=self._autonomy_watchdog_checkpoint,
-            trigger=JobTriggerConfig(type=JobTriggerType.RECURRING, interval_seconds=self.config.watchdog_checkpoint_interval_seconds),
-            priority=JobPriority.HIGH,
-            max_retries=1,
-            replace_existing=True,
-        )
-
-        # Self-initiated work discovery job
-        job_service.schedule(
-            job_id="autonomy_self_initiated_work",
-            func=self._autonomy_self_initiated_work_job,
-            trigger=JobTriggerConfig(type=JobTriggerType.RECURRING, interval_seconds=self.config.self_initiated_work_interval_seconds),
-            priority=JobPriority.NORMAL,
-            max_retries=1,
-            replace_existing=True,
-        )
+            job_service.schedule(
+                job_id=job_id,
+                func=func,
+                trigger=JobTriggerConfig(type=JobTriggerType.RECURRING, interval_seconds=interval),
+                priority=priority,
+                max_retries=max_retries,
+                replace_existing=True,
+            )
 
         logger.info("Registered autonomy background jobs with shared BackgroundJobService")
 
@@ -290,11 +294,13 @@ class AutonomyManager:
             "autonomy_maintenance",
             "autonomy_watchdog_checkpoint",
             "autonomy_self_initiated_work",
+            "autonomy_health_check",
+            "autonomy_persist_state_5min",
         ]
 
         for job_id in job_ids:
             try:
-                job_service.cancel(job_id)
+                job_service.remove_job(job_id)
             except Exception as e:
                 logger.warning(f"Failed to cancel job {job_id}: {e}")
 
@@ -345,6 +351,16 @@ class AutonomyManager:
             logger.debug("Self-initiated work job completed")
         except Exception as e:
             logger.error(f"Self-initiated work job failed: {e}")
+
+    def _autonomy_health_check_job(self) -> None:
+        """Background job for autonomy health check."""
+        try:
+            if not self.is_healthy():
+                logger.warning("[AutonomyManager] Health check failed")
+            else:
+                logger.debug("[AutonomyManager] Health check passed")
+        except Exception as e:
+            logger.error(f"[AutonomyManager] Health check error: {e}")
 
     def _cleanup_old_tasks(self, max_age_days: int = 7) -> None:
         """Clean up old completed/failed tasks."""
@@ -449,6 +465,16 @@ class AutonomyManager:
         from app.agent.executor import Executor
         self.executor = Executor(llm, tools, engineering_lessons)
         self.executor.set_conversation_control(self)  # Use self as conversation control
+
+    def set_chat_activity_provider(self, provider: ChatActivityProvider) -> None:
+        """
+        Set the chat activity provider for chat-aware yielding.
+
+        Args:
+            provider: An object implementing ChatActivityProvider interface
+        """
+        self._chat_activity_provider = provider
+        logger.info("[AutonomyManager] Chat activity provider set")
 
     # ==================== Lifecycle Management ====================
 
@@ -649,10 +675,33 @@ class AutonomyManager:
 
     def _autonomy_loop(self) -> None:
         """Main autonomous decision loop."""
+        import threading
+        import asyncio
+        def _autonomy_trace(step: str, detail: str = ""):
+            thread = threading.current_thread()
+            task = None
+            try:
+                task = asyncio.current_task()
+            except RuntimeError:
+                pass
+            task_id = id(task) if task else "no-loop"
+            logger.debug(f"[CHAT] {step} thread={thread.name} thread_id={thread.ident} task_id={task_id} {detail}")
+
         logger.info("Autonomy main loop started")
 
         while not self._shutdown_event.is_set():
             try:
+                # YIELD TO CHAT: Check if chat is active and wait efficiently for it to become idle
+                # Chat has absolute priority over autonomy
+                if self._chat_activity_provider.is_chat_active():
+                    _autonomy_trace("AUTONOMY_YIELD_CHAT_START", "yielding autonomy cycle")
+                    logger.debug("[AutonomyManager] Chat active - yielding autonomy cycle")
+                    # Wait efficiently for chat to end (no polling - uses Condition variable)
+                    # Use a long timeout to allow periodic shutdown checks
+                    self._chat_activity_provider.wait_for_chat_idle(timeout=60.0)
+                    _autonomy_trace("AUTONOMY_YIELD_CHAT_END", "resuming autonomy cycle")
+                    continue  # Re-check chat status after yielding
+
                 # Check if we should pause
                 if self._pause_event.is_set():
                     time.sleep(1.0)

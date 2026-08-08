@@ -14,6 +14,7 @@ Provides a single service for:
 - Graceful shutdown
 - Status tracking and monitoring
 - Thread-safe operations
+- Chat-aware scheduling (yields to chat/conversation)
 """
 
 import asyncio
@@ -31,6 +32,20 @@ from app.core.logger import logger
 from app.core.events import EventBus, get_event_bus, Event, EventPriority
 from pathlib import Path
 import json
+
+
+class ChatActivityProvider:
+    """
+    Interface for checking chat activity status.
+    Allows BackgroundJobService to yield to chat without tight coupling.
+    """
+    def is_chat_active(self) -> bool:
+        """Check if chat is currently active."""
+        return False
+
+    def wait_for_chat_idle(self, timeout: float = 0.1) -> bool:
+        """Wait for chat to become idle. Returns True if idle, False if timeout."""
+        return True
 
 
 class JobStatus(Enum):
@@ -294,6 +309,9 @@ class BackgroundJobService:
         self._worker_threads: Set[threading.Thread] = set()
         self._worker_lock = threading.Lock()
 
+        # Chat activity provider - for yielding to chat/conversation
+        self._chat_activity_provider: ChatActivityProvider = ChatActivityProvider()
+
         # Statistics
         self._stats = {
             "total_jobs_created": 0,
@@ -355,6 +373,17 @@ class BackgroundJobService:
             if len(self._job_history) > self._max_history_size:
                 self._job_history = self._job_history[-self._max_history_size:]
             self._save_history()
+
+    def set_chat_activity_provider(self, provider: ChatActivityProvider) -> None:
+        """
+        Set the chat activity provider for chat-aware yielding.
+
+        Args:
+            provider: An object implementing ChatActivityProvider interface
+        """
+        self._chat_activity_provider = provider
+        logger.info("[BackgroundJobService] Chat activity provider set")
+
     def start(self) -> None:
         """Explicitly start the background scheduler thread.
 
@@ -378,8 +407,31 @@ class BackgroundJobService:
 
     def _scheduler_loop(self) -> None:
         """Main scheduler loop."""
+        import threading
+        import asyncio
+        def _bg_trace(step: str, detail: str = ""):
+            thread = threading.current_thread()
+            task = None
+            try:
+                task = asyncio.current_task()
+            except RuntimeError:
+                pass
+            task_id = id(task) if task else "no-loop"
+            logger.debug(f"[CHAT] {step} thread={thread.name} thread_id={thread.ident} task_id={task_id} {detail}")
+
         while not self._shutdown:
             try:
+                # YIELD TO CHAT: Check if chat is active and wait efficiently for it to become idle
+                # Chat has absolute priority over background jobs
+                if self._chat_activity_provider.is_chat_active():
+                    _bg_trace("BG_YIELD_CHAT_START", "scheduler yielding")
+                    logger.debug("[BackgroundJobService] Chat active - yielding scheduler tick")
+                    # Wait efficiently for chat to end (no polling - uses Condition variable)
+                    # Use a long timeout to allow periodic shutdown checks
+                    self._chat_activity_provider.wait_for_chat_idle(timeout=60.0)
+                    _bg_trace("BG_YIELD_CHAT_END", "scheduler resuming")
+                    continue  # Re-check chat status after yielding
+
                 now = time.time()
                 ready_jobs = self._get_ready_jobs(now)
 
@@ -477,7 +529,15 @@ class BackgroundJobService:
             with self._stats_lock:
                 self._stats["total_jobs_completed"] += 1
 
-            logger.debug(f"Job '{job.name}' ({job.id[:8]}) completed in {duration:.3f}s")
+            # Only log job completion for state changes: first run, after retry, or final completion
+            # (not for recurring jobs that complete successfully and are rescheduled)
+            is_recurring_rescheduled = (
+                job.job_type == JobType.RECURRING and
+                job.interval_seconds > 0 and
+                (job.max_runs is None or job.run_count < job.max_runs)
+            )
+            if not is_recurring_rescheduled or job.run_count == 1 or job.current_retry > 0:
+                logger.debug(f"Job '{job.name}' ({job.id[:8]}) completed in {duration:.3f}s")
 
         except Exception as e:
             self._handle_job_error(job, e)
@@ -691,7 +751,8 @@ class BackgroundJobService:
         if kwargs is None:
             kwargs = {}
         with self._lock:
-            if job_id in self._jobs:
+            is_replacement = job_id in self._jobs
+            if is_replacement:
                 if replace_existing:
                     self._jobs[job_id].cancel()
                 else:
@@ -746,7 +807,10 @@ class BackgroundJobService:
             with self._stats_lock:
                 self._stats["total_jobs_created"] += 1
 
-        logger.info(f"Scheduled job '{job.name}' ({job_id[:8]}) type={trigger.type.value}")
+        if is_replacement:
+            logger.debug(f"Replaced job '{job.name}' ({job_id[:8]}) type={trigger.type.value}")
+        else:
+            logger.info(f"Scheduled job '{job.name}' ({job_id[:8]}) type={trigger.type.value}")
         self._emit_job_event("job.created", job)
         return job_id
 
