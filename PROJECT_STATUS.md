@@ -1,10 +1,10 @@
 # Completion Progress
 
-Overall Freya Functional Completion: 50.0%
-Completed Tasks: 5 / 17
-Remaining Tasks: 12 / 17
+Overall Freya Functional Completion: 55.0%
+Completed Tasks: 6 / 17
+Remaining Tasks: 11 / 17
 Last Updated: 2026-08-14
-Next Active Task: Task 6 — Consolidate retrieval and restore cross-session knowledge recall
+Next Active Task: Task 7 — Replace obsolete tests with production-path integration evidence
 
 > The percentage retains the documented capability-weighted operational method: functionality receives credit only when its production path is implemented, wired, reachable, safe where required, and supported by runtime evidence. The task counts are the rolling queue counts and do not replace that capability-weighted percentage.
 
@@ -14,19 +14,17 @@ Next Active Task: Task 6 — Consolidate retrieval and restore cross-session kno
 > Completed, working, and verified items have been removed from the execution queue.
 > Tasks are ordered by documented dependency and execution sequence, not simply by priority.
 >
-> **Verified operational completion:** 50.0% (the capability-weighted estimate reflects five completed and verified critical-path tasks; it supersedes the earlier 76.6% estimate).
+> **Verified operational completion:** 55.0% (the capability-weighted estimate reflects six completed and verified critical-path tasks; it supersedes the earlier 76.6% estimate).
 
 ---
 
 # Critical Execution Path
 
-1. 🔴 Task 6 — Consolidate retrieval and restore cross-session knowledge recall
+1. 🔴 Task 7 — Replace obsolete tests with production-path integration evidence
    ↓
-2. 🔴 Task 7 — Replace obsolete tests with production-path integration evidence
+2. 🔴 Task 8 — Implement provider resilience
    ↓
-3. 🔴 Task 8 — Implement provider resilience
-   ↓
-4. 🟡 Task 9 — Repair monitoring and hardware-health evidence
+3. 🟡 Task 9 — Repair monitoring and hardware-health evidence
 
 Tasks 10–17 are parallel or independent work where the existing status document does not establish a prerequisite beyond the relationships stated in each task.
 
@@ -35,49 +33,6 @@ Tasks 10–17 are parallel or independent work where the existing status documen
 # Active Work
 
 
-
-## Task 6 — Consolidate retrieval and restore cross-session knowledge recall
-
-**Size:** 🔴 RED — BIG / COMPLEX
-**Priority:** P1/P2
-**Execution Order:** 6
-
-**Location**
-
-- `app/memory/unified_retrieval.py`
-- `app/knowledge_retrieval/pipeline.py`
-- `app/memory/conversation_memory.py`
-- Vector-memory integration tests
-
-**Problem**
-
-Production routes use `UnifiedRetrieval`, while the more advanced calibration, learned ranking, analytics, and retrieval-decision pipeline is orphaned. The APIs and data models diverge. All three conversation/vector integration tests fail, so cross-session semantic recall is not established.
-
-**Required Work**
-
-- Integrate the advanced pipeline behind the production retrieval interface or remove/consolidate it.
-- Preserve one observable retrieval contract.
-- Diagnose vector persistence/retrieval mismatch.
-- Define restart semantics.
-- Add deterministic persistence-and-retrieval integration tests.
-
-**Dependencies**
-
-- Must follow Task 1's runtime-architecture decision.
-- Vector recall work is independent after the supported retrieval stack is selected.
-
-**Why This Order**
-
-The document lists retrieval consolidation after the canonical runtime decision and before final production-path verification.
-
-**Acceptance Criteria**
-
-- [ ] One retrieval implementation is supported in production.
-- [ ] Calibration, ranking, analytics, and decision behavior are either reachable or explicitly retired.
-- [ ] Cross-session vector recall works deterministically across restart.
-- [ ] Production retrieval has one stable contract.
-
----
 
 ## Task 7 — Replace obsolete tests with production-path integration evidence
 
@@ -521,7 +476,7 @@ These tasks do not have a documented prerequisite on the critical execution chai
 
 # Dependency Notes
 
-The documented order to reach 100% is: establish one canonical runtime graph; repair execution safety and verification; repair autonomy startup and background jobs; restore the shared event contract; connect execution outcomes to learning and durable memory; consolidate retrieval and cross-session recall; implement provider resilience and health/observability; replace stale tests with production-path evidence; and only then tune configuration, documentation, and optional capability breadth.
+The documented order to reach 100% is: establish one canonical runtime graph; repair execution safety and verification; repair autonomy startup and background jobs; restore the shared event contract; connect execution outcomes to learning and durable memory; implement provider resilience and health/observability; replace stale tests with production-path evidence; and only then tune configuration, documentation, and optional capability breadth.
 
 No dependency has been added where the existing status document did not establish one. Where the source document did not specify a prerequisite, the task states: **Dependencies: Not specified in existing status document.**
 
@@ -531,26 +486,26 @@ No dependency has been added where the existing status document did not establis
 
 | Size | Remaining tasks |
 |---|---:|
-| 🔴 RED — Big / Complex | 4 |
-| 🟡 YELLOW — Medium | 7 |
+| 🔴 RED — Big / Complex | 3 |
+| 🟡 YELLOW — Medium | 5 |
 | 🔵 BLUE — Easy / Small | 3 |
-| **Total** | **13** |
+| **Total** | **11** |
 
 | Priority | Remaining work |
 |---|---|
 | **P0 — Critical** | No remaining P0 task on the active queue; the Task 3 autonomy blocker is complete. |
 | **P1 — High** | Tasks 7–8, 11, 14: production tests, provider resilience, autonomous learning, readiness surface |
-| **P2 — Medium** | Tasks 6, 9–10, 12–13, 16: retrieval, monitoring, workflow capability/safety, legacy migration, vector recall, memory quality |
+| **P2 — Medium** | Tasks 9–10, 12–13, 16: monitoring, workflow capability/safety, legacy migration, vector recall, memory quality |
 | **P3 — Low** | Tasks 14–17: readiness completion, configurable policy, memory-quality tail work, stale contracts |
 
-**Current verified completion:** 50.0%. Tasks 2–5 are recorded as complete and verified. The remaining active queue begins with Task 6’s retrieval-consolidation repair.
+**Current verified completion:** 55.0%. Tasks 2–6 are recorded as complete and verified. The remaining active queue begins with Task 7’s production-path integration evidence.
 
 ---
 
 # Critical Blockers
 
-1. Cross-session retrieval remains fragmented and does not yet provide deterministic persistent semantic recall through one production contract (Task 6).
-2. The runtime is still fragmented across production, legacy, and test-only implementations, leaving key features unreachable and tests disconnected from the normal application graph.
+1. The runtime still contains legacy and test-only paths outside the canonical graph, leaving broader features unreachable and tests disconnected from the normal application graph.
+2. The now-quarantined advanced retrieval experiments retain separate calibration, learned-ranking, analytics, and decision contracts; Task 16 must decide whether to integrate them behind `UnifiedRetrieval` or retire them permanently.
 
 ---
 
@@ -558,7 +513,7 @@ No dependency has been added where the existing status document did not establis
 
 Freya reaches 100% only when a normal `FreyaApp` startup reliably composes one supported architecture; safely accepts or rejects actions; plans, executes, verifies, repairs, and persists outcomes; learns from those outcomes; uses persistent and retrievable knowledge across sessions; runs healthy autonomous background work; routes diagnostics and learning through controlled improvement safeguards; survives configured provider and tool failures; and demonstrates these chains through a clean, production-path test suite.
 
-The current verified operational completion is **50.0%**. The earlier 76.6% estimate is superseded by the current verified assessment and is not used as the completion baseline.
+The current verified operational completion is **55.0%**. The earlier 76.6% estimate is superseded by the current verified assessment and is not used as the completion baseline.
 
 ---
 
@@ -755,6 +710,81 @@ The focused suite passed with **33 passed**. It verifies production dependency i
 
 **Resolved Later**
 
-- None.
+- Task 6 — Retrieval Consolidation & Cross-Session Knowledge Recall restored deterministic persisted-conversation retrieval through the canonical `UnifiedRetrieval` contract.
 
 **Implementation Commit Hash:** `63dc6f0`
+
+
+---
+
+## Task 6 — Retrieval Consolidation & Cross-Session Knowledge Recall
+
+**Status:** COMPLETE
+
+**Implementation Summary**
+
+Task 6 establishes `MemoryCoordinator → UnifiedRetrieval` as Freya’s only supported production retrieval architecture. The public production contract remains `app.memory.unified_retrieval.RetrievalQuery → list[RetrievalResult]`: a query includes source, limit, score, and context controls; every result exposes content, source, source ID, score, metadata, and timestamp; no relevant result deterministically returns an empty list. Existing callers retain this contract without a broad caller migration.
+
+**Canonical Retrieval Implementation and Wiring**
+
+`ConversationMemoryRetriever` now converts durable semantic conversation matches into the canonical `RetrievalResult` model. `UnifiedRetrieval` now registers every supplied source by explicit `is not None` checks, rather than accidentally omitting initially empty persistent sources that later receive writes. The coordinator’s `record_conversation()` method now persists and indexes valid role/content turns through `ConversationMemory.add_message()`. The unified-runtime compatibility layer reuses the coordinator-owned conversation memory for default application conversation writes, and the legacy `create_unified_retrieval(agent)` path unwraps `ConversationState._memory` before registering it.
+
+**Advanced Pipeline Decision**
+
+`app.knowledge_retrieval` is explicitly quarantined as an experimental, non-production subsystem. Its calibration, learned ranking, analytics, and retrieval-decision models remain available only for isolated research and legacy knowledge-acquisition callers; they are not claimed as reachable through the production retrieval contract. The canonical path does not instantiate this pipeline, so no competing production retrieval architecture remains.
+
+| Advanced capability | Task 6 status |
+|---|---|
+| Calibration | Explicitly quarantined; not production-supported. |
+| Learned ranking | Explicitly quarantined; not production-supported. |
+| Retrieval analytics | Explicitly quarantined; not production-supported. |
+| Retrieval decision behavior | Explicitly quarantined; not production-supported. |
+| Canonical ranking | Supported through deterministic vector similarity and descending `RetrievalResult.score` ordering. |
+
+**Vector Persistence Root Cause and Restart Semantics**
+
+The FAISS vector store already persisted index and metadata sidecars, but the supported default conversation path never used it: the optional sentence-transformer integration was intentionally disabled, while conversation storage and reads both returned early whenever no in-memory transformer existed. In addition, conversation vectors were initialized under a duplicated `data/vector_db/data/vector_db` path, source registration could be skipped while the conversation was empty, and the canonical conversation retriever always returned an empty list. Task 6 repairs those causes by using a normalized deterministic hashing embedding when no optional transformer is loaded, passing the workspace correctly to the vector backend, retaining stable file-derived conversation IDs rather than object identity, and converting persisted vector results into the canonical contract.
+
+The verified lifecycle is: Session A writes conversation turns through `ConversationMemory`, which embeds and persists each vector plus metadata to `<workspace>/data/vector_db/<name>.faiss` and `.metadata.json`; after the writer process exits, Session B reconstructs `ConversationMemory`, reloads the FAISS index and metadata from disk, and retrieves the stored information through `UnifiedRetrieval` using a semantically related query.
+
+**Conversation-Memory and Integration Verification**
+
+The new production-path test uses the actual `MemoryCoordinator` writer and `UnifiedRetrieval` reader. It verifies semantic selection and descending ranking for multiple memories, deterministic no-match behavior, and an actual cross-process restart boundary in which a child process writes durable conversation data and a fresh process reconstructs and retrieves it. Existing conversation/vector integration tests now pass for same-process semantic lookup, topic lookup with temporal weighting, and restart-time retrieval. The vector backend’s persistence suite also passes.
+
+**Files Changed**
+
+- `app/agent/core_agent.py`
+- `app/knowledge_retrieval/__init__.py`
+- `app/knowledge_retrieval/pipeline.py`
+- `app/memory/conversation_memory.py`
+- `app/memory/coordinator.py`
+- `app/memory/unified_retrieval.py`
+- `tests/test_production_retrieval_integration.py`
+- `PROJECT_STATUS.md`
+
+**Tests Actually Run**
+
+- `PYTHONPATH=. pytest -q --basetemp=/tmp/freya_task6_final tests/test_integration_conversation_search.py tests/test_production_retrieval_integration.py tests/test_vector_db.py tests/test_knowledge_retrieval.py`
+- `python3 -m py_compile app/memory/conversation_memory.py app/memory/unified_retrieval.py app/memory/coordinator.py app/agent/core_agent.py app/knowledge_retrieval/__init__.py app/knowledge_retrieval/pipeline.py`
+- `git diff --check`
+
+**Integration Verification Results**
+
+The focused Task 6 suite passed with **76 passed**. It includes seven conversation-retrieval and production-path tests, forty-one vector database tests, and twenty-eight isolated advanced-pipeline regression tests. The final compile check and diff whitespace check passed.
+
+**Remaining Limitations**
+
+- The quarantined advanced retrieval experiments retain incompatible request/result models and are not available to the production contract; Task 16 must either adapt them behind `UnifiedRetrieval` or retire them permanently.
+- The unified runtime reuses the coordinator-owned conversation memory for the default persistence location. A caller that explicitly supplies a distinct `conversation_persistence_path` still uses the legacy compatibility wrapper rather than reconfiguring the already-created coordinator.
+- Pre-existing duplicate retriever class definitions remain in `app/memory/unified_retrieval.py`; they are lower-priority cleanup explicitly retained for Task 16 to avoid expanding Task 6 beyond retrieval consolidation and recall restoration.
+- The repository-wide pytest configuration still specifies a Windows-only `C:/temp/pytest_tmp` base directory. Targeted Linux verification used a command-line `--basetemp` override without changing unrelated test configuration.
+
+**Dependencies Still Preventing Full Functionality**
+
+Task 7 remains required to replace broader obsolete tests with production-path evidence, and Task 16 remains required to make a final lifecycle decision for the quarantined advanced retrieval experiments and remaining memory-quality work.
+
+**Resolved Later**
+
+- Task 5 — Execution Outcomes → Learning & Durable Memory: its recorded limitation requiring deterministic retrieval of durable memory has been resolved for persisted conversation knowledge by Task 6.
+
+**Implementation Commit Hash:** `99eb45e`
