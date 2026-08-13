@@ -706,7 +706,6 @@ The focused suite passed with **33 passed**. It verifies production dependency i
 **Remaining Limitations**
 
 - The repository-wide pytest configuration still contains the pre-existing Windows-only `C:/temp/pytest_tmp` path; focused Linux verification used an equivalent temporary-directory override without changing unrelated configuration.
-- Task 6 remains required to consolidate retrieval and establish deterministic cross-session knowledge recall; Task 5 verifies durable write persistence, not retrieval behavior.
 
 **Resolved Later**
 
