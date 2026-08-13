@@ -1,4 +1,10 @@
-"""Knowledge Retrieval Capability for Freya AI.
+"""Experimental retrieval research components for Freya AI.
+
+Production retrieval is exclusively provided by ``app.memory.unified_retrieval``
+through ``MemoryCoordinator``. This package is intentionally quarantined from
+normal application routing: its calibration, adaptive ranking, analytics, and
+retrieval-decision experiments are not production-supported until they can be
+integrated behind that canonical contract.
 
 This module provides a unified knowledge retrieval system that:
 - Queries multiple knowledge sources (semantic memory, episodic memory, project memory, etc.)
@@ -90,6 +96,11 @@ from app.knowledge_retrieval.pipeline import (
     KnowledgeRetriever,
 )
 
+# Explicitly non-production: retained only for isolated research and legacy
+# knowledge-acquisition callers. Normal application retrieval must use
+# app.memory.unified_retrieval.UnifiedRetrieval.
+EXPERIMENTAL_ONLY = True
+
 # Global default pipeline (lazy initialization)
 _default_pipeline: Optional[KnowledgeRetrievalPipeline] = None
 
@@ -117,6 +128,9 @@ def register_knowledge_source(adapter: KnowledgeSourceAdapter) -> None:
 
 
 __all__ = [
+    # Quarantine marker
+    "EXPERIMENTAL_ONLY",
+
     # Models
     "KnowledgeRetrievalResult",
     "RetrievalQuery",

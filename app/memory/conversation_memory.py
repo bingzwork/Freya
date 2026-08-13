@@ -12,6 +12,7 @@ Also supports long-term conversation summarization to keep context manageable
 across extended sessions.
 """
 
+import hashlib
 import json
 import re
 import threading
@@ -127,6 +128,10 @@ class ConversationMemory:
         """
         self.workspace = Path(workspace).resolve()
         self.storage_path = self.workspace / storage_path
+        # Stable across process restarts; never use object identity for persisted records.
+        self._conversation_id = hashlib.sha256(
+            str(self.storage_path.resolve()).encode("utf-8")
+        ).hexdigest()[:16]
         if _bypass_min_turns:
             self.min_turns = min_turns
         else:
@@ -172,12 +177,12 @@ class ConversationMemory:
     def _initialize_vector_db(self) -> None:
         """Initialize the vector database for cross-session conversation search."""
         try:
-            # Create vector database in the workspace under data/vector_db/
-            vector_db_path = self.workspace / "data" / "vector_db"
+            # get_vector_db owns the data/vector_db path segment. Passing the
+            # workspace directly keeps writes and restart-time reads aligned.
             self._vector_db = get_vector_db(
                 name=self.vector_db_name,
-                workspace=str(vector_db_path),
-                embedding_dim=self.embedding_dim
+                workspace=str(self.workspace),
+                embedding_dim=self.embedding_dim,
             )
         except Exception as e:
             # Log error but don't fail initialization
@@ -332,19 +337,37 @@ class ConversationMemory:
     # =========================================================================
 
     def _compute_embedding(self, text: str):
-        """Compute embedding for text using the sentence transformer model."""
-        if self.embedding_model is None:
+        """Return a stable normalized embedding without requiring a process-local model.
+
+        A sentence-transformer embedding is used when explicitly available.  The
+        deterministic hashing fallback keeps the persistent FAISS contract usable
+        in the supported default runtime, where the optional transformer model is
+        intentionally not initialized.
+        """
+        if not text or not text.strip():
             return None
 
-        try:
-            embedding = self.embedding_model.encode(
-                [text],
-                convert_to_numpy=True,
-                normalize_embeddings=True,
-            )[0]
-            return embedding
-        except Exception:
+        if self.embedding_model is not None:
+            try:
+                return self.embedding_model.encode(
+                    [text],
+                    convert_to_numpy=True,
+                    normalize_embeddings=True,
+                )[0]
+            except Exception:
+                # A failed optional model must not disable durable retrieval.
+                pass
+
+        vector = [0.0] * self.embedding_dim
+        for token in re.findall(r"[a-z0-9_]+", text.lower()):
+            digest = hashlib.blake2b(token.encode("utf-8"), digest_size=8).digest()
+            index = int.from_bytes(digest[:4], "big") % self.embedding_dim
+            vector[index] += 1.0
+
+        norm = math.sqrt(sum(value * value for value in vector))
+        if norm == 0.0:
             return None
+        return [value / norm for value in vector]
 
     def _store_turn_in_vector_db(self, turn: ConversationTurn, turn_index: int) -> None:
         """Store a conversation turn in the vector database for cross-session search.
@@ -353,7 +376,7 @@ class ConversationMemory:
             turn: The conversation turn to store
             turn_index: The index of the turn in the conversation
         """
-        if self._vector_db is None or self.embedding_model is None:
+        if self._vector_db is None:
             return
 
         try:
@@ -367,7 +390,8 @@ class ConversationMemory:
 
             # Prepare metadata
             metadata = {
-                "conversation_id": str(id(self)),  # Unique identifier for this conversation instance
+                "conversation_id": self._conversation_id,
+                "turn_id": f"{self._conversation_id}:{turn.timestamp}:{turn_index}",
                 "turn_index": turn_index,
                 "role": turn.role,
                 "timestamp": turn.timestamp,
@@ -388,7 +412,7 @@ class ConversationMemory:
         Args:
             summary: The conversation summary to store
         """
-        if self._vector_db is None or self.embedding_model is None:
+        if self._vector_db is None:
             return
 
         try:
@@ -402,8 +426,9 @@ class ConversationMemory:
 
             # Prepare metadata
             metadata = {
-                "conversation_id": str(id(self)),  # Unique identifier for this conversation instance
+                "conversation_id": self._conversation_id,
                 "summary_id": summary.summary_id,
+                "content": summary.summary_text,
                 "start_turn_index": summary.start_turn_index,
                 "end_turn_index": summary.end_turn_index,
                 "turn_count": summary.turn_count,
@@ -434,7 +459,7 @@ class ConversationMemory:
         Returns:
             List of matching conversation snippets with metadata
         """
-        if self._vector_db is None or self.embedding_model is None or not query.strip():
+        if self._vector_db is None or not query.strip():
             return []
 
         try:
@@ -504,7 +529,7 @@ class ConversationMemory:
         Returns:
             List of matching conversation snippets with temporal weighting applied
         """
-        if self._vector_db is None or self.embedding_model is None or not topic.strip():
+        if self._vector_db is None or not topic.strip():
             return []
 
         try:

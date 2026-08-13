@@ -109,11 +109,39 @@ class ConversationMemoryRetriever(MemoryRetriever):
         return self.memory is not None and not self.memory.is_empty()
 
     def retrieve(self, query: RetrievalQuery) -> List[RetrievalResult]:
-        if not self.is_available():
+        """Retrieve persisted semantic conversation matches through the canonical contract."""
+        if not self.is_available() or not query.query.strip():
             return []
 
-        results = []
-        turns = self.memory.get_history(limit=query.max_results * 2)
+        try:
+            matches = self.memory.search_conversations(
+                query.query,
+                max_results=query.max_results,
+                min_similarity=max(0.0, query.min_score),
+            )
+        except Exception as exc:
+            logger.warning("Conversation retrieval failed: %s", exc)
+            return []
+
+        results: List[RetrievalResult] = []
+        for match in matches:
+            content = str(match.get("content", ""))
+            if not content:
+                continue
+            metadata = dict(match.get("metadata", {}))
+            metadata.update({
+                "type": match.get("type", "conversation_turn"),
+                "role": match.get("role", ""),
+                "similarity": float(match.get("similarity", 0.0)),
+            })
+            results.append(RetrievalResult(
+                content=content,
+                source=self.source_name,
+                source_id=str(match.get("id", "")),
+                score=float(match.get("similarity", 0.0)),
+                metadata=metadata,
+                timestamp=match.get("timestamp") or None,
+            ))
         return results
 
 
@@ -998,28 +1026,28 @@ class UnifiedRetrieval:
         self._retrievers: List[MemoryRetriever] = []
 
         # Add retrievers in priority order (higher priority = added first)
-        if conversation_memory:
+        if conversation_memory is not None:
             self._retrievers.append(ConversationMemoryRetriever(conversation_memory))
-        if working_memory:
+        if working_memory is not None:
             self._retrievers.append(WorkingMemoryRetriever(working_memory))
-        if project_memory:
+        if project_memory is not None:
             self._retrievers.append(ProjectMemoryRetriever(project_memory))
-        if experience_memory:
+        if experience_memory is not None:
             self._retrievers.append(ExperienceMemoryRetriever(experience_memory))
-        if engineering_lessons:
+        if engineering_lessons is not None:
             self._retrievers.append(EngineeringLessonsRetriever(engineering_lessons))
-        if goal_memory:
+        if goal_memory is not None:
             self._retrievers.append(GoalMemoryRetriever(goal_memory))
-        if knowledge_base:
+        if knowledge_base is not None:
             self._retrievers.append(KnowledgeBaseRetriever(knowledge_base))
         # Phase B: Extended Memory
-        if task_memory:
+        if task_memory is not None:
             self._retrievers.append(TaskMemoryRetriever(task_memory))
-        if long_term_memory:
+        if long_term_memory is not None:
             self._retrievers.append(LongTermMemoryRetriever(long_term_memory))
-        if episodic_memory:
+        if episodic_memory is not None:
             self._retrievers.append(EpisodicMemoryRetriever(episodic_memory))
-        if semantic_memory:
+        if semantic_memory is not None:
             self._retrievers.append(SemanticMemoryRetriever(semantic_memory))
 
         self._default_max_results = 20
@@ -1206,7 +1234,11 @@ def create_unified_retrieval(
                                             episodic_memory, semantic_memory]):
             raise ValueError("Cannot specify both agent and individual memory modules")
         return UnifiedRetrieval(
-            conversation_memory=getattr(agent, 'conversation', None),
+            conversation_memory=getattr(
+                getattr(agent, 'conversation', None),
+                '_memory',
+                getattr(agent, 'conversation', None),
+            ),
             working_memory=getattr(agent, 'working_memory', None),
             project_memory=getattr(agent, 'memory', None),
             experience_memory=getattr(agent, 'experience_memory', None),

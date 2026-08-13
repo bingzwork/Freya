@@ -583,6 +583,11 @@ class FreyaAgent:
             persistence_path=conversation_persistence_path,
             workspace=self.workspace,
         )
+        # The canonical runtime owns one durable conversation memory. Reuse it
+        # for compatibility writes so application conversation and retrieval
+        # never diverge into separate process-local objects.
+        if conversation_persistence_path is None:
+            self.conversation._memory = self._memory_coord.conversation_memory
 
         # Plan manager for backward compat
         self.plan_manager = self._execution_engine.plan_manager

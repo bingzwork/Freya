@@ -1,4 +1,10 @@
-"""Knowledge Retrieval Pipeline.
+"""Experimental Knowledge Retrieval Pipeline.
+
+This module is quarantined from the production retrieval path. Production uses
+``app.memory.unified_retrieval.UnifiedRetrieval`` through ``MemoryCoordinator``
+and returns its stable ``RetrievalResult`` contract. The calibration, learned
+ranking, analytics, and decision behavior below remain available only to
+isolated research and legacy knowledge-acquisition callers.
 
 This module provides the main retrieval pipeline that:
 1. Queries all available knowledge sources

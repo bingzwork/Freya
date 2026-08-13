@@ -77,10 +77,18 @@ class MemoryCoordinator:
     # ------------------------------------------------------------------
 
     def record_conversation(self, turn: Any) -> None:
-        """Record a conversation turn."""
+        """Persist and index a conversation turn through the canonical write path."""
+        role = turn.get("role") if isinstance(turn, dict) else getattr(turn, "role", None)
+        content = turn.get("content") if isinstance(turn, dict) else getattr(turn, "content", None)
+        if not role or not content:
+            raise ValueError("Conversation turns require non-empty role and content")
+
         with self._lock:
-            self._conversation.add_turn(turn)
-            self._event_bus.emit("memory.conversation.updated", {"turn_id": getattr(turn, "id", None)})
+            persisted_turn = self._conversation.add_message(str(role), str(content))
+            self._event_bus.emit(
+                "memory.conversation.updated",
+                {"turn_id": persisted_turn.timestamp},
+            )
 
     def record_task_execution(self, task_id: str, result: Any) -> None:
         """Record a task execution result."""
