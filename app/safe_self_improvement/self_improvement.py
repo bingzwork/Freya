@@ -22,6 +22,7 @@ from app.safe_self_improvement.models import (
     ApprovalStatus,
     RiskLevel,
     SafeSelfImprovementConfig,
+    ImprovementCategory,
 )
 from app.safe_self_improvement.allowlist import AllowlistManager, create_default_allowlist_manager
 from app.safe_self_improvement.boundaries import BoundaryManager, create_default_boundary_manager
@@ -31,6 +32,7 @@ from app.safe_self_improvement.prioritization import ImprovementPrioritizer, Pri
 from app.safe_self_improvement.rollback import RollbackManager, RollbackReason, create_rollback_manager
 from app.safe_self_improvement.promotion import PatchPromotionManager, PromotionStage, create_patch_promotion_manager
 from app.safe_self_improvement.policies import PolicyEngine, PolicyAction, create_policy_engine
+from app.core.events import get_event_bus, Event
 from app.core.logger import logger
 
 
@@ -115,6 +117,10 @@ class SafeSelfImprovementEngine:
         self._submission_queue: List[str] = []
         self._background_thread: Optional[threading.Thread] = None
         self._stop_background = threading.Event()
+        self._event_bus = get_event_bus()
+        self._subscriptions = []
+        self._subscribe_to_events()
+
         self._callbacks: Dict[str, List[Callable]] = {
             "on_submit": [],
             "on_approval_requested": [],
@@ -510,6 +516,89 @@ class SafeSelfImprovementEngine:
         with self._lock:
             self._state = EngineState.ERROR
             self._stop_background.set()
+
+    def _subscribe_to_events(self) -> None:
+        """Subscribe to relevant events from other subsystems."""
+        # Subscribe to learning improvement candidates from LearningPipeline
+        self._subscriptions.append(
+            self._event_bus.subscribe(
+                "learning.improvement_candidate",
+                self._on_learning_improvement_candidate,
+            )
+        )
+        
+        # Subscribe to diagnostics completed events from DiagnosticEngine
+        self._subscriptions.append(
+            self._event_bus.subscribe(
+                "diagnostics.completed",
+                self._on_diagnostics_completed,
+            )
+        )
+
+    def _on_learning_improvement_candidate(self, event) -> None:
+        """Handle improvement candidate from LearningPipeline."""
+        try:
+            data = event.data if hasattr(event, 'data') else event
+            candidate_id = data.get("candidate_id")
+            stored_item_ids = data.get("stored_item_ids", [])
+            source_component = data.get("source_component", "unknown")
+            
+            if not candidate_id or not stored_item_ids:
+                return
+                
+            # Create an ImprovementCandidate from the learning pipeline output
+            from app.safe_self_improvement.models import ImprovementCandidate, ImprovementCategory
+            
+            candidate = ImprovementCandidate(
+                title=f"Learning pipeline improvement from {source_component}",
+                description=f"Learning pipeline identified {len(stored_item_ids)} items worth storing as improvements",
+                category=ImprovementCategory.KNOWLEDGE_BASEUPDATE,
+                source="learning_pipeline",
+                candidate_id=candidate_id,
+                metadata={
+                    "stored_item_ids": stored_item_ids,
+                    "source_component": source_component,
+                },
+                auto_approvable=True,  # Learning pipeline items are pre-validated
+            )
+            
+            # Submit for processing (async)
+            self.submit_improvement(candidate, auto_execute=True)
+            
+        except Exception as e:
+            logger.warning(f"[SafeSelfImprovementEngine] Failed to process learning improvement candidate: {e}")
+
+    def _on_diagnostics_completed(self, event) -> None:
+        """Handle diagnostics completed event."""
+        try:
+            data = event.data if hasattr(event, 'data') else event
+            issues = data.get("issues", [])
+            
+            if not issues:
+                return
+                
+            # Convert diagnostic issues to improvement candidates
+            for issue in issues:
+                if issue.get("severity") in ("high", "critical"):
+                    from app.safe_self_improvement.models import ImprovementCandidate, ImprovementCategory
+                    
+                    candidate = ImprovementCandidate(
+                        title=f"Fix: {issue.get('title', 'Diagnostic issue')}",
+                        description=issue.get("description", ""),
+                        category=ImprovementCategory.BUG_FIX,
+                        source="diagnostics",
+                        metadata={
+                            "diagnostic_issue": issue,
+                            "severity": issue.get("severity"),
+                        },
+                        auto_approvable=False,  # Diagnostic fixes require review
+                    )
+                    
+                    # Submit for processing (async)
+                    self.submit_improvement(candidate, auto_execute=False)
+                    
+        except Exception as e:
+            logger.warning(f"[SafeSelfImprovementEngine] Failed to process diagnostics event: {e}")
 
 
 def create_self_improvement_engine(

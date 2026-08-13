@@ -1,378 +1,596 @@
- # Freya Current Architecture
+# Freya Current Architecture
 
- ## 1. High-Level Architecture
+*Generated from codebase analysis on 2026-08-13*
 
- ```mermaid
- graph TB
-     subgraph "User Interface"
-         CLI[CLI Entry Point\nmain.py]
-     end
+This document represents the **actual current architecture** of the Freya codebase at `C:\AI Projects\Freya`.
 
-     subgraph "Orchestrator Layer"
-         WO[WorkflowOrchestrator\napp/orchestrator/workflow_orchestrator.py]
-         CR[CapabilityRegistry\napp/orchestrator/capability_registry.py]
-         WM[WorkflowManager\napp/orchestrator/workflow_manager.py]
-     end
+```mermaid
+flowchart TD
 
-     subgraph "Agent Layer"
-         CA[CoreAgent\napp/agent/core_agent.py]
-         AM[AgentManager\napp/agent/agent_manager.py]
-     end
 
-     subgraph "Capability System"
-         CB[CapabilityBase\napp/capabilities/base.py]
-         CC[Concrete Capabilities\napp/capabilities/*/]
-     end
+%% =========================================================
+%% 1. BOOTSTRAP
+%% =========================================================
+subgraph BOOT["1. BOOTSTRAP"]
+direction TB
 
-     subgraph "Memory & Context"
-         MM[MemoryManager\napp/memory/memory_manager.py]
-         CM[ContextManager\napp/context/context_manager.py]
-     end
 
-     subgraph "External Integrations"
-         LL[LLM Clients\napp/llm/*]
-         TP[Tool Providers\napp/tools/*]
-     end
+A["main.py"]
+B["FreyaApp"]
+C["SystemInitializer"]
 
-     %% Connections
-     CLI --> WO
-     WO --> CR
-     WO --> WM
-     WO --> CA
-     CA --> AM
-     CA --> CB
-     CB --> CC
-     WO --> MM
-     WO --> CM
-     CA --> LL
-     CA --> TP
-     CC --> LL
-     CC --> TP
 
-     classDef layer fill:#f5f5f5,stroke:#333,stroke-width:2px;
-     class CLI layer;
-     class WO,CR,WM layer;
-     class CA,AM layer;
-     class CB,CC layer;
-     class MM,CM layer;
-     class LL,TP layer;
- ```
+A --> B
+B --> C
+end
 
- ## 2. Startup / Initialization Flow
 
- ```mermaid
- graph LR
-     M[main.py\nEntry Point] --> FA[FreyaAgent\nConstructor]
-     FA --> SR[ServiceRegistry\nRegistration]
-     SR --> SM[ServiceManager\nInitialization]
-     SM -->|Async Init| LL[LLM Service]
-     SM -->|Async Init| MM[Memory Service]
-     SM -->|Async Init| CM[Context Service]
-     SM -->|Async Init| TM[Tool Service]
-     SM -->|Async Init| AM[Agent Manager]
-     AM --> CR[CapabilityRegistry\nDiscovery]
-     CR --> CC[Concrete Capabilities\nAuto-registration]
-     SM --> RD[Ready State\nEvent: started]
-     RD --> CLI[CLI Loop\nAccepting Input]
 
-     classDef init fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px;
-     class M,FA,SR,SM,LL,MM,CM,TM,AM,CR,CC,RD,CLI init;
- ```
+%% =========================================================
+%% 2. PUBLIC INTERFACE
+%% =========================================================
+subgraph INTERFACE["2. PUBLIC INTERFACE"]
+direction TB
 
- ## 3. Chat / Request Flow
 
- ```mermaid
- sequenceDiagram
-     participant U as User
-     participant C as CLI\nmain.py
-     participant FA as FreyaAgent\nprocess_request()
-     participant IR as IntentRouter\napp/routing/intent_router.py
-     participant WO as WorkflowOrchestrator\nexecute()
-     participant CA as CoreAgent\nrun()
-     participant LLM as LLM Client
-     participant R as Response
+K["AgentFacadeImpl"]
+J["ConversationControlHandler"]
 
-     U->>C: Input message
-     C->>FA: process_request(input)
-     FA->>IR: route(intent, context)
-     IR-->>FA: RouteDecision(workflow/capability)
-     FA->>WO: execute(workflow, context)
-     WO->>CA: run(capability, context)
-     CA->>LLM: generate(prompt, tools)
-     LLM-->>CA: Response + ToolCalls
-     CA-->>WO: CapabilityResult
-     WO-->>FA: ExecutionResult
-     FA-->>C: AgentResponse
-     C-->>U: Formatted output
- ```
 
- ## 4. Background / Autonomy Flow
+K --> J
+end
 
- ```mermaid
- graph TB
-     subgraph "Startup"
-         ST[ServiceManager.started]
-     end
 
-     subgraph "Background Services"
-         BS[BackgroundServiceManager\napp/services/background_service_manager.py]
-         SC[SchedulerService\napp/services/scheduler_service.py]
-         EB[EventBus\napp/events/event_bus.py]
-     end
 
-     subgraph "Autonomy Loop"
-         AL[AutonomyEngine\napp/autonomy/autonomy_engine.py]
-         DG[DiagnosticsCollector\napp/diagnostics/diagnostics_collector.py]
-         LN[LearningModule\napp/learning/learning_module.py]
-     end
+%% =========================================================
+%% 3. SHARED INFRASTRUCTURE
+%% =========================================================
+subgraph INFRA["3. SHARED INFRASTRUCTURE"]
+direction TB
 
-     subgraph "Persistence"
-         PM[PersistenceManager\napp/persistence/persistence_manager.py]
-         DB[(Database\nSQLite/PostgreSQL)]
-         FS[File Store\napp/data/]
-     end
 
-     ST --> BS
-     BS --> SC
-     BS --> EB
-     SC -->|Periodic| AL
-     EB -->|Events| AL
-     AL --> DG
-     AL --> LN
-     DG --> PM
-     LN --> PM
-     PM --> DB
-     PM --> FS
-     AL -.->|Feedback| SC
+EV["EventBus"]
+JB["BackgroundJobService"]
+OH["ObservabilityHub"]
+CHR["ConfigHotReload"]
+FW["FileWatcher"]
 
-     classDef bg fill:#fff3e0,stroke:#e65100,stroke-width:2px;
-     class BS,SC,EB,AL,DG,LN,PM,DB,FS bg;
- ```
 
- ## 5. Capability / Tool Flow
+EV --> JB
+EV --> OH
+EV --> CHR
+EV --> FW
+end
 
- ```mermaid
- sequenceDiagram
-     participant RQ as Request\nContext
-     participant CR as CapabilityRegistry\napp/orchestrator/capability_registry.py
-     participant CP as Capability\napp/capabilities/*/capability.py
-     participant TE as ToolExecutor\napp/tools/tool_executor.py
-     participant SA as SafetyApproval\napp/safety/approval_manager.py
-     participant RS as Result
 
-     RQ->>CR: find_capability(intent)
-     CR-->>RQ: CapabilityMatch
-     RQ->>CP: execute(params, context)
-     CP->>TE: execute_tool(name, args)
-     TE->>SA: check_approval(tool, risk_level)
-     SA-->>TE: ApprovalDecision
-     alt approved
-         TE->>TE: Run tool implementation
-         TE-->>CP: ToolResult
-     else denied
-         TE-->>CP: DeniedResult
-     end
-     CP-->>RQ: CapabilityResult
- ```
 
- ## 6. Memory / Persistence Flow
+%% =========================================================
+%% 4. LLM STACK
+%% =========================================================
+subgraph LLM["4. LLM STACK"]
+direction TB
 
- ```mermaid
- graph LR
-     subgraph "Input"
-         RQ[Request\nContext]
-     end
 
-     subgraph "Memory Layer"
-         MM[MemoryManager\napp/memory/memory_manager.py]
-         WM[WorkingMemory\nShort-term]
-         LM[LongTermMemory\nVector Store]
-         GM[GoalMemory\nGoals/Tasks]
-         KM[KnowledgeMemory\nFacts/Skills]
-     end
+D["LLMStack"]
+D2["PriorityLLMProvider"]
+D1["Ollama / Local Model"]
+D3["ChatActivityProvider"]
 
-     subgraph "Storage"
-         PM[PersistenceManager\napp/persistence/persistence_manager.py]
-         VDB[(Vector DB\nChroma/Pinecone)]
-         SQL[(SQL Database\nGoals/Tasks)]
-         FS[File System\nKnowledge/Config]
-     end
 
-     subgraph "Output"
-         RS[Enriched\nResponse]
-     end
+D --> D2
+D --> D3
+D2 --> D1
+end
 
-     RQ --> MM
-     MM --> WM
-     MM --> LM
-     MM --> GM
-     MM --> KM
-     WM --> PM
-     LM --> PM
-     GM --> PM
-     KM --> PM
-     PM --> VDB
-     PM --> SQL
-     PM --> FS
-     MM --> RS
 
-     classDef mem fill:#e3f2fd,stroke:#1565c0,stroke-width:2px;
-     class MM,WM,LM,GM,KM,PM,VDB,SQL,FS mem;
- ```
 
- ## 7. LLM / External Services
+%% =========================================================
+%% 5. MEMORY SYSTEM
+%% =========================================================
+subgraph MEMORY["5. MEMORY SYSTEM"]
+direction TB
 
- ```mermaid
- graph TB
-     subgraph "Freya Core"
-         FA[FreyaAgent\napp/agent/core_agent.py]
-         PF[ProviderFactory\napp/llm/provider_factory.py]
-     end
 
-     subgraph "LLM Providers"
-         OL[OllamaProvider\napp/llm/providers/ollama_provider.py]
-         OP[OpenAIProvider\napp/llm/providers/openai_provider.py]
-         AN[AnthropicProvider\napp/llm/providers/anthropic_provider.py]
-         LO[LocalProvider\napp/llm/providers/local_provider.py]
-     end
+E["MemoryCoordinator"]
+E3["UnifiedRetrieval"]
+E2["GoalStorage"]
+E1["Core Memory Modules<br/>Working · Task · Long-Term<br/>Episodic · Semantic · Project"]
+E4["ExperienceMemory"]
+E5["ConversationMemory"]
+E6["EngineeringLessons"]
+CN["ConsolidationEngine"]
+FG["ForgettingEngine"]
 
-     subgraph "External Services"
-         WS[WebSearch\napp/tools/web_search.py]
-         FS[FileSystem\napp/tools/filesystem.py]
-         CP[CodeExecution\napp/tools/code_executor.py]
-         AP[APIConnectors\napp/integrations/*]
-     end
 
-     FA --> PF
-     PF -->|Select| OL
-     PF -->|Select| OP
-     PF -->|Select| AN
-     PF -->|Select| LO
-     OL -->|HTTP| OLH[(Ollama API\nlocalhost:11434)]
-     OP -->|HTTP| OAI[(OpenAI API)]
-     AN -->|HTTP| ANT[(Anthropic API)]
-     LO -->|Local| LLAMA[(llama.cpp\n/ GGUF)]
+E --> E3
+E --> E2
+E --> E1
+E --> E4
+E --> E5
+E --> E6
+E --> CN
+E --> FG
 
-     FA --> WS
-     FA --> FS
-     FA --> CP
-     FA --> AP
+E3 --> E1
+E3 --> E4
+E3 --> E5
+E3 --> E6
+end
 
-     classDef llm fill:#fce4ec,stroke:#c2185b,stroke-width:2px;
-     class FA,PF,OL,OP,AN,LO,OLH,OAI,ANT,LLAMA llm;
-     classDef ext fill:#e8eaf6,stroke:#3f51b5,stroke-width:2px;
-     class WS,FS,CP,AP ext;
- ```
 
- # CURRENT STATUS
 
- ## What Currently Works
- - **CLI ↔ FreyaAgent ↔ Orchestrator**: Basic request routing and response cycle
- - **Capability Registry**: Discovery and auto-registration of capabilities
- - **LLM Provider Factory**: Multi-provider support (Ollama, OpenAI, Anthropic, Local)
- - **MemoryManager**: Working/Long-term/Goal/Knowledge memory with persistence
- - **Tool Execution**: ToolExecutor with safety approval flow
- - **Background Services**: SchedulerService and EventBus running
- - **PersistenceManager**: SQLite + Vector DB + File storage abstraction
+%% =========================================================
+%% 6. INTELLIGENCE ENGINE
+%% =========================================================
+subgraph INTELLIGENCE["6. INTELLIGENCE ENGINE"]
+direction TB
 
- ## What Is Partial
- - **Intent Routing**: Basic keyword matching; no semantic routing yet
- - **Autonomy Engine**: Skeleton exists; loops not fully integrated with scheduler
- - **Learning Module**: Data collection works; model updates not implemented
- - **Diagnostics**: Collection works; alerting/auto-recovery missing
- - **Capability System**: Base class works; dynamic loading inconsistent
- - **Context Manager**: Basic context; no conversation summarization
 
- ## What Is Broken
- - **Autonomy Loop**: Scheduler → AutonomyEngine not wired; background tasks don't execute
- - **EventBus**: Events published but no subscribers for autonomy/diagnostics
- - **Capability Hot-Reload**: Registry caches on startup; no runtime refresh
- - **LLM Streaming**: Provider interface supports it; CoreAgent doesn't handle streams
- - **Multi-Agent**: AgentManager exists but no multi-agent workflows
+G["Intelligence"]
+G1["Reasoning + Decision Logic"]
+G2["Confidence / Answerability Assessment"]
+G3["Context + Goal Awareness"]
 
- ## What Is Legacy / Duplicated
- - `app/orchestrator/workflow_manager.py` vs `workflow_orchestrator.py` — overlapping responsibility
- - `app/agent/agent_manager.py` vs `core_agent.py` — unclear separation
- - `app/capabilities/base.py` vs `capability_registry.py` — both define capability interface
- - Old `app/services/legacy_*` folders (if present) — unused code paths
 
- # WHAT NEEDS TO BE FIXED
+G --> G1
+G --> G2
+G --> G3
+end
 
- | Priority | Problem | Actual Path | Impact | Chat Impact | Background Impact |
- | -------- | ------- | ----------- | ------ | ----------- | ----------------- |
- | P0 | Autonomy loop not wired | `app/services/scheduler_service.py`, `app/autonomy/autonomy_engine.py` | Background tasks never run | None | **Critical** — no autonomous operation |
- | P0 | EventBus has no subscribers | `app/events/event_bus.py` | Events lost; no reactivity | None | **Critical** — diagnostics/learning silent |
- | P0 | Capability hot-reload missing | `app/orchestrator/capability_registry.py` | Restart required for new capabilities | **High** — dev friction | Medium |
- | P1 | LLM streaming not handled | `app/agent/core_agent.py`, `app/llm/providers/*` | No token-by-token output | **High** — poor UX | None |
- | P1 | Intent routing is keyword-only | `app/routing/intent_router.py` | Misroutes complex requests | **High** — wrong capability | Medium |
- | P1 | WorkflowManager vs WorkflowOrchestrator duplication | `app/orchestrator/workflow_manager.py`, `app/orchestrator/workflow_orchestrator.py` | Confusion; double maintenance | Medium | Medium |
- | P2 | No conversation summarization | `app/context/context_manager.py` | Context window exhaustion | Medium | Low |
- | P2 | LearningModule doesn't update models | `app/learning/learning_module.py` | No improvement over time | Low | **High** — autonomy useless |
- | P2 | Diagnostics no alerting/auto-recovery | `app/diagnostics/diagnostics_collector.py` | Issues undetected | Low | **High** |
- | P3 | AgentManager / CoreAgent separation unclear | `app/agent/agent_manager.py`, `app/agent/core_agent.py` | Architectural confusion | Low | Low |
- | P3 | Legacy service folders | `app/services/legacy_*` | Dead code; confusion | None | None |
 
- ### Chat-Blocking Problems (P0/P1 affecting chat)
- - LLM streaming not handled → poor UX
- - Intent routing keyword-only → wrong capability selection
- - Capability hot-reload missing → dev friction
 
- ### Background/Autonomy Problems (P0/P1/P2 affecting autonomy)
- - Autonomy loop not wired → **no autonomous operation**
- - EventBus no subscribers → diagnostics/learning silent
- - LearningModule no model updates → autonomy useless
- - Diagnostics no alerting → issues undetected
+%% =========================================================
+%% 7. KNOWLEDGE-FIRST RESOLUTION
+%% =========================================================
+subgraph ROUTING["7. KNOWLEDGE-FIRST ROUTING"]
+direction TB
 
- ### Technical Debt (P1/P2/P3)
- - WorkflowManager/WorkflowOrchestrator duplication
- - AgentManager/CoreAgent unclear separation
- - Capability interface split across base.py and registry
- - No conversation summarization
- - Legacy service folders
 
- # NEXT IMPLEMENTATION PRIORITIES
+H["UnifiedRouter"]
+H0["KnowledgeFirstResolver"]
+H5{"Can Freya Answer?"}
+H6{"Local Capability Available?"}
+RESULT["Freya Answer"]
 
- 1. **Wire Autonomy Loop** (P0)
-    - Connect SchedulerService → AutonomyEngine in `background_service_manager.py`
-    - Register EventBus subscribers for autonomy/diagnostics events
 
- 2. **Fix EventBus Subscriptions** (P0)
-    - Add subscribers in `app/autonomy/`, `app/diagnostics/`, `app/learning/`
-    - Ensure events flow to autonomy engine
+H --> H0
 
- 3. **Implement LLM Streaming** (P1)
-    - Update `CoreAgent.run()` to handle async generators
-    - Update all provider `generate()` to yield tokens
-    - Update CLI to render streaming output
 
- 4. **Upgrade Intent Routing** (P1)
-    - Replace keyword matching with embedding-based semantic routing
-    - Add fallback to LLM-based classification
+H5 -->|"Yes"| RESULT
 
- 5. **Add Capability Hot-Reload** (P1)
-    - Add `refresh()` to `CapabilityRegistry`
-    - Watch `app/capabilities/` for changes
-    - Expose CLI command for manual reload
 
- 6. **Consolidate Workflow Manager/Orchestrator** (P1)
-    - Merge into single `WorkflowOrchestrator`
-    - Remove `WorkflowManager` or make it a sub-component
+H5 -->|"No / Insufficient"| H6
+end
 
- 7. **Implement Learning Module Model Updates** (P2)
-    - Add fine-tuning/RLHF pipeline stub
-    - Connect to diagnostics feedback loop
 
- 8. **Add Diagnostics Alerting & Auto-Recovery** (P2)
-    - Define alert rules in `diagnostics_collector.py`
-    - Add notification hooks (log, webhook, CLI)
-    - Implement basic auto-recovery (restart service, clear cache)
 
- 9. **Add Conversation Summarization** (P2)
-    - Implement in `ContextManager`
-    - Trigger on context window threshold
+%% =========================================================
+%% 8. MODULAR CAPABILITY SYSTEM
+%% =========================================================
+subgraph CAPABILITY["8. MODULAR CAPABILITY SYSTEM"]
+direction TB
 
- 10. **Clean Up Legacy/Duplicated Code** (P3)
-     - Remove `WorkflowManager` or document its role
-     - Clarify `AgentManager` vs `CoreAgent`
-     - Unify capability interface
-     - Remove `legacy_*` folders
+
+M2["CapabilityRegistry"]
+H1["CapabilityRouter"]
+H2["Capability Handlers"]
+F["ToolManager"]
+
+
+M2 --> H1
+H1 --> H2
+H2 --> F
+end
+
+
+
+%% =========================================================
+%% 9. VERIFICATION LAYER
+%% =========================================================
+subgraph VERIFICATION["9. VERIFICATION LAYER"]
+direction TB
+
+
+V1["AnswerVerifier"]
+AR["AnswerRepairLoop"]
+SF1["AnswerSafeFailure"]
+LP["LearningPipeline"]
+
+
+V1 --> AR
+V1 --> SF1
+SF1 --> LP
+AR --> D2
+end
+
+
+
+%% =========================================================
+%% 10. WORKFLOW + EXECUTION
+%% =========================================================
+subgraph EXECUTION["10. WORKFLOW + EXECUTION"]
+direction TB
+
+
+M["WorkflowOrchestrator"]
+M1["SafetyGate"]
+
+
+I["ExecutionEngine"]
+I1["UnifiedPlanner"]
+I2["UnifiedExecutor"]
+I3["ExecutionVerifier"]
+I4["RepairLoop"]
+
+
+DONE["Task Complete"]
+SF2["ExecutionSafeFailure"]
+Q1["DiagnosticEngine"]
+
+
+M --> M1
+
+
+I --> I1
+I1 --> I2
+I2 --> I3
+
+
+I3 -->|"Passed"| DONE
+
+
+I3 -->|"Failed"| I4
+I4 -->|"Repair / Replan (Attempt < Max)"| I1
+I4 -->|"Retries Exhausted"| SF2
+SF2 -->|"Request Compensation"| M1
+SF2 -->|"Partial Failure Report"| J
+SF2 -->|"Log Failure Pattern"| Q1
+end
+
+
+
+%% =========================================================
+%% 11. LEARNING PIPELINE
+%% =========================================================
+subgraph LEARNING["11. LEARNING PIPELINE"]
+direction TB
+
+
+LP2["LearningPipeline"]
+LP1["Observe"]
+LP2a["Evaluate"]
+LP3["Extract Learning"]
+LP4["Validate Learning"]
+LP5{"Worth Remembering?"}
+
+
+TEMP["Discard / Keep Temporary"]
+
+
+LP2 --> LP1
+LP1 --> LP2a
+LP2a --> LP3
+LP3 --> LP4
+LP4 --> LP5
+
+
+LP5 -->|"No"| TEMP
+LP5 -->|"Yes"| E
+end
+
+
+
+%% =========================================================
+%% 12. AUTONOMY + OBSERVATION
+%% =========================================================
+subgraph AUTONOMY["12. AUTONOMY + OBSERVATION"]
+direction TB
+
+
+L["AutonomyManager"]
+
+
+L1["Watchdog"]
+L3["SelfInitiatedWorkManager"]
+L4["MaintenanceManager"]
+
+
+L --> L1
+L --> L3
+L --> L4
+end
+
+
+
+%% =========================================================
+%% 13. SAFE SELF-IMPROVEMENT
+%% =========================================================
+subgraph IMPROVEMENT["13. SAFE SELF-IMPROVEMENT"]
+direction TB
+
+
+Q1b["DiagnosticEngine"]
+Q2["SafeSelfImprovementEngine"]
+
+
+Q1b --> Q2
+end
+
+
+
+%% =========================================================
+%% 14. FUTURE EXTENSION PORTS
+%% =========================================================
+subgraph EXTENSIONS["14. FUTURE EXTENSION PORTS"]
+direction TB
+
+
+X["Future Capability / Feature"]
+
+
+X1["Callable Capability"]
+X2["Event / Observer"]
+X3["Background / Autonomous"]
+X4["Memory-Aware Feature"]
+
+
+X --> X1
+X --> X2
+X --> X3
+X --> X4
+end
+
+
+
+%% =========================================================
+%% CROSS-GROUP WIRING (COMPLETE & VALIDATED)
+%% =========================================================
+
+
+%% --- Bootstrap Sequence ---
+C -->|"1. Init Infrastructure"| EV
+C -->|"1. Init Infrastructure"| JB
+C -->|"1. Init Infrastructure"| OH
+C -->|"1. Init Infrastructure"| CHR
+C -->|"1. Init Infrastructure"| FW
+
+C -->|"2. Init LLM Stack"| D
+
+C -->|"3. Init Memory"| E
+
+C -->|"3b. Init Learning Pipeline"| LP2
+
+C -->|"3c. Init Answer Verifier (V1+AR+SF1)"| V1
+
+C -->|"4. Init Tool Manager"| F
+
+C -->|"5. Init Intelligence (G1+G2+G3)"| G
+
+C -->|"6. Init Capability Registry"| M2
+
+C -->|"7. Init Safety Gate"| M1
+
+C -->|"8. Init Unified Router (with KnowledgeFirstResolver)"| H
+
+C -->|"9. Init Execution Engine (Planner/Executor/Verifier/Repair)"| I
+
+C -->|"10. Init Conversation Control"| J
+
+C -->|"11. Init Agent Facade"| K
+
+C -.->|"12. Optional: Init Autonomy"| L
+C -.->|"13. Optional: Init Diagnostics"| Q1b
+C -.->|"14. Optional: Init Safe Self-Improvement"| Q2
+C -.->|"15. Optional: Init Orchestrator"| M
+
+
+%% --- Goal & Context wiring ---
+E2 -->|"Active Goals"| G3
+E2 -->|"Goal Context"| I1
+
+E3 -->|"Retrieved Knowledge"| G
+E3 -->|"Knowledge / Experience"| H5
+
+G -->|"Intent / Plan Hints"| I1
+G1 -->|"Reasoned Decisions"| I1
+G2 -->|"Confidence Score"| H5
+G3 -->|"Context Snapshot"| I1
+
+
+%% --- Shared Infrastructure wiring ---
+M -->|"Events / Commands"| EV
+M -->|"Schedule Background"| JB
+I -->|"Metrics / Traces"| OH
+
+EV -->|"System Events"| L1
+EV -->|"Learning Events"| LP2
+EV -->|"Autonomy Triggers"| L3
+EV -->|"Maintenance Triggers"| L4
+
+OH -->|"Metrics / Health"| L1
+OH -->|"Diagnostics Data"| Q1b
+OH -->|"Execution Metrics"| M
+
+L -->|"Background Jobs"| JB
+
+
+%% --- Knowledge-First Routing ---
+H0 -->|"1. Search Freya First"| E3
+H5 -->|"Yes, High Confidence"| RESULT
+H5 -->|"No / Insufficient"| H6
+
+H6 -->|"Yes"| H1
+H6 -->|"No"| D2
+
+
+%% --- LLM Fallback & Verification ---
+D2 -->|"Fallback Answer"| V1
+
+V1 -->|"Valid Answer"| RESULT
+V1 -->|"Learning Candidate"| LP2
+
+AR -->|"Retry w/ Corrective Context (Attempt < Max)"| D2
+SF1 -->|"Low-Confidence Disclosure"| RESULT
+SF1 -->|"Log Knowledge Gap"| LP2
+
+
+%% --- Learning to Memory ---
+LP5 -->|"Yes, Store"| E
+LP2 -->|"Learning Events"| EV
+
+
+%% --- Planner asks Freya knowledge first ---
+I1 -->|"Knowledge/Capability Query"| H
+
+
+%% --- Execution uses Capability System ---
+I2 -->|"Proposed Action"| M1
+M1 -->|"Approved Action"| H1
+H1 -->|"Dispatch"| H2
+H2 -->|"Execute Tool"| F
+F -->|"Tool Result"| I2
+
+
+%% --- Execution Verification & Repair ---
+I3 -->|"Passed"| DONE
+I3 -->|"Failed / Partial"| I4
+I4 -->|"Repair / Replan (Attempt < Max)"| I1
+I4 -->|"Retries Exhausted"| SF2
+SF2 -->|"Request Compensation"| M1
+SF2 -->|"Partial Failure Report"| J
+SF2 -->|"Log Failure Pattern"| Q1b
+
+
+%% --- Conversation Flow Wiring ---
+J -->|"Question / Knowledge Request"| H
+J -->|"Task / Action Request"| M
+J -->|"Context / Memory Read"| E
+J -->|"Intelligence Context"| G
+J -->|"Chat Activity"| D3
+J -->|"Goal Updates"| E2
+
+RESULT -->|"Final Answer"| J
+DONE -->|"Task Result"| J
+
+
+%% --- Autonomy + Observation Wiring ---
+L3 -->|"Read Goals"| E2
+L3 -->|"Autonomous Work Request"| M
+L4 -->|"Maintenance Work Request"| M
+
+L1 -->|"Observations / Anomalies"| LP2
+L1 -->|"Health Events"| EV
+
+
+%% --- Safe Self-Improvement Wiring ---
+LP2 -->|"Improvement Candidate"| Q2
+Q2 -->|"Approved Improvement Proposal"| M
+Q1b -->|"Failure Patterns"| Q2
+Q1b -->|"Diagnostics Data"| Q2
+
+
+%% --- Future Extension Ports Wiring ---
+X1 -.->|"Register Capability"| M2
+X2 -.->|"Publish / Subscribe"| EV
+X3 -.->|"Schedule Background"| JB
+X4 -.->|"Stable Memory API"| E
+
+
+%% =========================================================
+%% STYLING
+%% =========================================================
+
+
+classDef bootstrap fill:#263238,color:#ffffff,stroke:#546e7a,stroke-width:2px;
+classDef interface fill:#6a1b9a,color:#ffffff,stroke:#ab47bc;
+classDef memory fill:#00695c,color:#ffffff,stroke:#26a69a,stroke-width:2px;
+classDef intelligence fill:#1565c0,color:#ffffff,stroke:#42a5f5;
+classDef routing fill:#00838f,color:#ffffff,stroke:#26c6da;
+classDef capability fill:#0277bd,color:#ffffff,stroke:#29b6f6;
+classDef llm fill:#4527a0,color:#ffffff,stroke:#7e57c2;
+classDef learning fill:#558b2f,color:#ffffff,stroke:#9ccc65;
+classDef execution fill:#2e7d32,color:#ffffff,stroke:#66bb6a;
+classDef workflow fill:#ef6c00,color:#ffffff,stroke:#ffa726;
+classDef safety fill:#c62828,color:#ffffff,stroke:#ef5350,stroke-width:3px;
+classDef infrastructure fill:#37474f,color:#ffffff,stroke:#78909c;
+classDef improvement fill:#ad1457,color:#ffffff,stroke:#ec407a;
+classDef extension fill:#455a64,color:#ffffff,stroke:#90a4ae,stroke-dasharray:5 5;
+classDef verification fill:#b71c1c,color:#ffffff,stroke:#ef5350,stroke-width:2px;
+classDef optional fill:#1a237e,color:#ffffff,stroke:#3f51b5,stroke-dasharray:5 5;
+
+
+class A,B,C bootstrap;
+class K,J interface;
+class EV,JB,OH,CHR,FW infrastructure;
+class D,D1,D2,D3 llm;
+class E,E1,E2,E3,E4,E5,E6,CN,FG memory;
+class G,G1,G2,G3 intelligence;
+class H,H0,H5,H6,RESULT routing;
+class M2,H1,H2,F capability;
+class V1,AR,SF1 verification;
+class LP2,LP1,LP2a,LP3,LP4,LP5,TEMP learning;
+class I,I1,I2,I3,I4,DONE execution;
+class M,L,L1,L3,L4 workflow;
+class M1,SF2,Q1b safety;
+class Q1b,Q2 improvement;
+class X,X1,X2,X3,X4 extension;
+class L,C,D,D2,E,E3,G,G2,H,H0,H1,I,I1,I2,I3,I4,J,K,M,M1,M2,V1,LP2,LP5,Q1b,Q2 optional;
+```
+
+---
+
+## Architecture Summary
+
+| Layer | Key Components | Purpose |
+|-------|---------------|---------|
+| **1. Bootstrap** | `main.py` → `FreyaApp` → `SystemInitializer` | Thin launcher; single-pass construction of all subsystems |
+| **2. Public Interface** | `AgentFacadeImpl`, `ConversationControlHandler` | Thin façade & conversational control (stop/pause/undo/status) |
+| **3. Shared Infrastructure** | `EventBus`, `BackgroundJobService`, `ObservabilityHub`, `ConfigHotReload`, `FileWatcher` | Cross-cutting services; no deps, initialized first |
+| **4. LLM Stack** | `LLMStack`, `PriorityLLMProvider`, `Ollama`, `ChatActivityProvider` | Local LLM with priority queue; chat-aware yielding |
+| **5. Memory System** | `MemoryCoordinator`, `UnifiedRetrieval`, 7 memory modules, `ConsolidationEngine`, `ForgettingEngine` | Single write path; transactional; cache invalidation |
+| **6. Intelligence Engine** | `Intelligence` (G1/G2/G3) | Context eval, confidence/answerability, goal awareness |
+| **7. Knowledge-First Routing** | `UnifiedRouter` + `KnowledgeFirstResolver` | Search Freya first → capability → LLM fallback |
+| **8. Modular Capability System** | `CapabilityRegistry`, `CapabilityRouter`, Handlers, `ToolManager` | Extensible capabilities; tools execute via ToolManager |
+| **9. Verification Layer** | `AnswerVerifier`, `AnswerRepairLoop`, `AnswerSafeFailure` | LLM fallback verification with repair & low-confidence disclosure |
+| **10. Workflow + Execution** | `WorkflowOrchestrator`, `SafetyGate`, `ExecutionEngine` (Planner/Executor/Verifier/Repair) | Plan→Execute→Verify→Repair loop with safety gates |
+| **11. Learning Pipeline** | `LearningPipeline` (Observe→Evaluate→Extract→Validate→Store) | Autonomous learning from execution outcomes |
+| **12. Autonomy + Observation** | `AutonomyManager` (Watchdog, SelfInitiatedWork, Maintenance) | Long-running autonomous operation |
+| **13. Safe Self-Improvement** | `DiagnosticEngine`, `SafeSelfImprovementEngine` | Diagnostics → approved proposals → orchestrated improvements |
+| **14. Future Extension Ports** | Capability, Event, Background, Memory-Aware interfaces | Stable ports for future features |
+
+---
+
+## Initialization Order (from `SystemInitializer.initialize()`)
+
+1. **Infrastructure** — `EventBus`, `BackgroundJobService`, `ObservabilityHub`, `ConfigHotReload`, `FileWatcher`
+2. **LLM Stack** — `LLMStack` (PriorityLLMProvider + ChatActivityProvider)
+3. **Memory Coordinator** — all 7 memory modules + UnifiedRetrieval
+4. **Learning Pipeline** — depends on MemoryCoordinator + EventBus
+5. **Answer Verifier** — depends on LearningPipeline + PriorityLLMProvider
+6. **Tool Manager** — workspace-scoped tool execution
+7. **Intelligence** — depends on UnifiedRetrieval, GoalStorage, ConversationMemory
+8. **Capability Registry** — registers built-in capabilities
+9. **Safety Gate** — required for ExecutionEngine/Orchestrator
+10. **Unified Router** — with KnowledgeFirstResolver (memory, tools, LLM, chat_activity, unified_retrieval, intelligence, llm_stack)
+11. **Execution Engine** — router, tools, memory, LLM, chat_activity, safety_gate
+12. **Conversation Control** — executor, plan_manager, conversation_memory
+13. **Agent Facade** — composes router, execution, control, chat_activity, priority_llm, memory, answer_verifier
+14. **Optional: Autonomy Manager** — executor, router, memory, chat_activity, priority_llm, event_bus, job_service
+15. **Optional: Diagnostic Engine** — workspace, event_bus
+16. **Optional: Safe Self-Improvement Engine** — event_bus, workspace
+17. **Optional: Workflow Orchestrator** — capability_registry, router, executor, safety_gate, chat_activity, event_bus, job_service
+
+---
+
+## Key Architectural Decisions (from codebase)
+
+1. **Single-Pass Initialization** — `SystemInitializer` breaks circular deps by composing in strict order; no component holds `FreyaAgent` reference
+2. **Protocol-Based Dependencies** — Cross-component deps use protocols (`MemoryProvider`, `ToolProvider`, `RouterProtocol`, `ExecutorProvider`)
+3. **Knowledge-First Routing** — `KnowledgeFirstResolver` searches Freya memory first; only falls back to capabilities/LLM when insufficient
+4. **Unified Router** — Single `route()` call returns complete decision (control/capability/direct/engineering/clarification)
+5. **Verification Layer** — `AnswerVerifier` wraps LLM fallback with repair loop (`AnswerRepairLoop`) and safe failure (`AnswerSafeFailure`)
+6. **Execution Repair Loop** — `ExecutionEngine` has Planner→Executor→Verifier→RepairLoop with configurable max retries
+7. **Single Write Path** — `MemoryCoordinator` provides transactional writes with lock; all mutations emit events
+8. **Chat-Aware Yielding** — `BackgroundJobService` uses `ChatActivityProvider` for cooperative yielding during active chat
+9. **Optional Subsystems** — Autonomy, Diagnostics, Self-Improvement, Orchestrator gated by `SystemConfig` flags
+10. **Future-Proof Extension Ports** — Dashed interfaces for Capability/Event/Background/Memory registration

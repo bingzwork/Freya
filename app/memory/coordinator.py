@@ -126,7 +126,7 @@ class MemoryCoordinator:
 
     def retrieve_for_planning(self, query: str) -> str:
         """Retrieve relevant context for planning."""
-        return self._retrieval.retrieve_for_planning(query)
+        return self._retrieval.retrieve_for_planner(query)
 
     def retrieve_for_execution(self, query: str) -> str:
         """Retrieve relevant context for execution."""

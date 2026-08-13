@@ -65,6 +65,70 @@ class GoalStorage(
         # Initialize duration estimator for goal timing estimates
         self._duration_estimator = DurationEstimator()
 
+    def get_active_goal_context(self) -> Optional[Dict[str, Any]]:
+        """Return the active goal with full context for Intelligence/Answerability.
+        
+        Returns a dict with: goal_id, name, description, priority, status, 
+        progress (percentage), is_blocked, blocking_reasons, child_goal_ids,
+        or None if no active goal is set.
+        """
+        with self._lock:
+            active_goal = self.active_goal()
+            if active_goal is None:
+                return None
+            
+            # Get progress from hierarchy
+            progress = self.progress(active_goal.id)
+            
+            # Get blocking info from analytics
+            is_blocked = getattr(self, 'is_goal_blocked', lambda _: False)(active_goal.id)
+            blocking_reasons = []
+            if is_blocked:
+                stall_info = self._persistence._goals.get(active_goal.id)
+                if stall_info:
+                    blocking_reasons = stall_info.metadata.get('blocking_reasons', [])
+            
+            # Get child goals
+            child_ids = self._children_ids_of(active_goal.id)
+            
+            return {
+                "goal_id": active_goal.id,
+                "name": active_goal.name,
+                "description": active_goal.description,
+                "priority": active_goal.priority,
+                "status": active_goal.status,
+                "progress": {
+                    "percentage": progress.get("percentage", 0.0),
+                    "total_children": progress.get("total_children", 0),
+                    "completed_children": progress.get("completed_children", 0),
+                },
+                "is_blocked": is_blocked,
+                "blocking_reasons": blocking_reasons,
+                "child_goal_ids": child_ids,
+                "created_at": active_goal.created_at,
+                "updated_at": active_goal.updated_at,
+            }
+
+    def get_next_eligible_goals(self, limit: int = 5) -> List[Dict[str, Any]]:
+        """Return next eligible goals from the scheduler queue as dicts.
+        
+        Returns a list of dicts with: goal_id, name, description, priority, 
+        is_blocked - suitable for Intelligence.get_goal_context().
+        """
+        with self._lock:
+            eligible = [g for g in self._goals.values() if self._is_eligible(g)]
+            eligible.sort(key=lambda g: self._priority_rank(g.priority))
+            return [
+                {
+                    "goal_id": g.id,
+                    "name": g.name,
+                    "description": g.description,
+                    "priority": g.priority,
+                    "is_blocked": self.is_blocked(g.id),
+                }
+                for g in eligible[:limit]
+            ]
+
     def _infer_task_category(self, goal: Goal) -> TaskCategory:
         """Infer planner TaskCategory from goal properties."""
         text = f"{goal.name} {goal.description}".lower()

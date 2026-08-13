@@ -24,12 +24,8 @@ from app.core.observability import ObservabilityHub, ComponentInfo, ComponentTyp
 from app.core.config_hot_reload import ConfigHotReload, create_config_hot_reload
 from app.core.file_watcher import FileWatcher
 
-# LLM + Priority (depends on infra)
-from app.core.llm import LLM
-from app.core.priority_llm import PriorityLLMProvider
-
-# Chat Activity Provider (depends on priority_llm)
-from app.core.chat_activity import FreyaChatActivityProvider
+# LLM Stack (replaces LLM + Priority + ChatActivity)
+from app.core.llm_stack import LLMStack
 
 # Memory Coordinator (depends on workspace)
 from app.memory.coordinator import MemoryCoordinator, create_memory_coordinator
@@ -37,10 +33,17 @@ from app.memory.coordinator import MemoryCoordinator, create_memory_coordinator
 # Tool Manager (depends on workspace)
 from app.core.tool_manager import ToolManager
 
-# Unified Router (depends on memory, tools, priority_llm)
+# Intelligence (G1, G2, G3) - Knowledge-first routing
+from app.intelligence.intelligence import Intelligence, create_intelligence
+from app.memory.unified_retrieval import UnifiedRetrieval
+
+# Knowledge-First Resolver
+from app.routing.knowledge_first_resolver import KnowledgeFirstResolver
+
+# Unified Router (depends on memory, tools, priority_llm, chat_activity, unified_retrieval, intelligence)
 from app.routing.unified_router import UnifiedRouter
 
-# Execution Engine (depends on router, tools, memory, priority_llm)
+# Execution Engine (depends on router, tools, memory, priority_llm, chat_activity)
 from app.execution.engine import ExecutionEngine
 
 # Conversation Control (depends on execution_engine for callbacks)
@@ -57,14 +60,17 @@ from app.orchestrator.workflow_orchestrator import WorkflowOrchestrator
 from app.orchestrator.capability_registry import CapabilityRegistry
 from app.orchestrator.safety_gate import SafetyGate
 
-# Intelligence components (depend on workspace, built lazily)
-from app.core.project_index import ProjectIndex
-from app.core.symbol_index import SymbolIndex
-from app.intelligence.file_locator import FileLocator
-from app.intelligence.lexical_search import LexicalSearch
-from app.intelligence.dependency_graph import DependencyGraph
-from app.intelligence.context_builder import ContextBuilder
-from app.retrieval.enhanced_retriever import EnhancedRetriever
+# Diagnostics (Q1)
+from app.diagnostics.diagnostic_engine import DiagnosticEngine, DiagnosticConfig
+
+# SafeSelfImprovement (Q2)
+from app.safe_self_improvement.self_improvement import create_self_improvement_engine, SafeSelfImprovementConfig
+
+# LearningPipeline
+from app.learning.pipeline import create_learning_pipeline
+
+# AnswerVerifier (V1) with AnswerRepairLoop (AR) and AnswerSafeFailure (SF1)
+from app.verification.answer_verifier import AnswerVerifier
 
 from app.core.logger import logger
 
@@ -73,18 +79,20 @@ class SystemInitializer:
     """
     Single-pass construction of all Freya subsystems.
 
-    Order of initialization:
+    Order of initialization per TARGET_ARCHITECTURE.md Section 15:
     1. Infrastructure (EventBus, JobService, Observability, ConfigHotReload, FileWatcher)
-    2. LLM + Priority (base LLM, PriorityLLMProvider)
-    3. Chat Activity Provider (FreyaChatActivityProvider)
-    4. Memory Coordinator
-    5. Tool Manager
-    6. Unified Router
-    7. Execution Engine
-    8. Conversation Control Handler
-    9. Agent Facade
-    10. Optional: Autonomy Manager
-    11. Optional: Workflow Orchestrator
+    2. LLM Stack (PriorityLLMProvider + ChatActivityProvider)
+    3. Memory Coordinator
+    4. Tool Manager
+    5. Intelligence (G1, G2, G3)
+    6. Capability Registry
+    7. Safety Gate
+    8. Unified Router (with KnowledgeFirstResolver)
+    9. Execution Engine
+    10. Conversation Control Handler
+    11. Agent Facade
+    12. Optional: Autonomy Manager
+    13. Optional: Workflow Orchestrator
     """
 
     def __init__(self, workspace: Path, config: Optional[SystemConfig] = None):
@@ -132,89 +140,92 @@ class SystemInitializer:
         logger.debug("[SystemInitializer] FileWatcher started")
 
         # ------------------------------------------------------------------
-        # 2. LLM + Priority (depends on infra)
+        # 2. LLM Stack (replaces LLM + Priority + ChatActivity)
         # ------------------------------------------------------------------
-        base_llm = LLM()
-        priority_llm = PriorityLLMProvider(base_llm)
+        llm_stack = LLMStack()
+        priority_llm = llm_stack.priority_llm
+        chat_activity = llm_stack.chat_activity
         # Replace global priority LLM so existing code works
         from app.core.priority_llm import set_priority_llm
         set_priority_llm(priority_llm)
-        logger.debug("[SystemInitializer] PriorityLLMProvider created")
-
-        # ------------------------------------------------------------------
-        # 3. Chat Activity Provider (depends on priority_llm)
-        # ------------------------------------------------------------------
-        chat_activity = FreyaChatActivityProvider(priority_llm)
         # Set chat activity provider on job service for chat-aware yielding
         job_service.set_chat_activity_provider(chat_activity)
-        logger.debug("[SystemInitializer] ChatActivityProvider created and linked")
+        logger.debug("[SystemInitializer] LLMStack created (PriorityLLM + ChatActivity)")
 
         # ------------------------------------------------------------------
-        # 4. Memory Coordinator (depends on workspace, event_bus)
+        # 3. Memory Coordinator (depends on workspace, event_bus)
         # ------------------------------------------------------------------
         memory_coordinator = create_memory_coordinator(self.workspace, event_bus)
         logger.debug("[SystemInitializer] MemoryCoordinator created")
 
         # ------------------------------------------------------------------
-        # 5. Tool Manager (depends on workspace)
+        # 3b. Learning Pipeline (depends on memory_coordinator, event_bus)
+        # ------------------------------------------------------------------
+        learning_pipeline = create_learning_pipeline(
+            memory_coordinator=memory_coordinator,
+            event_bus=event_bus,
+        )
+        logger.debug("[SystemInitializer] LearningPipeline created")
+
+        # ------------------------------------------------------------------
+        # 3c. Answer Verifier (V1) with Repair Loop (AR) - depends on learning_pipeline, priority_llm
+        # ------------------------------------------------------------------
+        answer_verifier = AnswerVerifier(
+            learning_pipeline=learning_pipeline,
+            priority_llm=priority_llm,
+        )
+        logger.debug("[SystemInitializer] AnswerVerifier created with AnswerRepairLoop")
+
+        # ------------------------------------------------------------------
+        # 4. Tool Manager (depends on workspace)
         # ------------------------------------------------------------------
         tool_manager = ToolManager(str(self.workspace))
         logger.debug("[SystemInitializer] ToolManager created")
 
         # ------------------------------------------------------------------
-        # 6. Intelligence Components (depend on workspace)
+        # 5. Intelligence (G1, G2, G3) - Knowledge-First Routing
+        #    Depends on memory_coordinator (unified_retrieval, goal_storage, conversation_memory)
         # ------------------------------------------------------------------
-        project_index = ProjectIndex(str(self.workspace))
-        project_index.build()
-        logger.debug("[SystemInitializer] ProjectIndex built")
-
-        symbol_index = SymbolIndex(str(self.workspace))
-        symbol_index.build()
-        logger.debug("[SystemInitializer] SymbolIndex built")
-
-        file_locator = FileLocator(symbol_index)
-        logger.debug("[SystemInitializer] FileLocator created")
-
-        lexical_search = LexicalSearch(symbol_index)
-        logger.debug("[SystemInitializer] LexicalSearch created")
-
-        dependency_graph = DependencyGraph(symbol_index)
-        dependency_graph.build()
-        logger.debug("[SystemInitializer] DependencyGraph built")
-
-        context_builder = ContextBuilder(symbol_index, dependency_graph)
-        logger.debug("[SystemInitializer] ContextBuilder created")
-
-        try:
-            retriever = EnhancedRetriever(symbol_index, enable_semantic=False)
-        except Exception:
-            from app.rag import SimpleRetriever
-            retriever = SimpleRetriever(symbol_index)
-        logger.debug("[SystemInitializer] Retriever created")
-
-        intelligence = IntelligenceBundle(
-            project_index=project_index,
-            symbol_index=symbol_index,
-            file_locator=file_locator,
-            lexical_search=lexical_search,
-            dependency_graph=dependency_graph,
-            context_builder=context_builder,
-            retriever=retriever,
+        intelligence = create_intelligence(
+            unified_retrieval=memory_coordinator.unified_retrieval,
+            goal_storage=memory_coordinator.goal_storage,
+            conversation_memory=memory_coordinator.conversation_memory,
         )
+        logger.debug("[SystemInitializer] Intelligence created")
 
         # ------------------------------------------------------------------
-        # 7. Unified Router (depends on memory, tools, priority_llm, chat_activity)
+        # 6. Capability Registry (required for KnowledgeFirstResolver)
+        # ------------------------------------------------------------------
+        capability_registry = CapabilityRegistry()
+        # Register built-in capabilities with the registry
+        from app.orchestrator.capabilities import create_all_capabilities
+        for cap in create_all_capabilities():
+            capability_registry.register(cap)
+        capability_registry.start()
+        logger.debug("[SystemInitializer] CapabilityRegistry created and started")
+
+        # ------------------------------------------------------------------
+        # 7. Safety Gate (required for ExecutionEngine/WorkflowOrchestrator)
+        # ------------------------------------------------------------------
+        safety_gate = SafetyGate()
+        logger.debug("[SystemInitializer] SafetyGate created")
+
+        # ------------------------------------------------------------------
+        # 8. Unified Router (depends on memory, tools, priority_llm, chat_activity, unified_retrieval, intelligence, llm_stack)
         # ------------------------------------------------------------------
         unified_router = UnifiedRouter(
             memory=memory_coordinator,
             tools=tool_manager,
             llm=priority_llm,
             chat_activity=chat_activity,
+            unified_retrieval=memory_coordinator.unified_retrieval,
+            intelligence=intelligence,
+            llm_stack=llm_stack,
         )
-        logger.debug("[SystemInitializer] UnifiedRouter created")
+        logger.debug("[SystemInitializer] UnifiedRouter created with KnowledgeFirstResolver")
 
         # ------------------------------------------------------------------
-        # 8. Execution Engine (depends on router, tools, memory, priority_llm, chat_activity)
+        # 9. Execution Engine (depends on router, tools, memory, priority_llm, chat_activity, safety_gate)
         # ------------------------------------------------------------------
         execution_engine = ExecutionEngine(
             router=unified_router,
@@ -222,11 +233,12 @@ class SystemInitializer:
             memory=memory_coordinator,
             llm=priority_llm,
             chat_activity=chat_activity,
+            safety_gate=safety_gate,
         )
         logger.debug("[SystemInitializer] ExecutionEngine created")
 
         # ------------------------------------------------------------------
-        # 9. Conversation Control (depends on execution_engine, plan_manager, memory)
+        # 10. Conversation Control (depends on execution_engine, plan_manager, memory)
         # ------------------------------------------------------------------
         conversation_control = ConversationControlHandler(
             executor=execution_engine,
@@ -237,7 +249,7 @@ class SystemInitializer:
         logger.debug("[SystemInitializer] ConversationControlHandler created")
 
         # ------------------------------------------------------------------
-        # 10. Agent Facade (composes all above)
+        # 11. Agent Facade (composes all above)
         # ------------------------------------------------------------------
         facade = AgentFacadeImpl(
             router=unified_router,
@@ -246,11 +258,12 @@ class SystemInitializer:
             chat_activity=chat_activity,
             priority_llm=priority_llm,
             memory=memory_coordinator,
+            answer_verifier=answer_verifier,
         )
         logger.debug("[SystemInitializer] AgentFacadeImpl created")
 
         # ------------------------------------------------------------------
-        # 11. Optional: Autonomy (depends on execution_engine, router, memory, chat_activity, priority_llm, event_bus, job_service)
+        # 12. Optional: Autonomy (depends on execution_engine, router, memory, chat_activity, priority_llm, event_bus, job_service)
         # ------------------------------------------------------------------
         autonomy = None
         if self.config.enable_autonomy:
@@ -269,13 +282,32 @@ class SystemInitializer:
             logger.info("[SystemInitializer] AutonomyManager started")
 
         # ------------------------------------------------------------------
-        # 12. Optional: Orchestrator (depends on capability_registry, router, executor, safety_gate, chat_activity, event_bus, job_service)
+        # 13. Diagnostics (Q1) - depends on workspace, event_bus
+        # ------------------------------------------------------------------
+        diagnostic_engine = None
+        if self.config.enable_diagnostics:
+            diagnostic_config = DiagnosticConfig()
+            diagnostic_engine = DiagnosticEngine(
+                workspace=str(self.workspace),
+                config=diagnostic_config,
+                event_bus=event_bus,
+            )
+            logger.debug("[SystemInitializer] DiagnosticEngine created")
+
+        # ------------------------------------------------------------------
+        # 14. SafeSelfImprovement (Q2) - depends on event_bus, workspace
+        # ------------------------------------------------------------------
+        self_improvement = None
+        if self.config.enable_self_improvement:
+            ssi_config = SafeSelfImprovementConfig()
+            self_improvement = create_self_improvement_engine(config=ssi_config)
+            logger.debug("[SystemInitializer] SafeSelfImprovementEngine created")
+
+        # ------------------------------------------------------------------
+        # 15. Optional: Orchestrator (depends on capability_registry, router, executor, safety_gate, chat_activity, event_bus, job_service)
         # ------------------------------------------------------------------
         orchestrator = None
         if self.config.enable_orchestrator:
-            capability_registry = CapabilityRegistry()
-            safety_gate = SafetyGate()
-
             orchestrator = WorkflowOrchestrator(
                 capability_registry=capability_registry,
                 router=unified_router,  # Shared instance
@@ -310,14 +342,20 @@ class SystemInitializer:
                     "event_bus",
                     "job_service",
                     "observability",
-                    "priority_llm",
+                    "llm_stack",
                     "chat_activity",
                     "memory_coordinator",
+                    "learning_pipeline",
                     "tool_manager",
+                    "intelligence",
+                    "capability_registry",
+                    "safety_gate",
                     "unified_router",
                     "execution_engine",
                     "conversation_control",
                     "agent_facade",
+                    "diagnostics",
+                    "self_improvement",
                 ] + (["autonomy"] if autonomy else []) + (["orchestrator"] if orchestrator else []),
                 "elapsed_seconds": elapsed,
             },
@@ -335,6 +373,9 @@ class SystemInitializer:
             orchestrator=orchestrator,
             infra=infra,
             intelligence=intelligence,
+            learning_pipeline=learning_pipeline,
+            diagnostics=diagnostic_engine,
+            self_improvement=self_improvement,
         )
 
     def shutdown(self, system: InitializedSystem) -> None:

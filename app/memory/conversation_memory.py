@@ -154,9 +154,20 @@ class ConversationMemory:
             except Exception:
                 self.embedding_model = None
 
+        # Initialize core attributes
+        self._lock = threading.RLock()
+        self._turns: List[ConversationTurn] = []
+        self._entity_index: Dict[str, List[Tuple[int, str]]] = {}  # entity -> [(turn_index, entity_value)]
+        self._summaries: List[ConversationSummary] = []
+        self._summary_storage_path = self.storage_path.parent / "conversation_summaries.json"
+
         # Initialize vector database if available and not skipped
         if not _skip_vector_db_init and VECTOR_DB_AVAILABLE:
             self._initialize_vector_db()
+
+        if not self._skip_auto_load:
+            self._load()
+            self._load_summaries()
 
     def _initialize_vector_db(self) -> None:
         """Initialize the vector database for cross-session conversation search."""
@@ -172,15 +183,6 @@ class ConversationMemory:
             # Log error but don't fail initialization
             print(f"Warning: Failed to initialize vector database for conversation search: {e}")
             self._vector_db = None
-
-        self._lock = threading.RLock()
-        self._turns: List[ConversationTurn] = []
-        self._entity_index: Dict[str, List[Tuple[int, str]]] = {}  # entity -> [(turn_index, entity_value)]
-        self._summaries: List[ConversationSummary] = []
-        self._summary_storage_path = self.storage_path.parent / "conversation_summaries.json"
-        if not self._skip_auto_load:
-            self._load()
-            self._load_summaries()
 
     def _ensure_storage_dir(self) -> None:
         """Ensure the storage directory exists."""

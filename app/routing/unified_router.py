@@ -21,6 +21,10 @@ from app.conversational_control import ControlCommand
 from app.core.protocols import MemoryProvider, ToolProvider, RouterProtocol
 from app.core.priority_llm import PriorityLLMProvider
 from app.core.protocols import ChatActivityProvider
+from app.routing.knowledge_first_resolver import KnowledgeFirstResolver, ResolutionResult
+from app.memory.unified_retrieval import UnifiedRetrieval
+from app.intelligence.intelligence import Intelligence
+from app.core.llm_stack import LLMStack
 from app.core.logger import logger
 
 
@@ -71,6 +75,7 @@ class ControlCommandParser:
 class UnifiedRouter:
     """
     Single route() call returns complete routing decision; no multi-stage classification in callers.
+    Delegates to KnowledgeFirstResolver for knowledge-first routing.
     """
 
     def __init__(
@@ -79,17 +84,30 @@ class UnifiedRouter:
         tools: ToolProvider,
         llm: PriorityLLMProvider,
         chat_activity: ChatActivityProvider,
+        unified_retrieval: UnifiedRetrieval = None,
+        intelligence: Intelligence = None,
+        llm_stack: LLMStack = None,
     ):
         self._memory = memory
         self._tools = tools
         self._llm = llm
         self._chat_activity = chat_activity
 
-        # Reuse existing logic
+        # Reuse existing logic for control command parsing and capability registration
         from app.intent.classifier import IntentClassifier
         self._intent_classifier = IntentClassifier()
         self._capability_router = CapabilityRouter()
         self._control_parser = ControlCommandParser()
+
+        # KnowledgeFirstResolver for knowledge-first routing (set later in SystemInitializer)
+        self._knowledge_first_resolver: Optional[KnowledgeFirstResolver] = None
+        if unified_retrieval and intelligence and llm_stack:
+            self._knowledge_first_resolver = KnowledgeFirstResolver(
+                unified_retrieval=unified_retrieval,
+                intelligence=intelligence,
+                capability_router=self._capability_router,
+                llm_stack=llm_stack,
+            )
 
         # Register built-in capabilities
         self._register_builtin_capabilities()
@@ -154,6 +172,7 @@ class UnifiedRouter:
         Route user input to the appropriate handler.
 
         Returns a complete routing decision in a single call.
+        Uses KnowledgeFirstResolver for knowledge-first routing when available.
         """
         # 1. Check conversational control FIRST (short-circuits everything)
         control_cmd = self._control_parser.parse(user_input)
@@ -166,10 +185,51 @@ class UnifiedRouter:
                 control_command=control_cmd,
             )
 
-        # 2. Classify intent
+        # 2. Use KnowledgeFirstResolver if available (knowledge-first routing)
+        if self._knowledge_first_resolver:
+            try:
+                from app.intent import classify_intent
+                classification = self._intent_classifier.classify(user_input, context)
+                resolution = self._knowledge_first_resolver.resolve(
+                    query=user_input,
+                    context=context,
+                    intent_type=classification.intent,
+                )
+                
+                # Convert ResolutionResult to RouteResult
+                if resolution.action == "answer":
+                    return RouteResult(
+                        intent=IntentType.QUESTION,
+                        confidence=resolution.confidence,
+                        reason=f"Knowledge-first answer: {', '.join(resolution.sources)}",
+                        is_direct_answer=True,
+                    )
+                elif resolution.action == "capability":
+                    return RouteResult(
+                        intent=IntentType.QUESTION,
+                        confidence=resolution.capability_confidence,
+                        reason=f"Capability: {resolution.capability_name}",
+                        is_direct_answer=True,
+                        capability_name=resolution.capability_name,
+                        capability_confidence=resolution.capability_confidence,
+                    )
+                elif resolution.action == "llm_fallback":
+                    # For LLM fallback, we still need to let the facade handle it
+                    # Return as engineering task so facade uses LLM
+                    return RouteResult(
+                        intent=IntentType.QUESTION,
+                        confidence=resolution.confidence,
+                        reason="LLM fallback required",
+                        is_engineering=True,
+                    )
+            except Exception as e:
+                logger.warning(f"KnowledgeFirstResolver failed, falling back to legacy routing: {e}")
+                # Fall through to legacy routing
+
+        # 3. Legacy routing (fallback when KnowledgeFirstResolver not available)
         classification = self._intent_classifier.classify(user_input, context)
 
-        # 3. Check capability match for SYSTEM_STATUS and other direct routes
+        # Check capability match for SYSTEM_STATUS and other direct routes
         if classification.intent in (IntentType.SYSTEM_STATUS, IntentType.CHAT, IntentType.QUESTION):
             cap_match = self._capability_router.find_matching(user_input, classification.intent.value)
             if cap_match:
@@ -183,7 +243,7 @@ class UnifiedRouter:
                     capability_confidence=best_conf,
                 )
 
-        # 4. Check clarification thresholds
+        # Check clarification thresholds
         if classification.is_ambiguous or getattr(classification, 'should_clarify_engineering', False):
             return RouteResult(
                 intent=classification.intent,
@@ -192,7 +252,7 @@ class UnifiedRouter:
                 is_clarification=True,
             )
 
-        # 5. Direct answer for non-engineering
+        # Direct answer for non-engineering
         if classification.should_answer_directly:
             return RouteResult(
                 intent=classification.intent,
@@ -201,7 +261,7 @@ class UnifiedRouter:
                 is_direct_answer=True,
             )
 
-        # 6. Engineering task
+        # Engineering task
         return RouteResult(
             intent=classification.intent,
             confidence=classification.confidence,

@@ -113,6 +113,8 @@ class SystemConfig:
         self,
         enable_autonomy: bool = True,
         enable_orchestrator: bool = True,
+        enable_diagnostics: bool = True,
+        enable_self_improvement: bool = True,
         enable_file_watcher: bool = True,
         enable_config_hot_reload: bool = True,
         enable_observability: bool = True,
@@ -120,6 +122,8 @@ class SystemConfig:
     ):
         self.enable_autonomy = enable_autonomy
         self.enable_orchestrator = enable_orchestrator
+        self.enable_diagnostics = enable_diagnostics
+        self.enable_self_improvement = enable_self_improvement
         self.enable_file_watcher = enable_file_watcher
         self.enable_config_hot_reload = enable_config_hot_reload
         self.enable_observability = enable_observability
@@ -157,6 +161,9 @@ class InitializedSystem:
         orchestrator: Optional[Any] = None,
         infra: Optional[InfrastructureBundle] = None,
         intelligence: Optional[IntelligenceBundle] = None,
+        learning_pipeline: Optional[Any] = None,
+        diagnostics: Optional[Any] = None,
+        self_improvement: Optional[Any] = None,
     ):
         self.facade = facade
         self.chat_activity = chat_activity
@@ -168,3 +175,6 @@ class InitializedSystem:
         self.orchestrator = orchestrator
         self.infra = infra
         self.intelligence = intelligence
+        self.learning_pipeline = learning_pipeline
+        self.diagnostics = diagnostics
+        self.self_improvement = self_improvement

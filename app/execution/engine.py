@@ -65,6 +65,7 @@ class UnifiedExecutor:
         llm: PriorityLLMProvider,
         verification: VerificationRunner,
         repair: RepairLoop,
+        safety_gate=None,  # SafetyGate for operation validation
     ):
         self._planner = planner
         self._tools = tools
@@ -72,6 +73,7 @@ class UnifiedExecutor:
         self._llm = llm
         self._verification = verification
         self._repair = repair
+        self._safety_gate = safety_gate
         # Lazy import to avoid circular dependency
         from app.agent.executor import Executor as AgentExecutor
         self._agent_executor = AgentExecutor(llm, tools, engineering_lessons=memory.engineering_lessons)
@@ -105,6 +107,33 @@ class UnifiedExecutor:
                         break
 
                 self._current_task_title = task.title
+
+                # Safety gate check before execution (I2 -> M1 -> H1 wiring)
+                if self._safety_gate:
+                    try:
+                        operation_desc = f"Execute task: {task.title}"
+                        operation_type = "task_execution"
+                        context = {
+                            "task_id": task.id if hasattr(task, 'id') else task.title,
+                            "task_title": task.title,
+                            "allow_mutations": allow_mutations,
+                            "plan_id": self._active_plan_id,
+                        }
+                        self._safety_gate.check_and_enforce(operation_desc, operation_type, context)
+                    except Exception as e:
+                        logger.warning(f"[UnifiedExecutor] Safety gate blocked task '{task.title}': {e}")
+                        # Create a failure result for this task
+                        result = {
+                            'success': False,
+                            'error': f'Safety gate blocked: {e}',
+                            'task_id': task.id if hasattr(task, 'id') else task.title,
+                        }
+                        results.append(result)
+                        if self._conversation_control:
+                            if not self._conversation_control.after_task(task, False):
+                                break
+                        self._completed_tasks.append(task.id if hasattr(task, 'id') else task.title)
+                        continue
 
                 # Execute task using agent executor
                 allowed_tools = set(self._agent_executor.READ_ONLY_TOOLS)
@@ -171,12 +200,14 @@ class ExecutionEngine:
         memory: MemoryCoordinator,
         llm: PriorityLLMProvider,
         chat_activity: ChatActivityProvider,
+        safety_gate=None,  # SafetyGate for operation validation
     ):
         self._router = router
         self._tools = tools
         self._memory = memory
         self._llm = llm
         self._chat_activity = chat_activity
+        self._safety_gate = safety_gate
 
         # Unified planning
         self._planner = UnifiedPlanner(
@@ -198,6 +229,7 @@ class ExecutionEngine:
                 tools=tools,
                 verifier=VerificationRunner(tools.workspace if hasattr(tools, "workspace") else "."),
             ),
+            safety_gate=safety_gate,
         )
 
         # Conversation control callback

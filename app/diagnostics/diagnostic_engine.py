@@ -14,6 +14,7 @@ import json
 
 from app.diagnostics.issue import Issue, IssueSeverity, IssueType, IssueCollection
 from app.diagnostics.code_analyzer import CodeAnalyzer
+from app.core.events import get_event_bus, Event
 
 
 @dataclass
@@ -42,18 +43,20 @@ class DiagnosticEngine:
     all diagnostic issues into a comprehensive report.
     """
 
-    def __init__(self, workspace: str = ".", config: Optional[DiagnosticConfig] = None):
+    def __init__(self, workspace: str = ".", config: Optional[DiagnosticConfig] = None, event_bus=None):
         """Initialize the diagnostic engine.
 
         Args:
             workspace: The project workspace directory.
             config: Optional configuration for the diagnostic run.
+            event_bus: Optional EventBus for emitting diagnostic events.
         """
         self.workspace = Path(workspace).resolve()
         self.config = config or DiagnosticConfig()
         self._issues: IssueCollection = IssueCollection()
         self._start_time: Optional[datetime] = None
         self._end_time: Optional[datetime] = None
+        self._event_bus = event_bus or get_event_bus()
 
     def run(self, paths: Optional[List[str]] = None) -> IssueCollection:
         """Run diagnostic analysis on specified paths.
@@ -76,7 +79,30 @@ class DiagnosticEngine:
 
         self._end_time = datetime.now(timezone.utc)
 
+        # Emit diagnostic completed event
+        self._emit_diagnostic_event()
+
         return self._issues
+
+    def _emit_diagnostic_event(self) -> None:
+        """Emit diagnostic results as EventBus event for downstream consumers."""
+        try:
+            summary = self.get_summary()
+            event = Event(
+                name="diagnostics.completed",
+                data={
+                    "summary": summary,
+                    "issues": [i.to_dict() for i in self._issues.issues],
+                    "workspace": str(self.workspace),
+                },
+                source="DiagnosticEngine",
+                priority=EventPriority.NORMAL
+            )
+            self._event_bus.publish(event)
+        except Exception as e:
+            # Don't let event emission fail the diagnostic run
+            import logging
+            logging.getLogger(__name__).warning(f"Failed to emit diagnostic event: {e}")
 
     def run_all_checks(self) -> IssueCollection:
         """Run all diagnostic checks."""
