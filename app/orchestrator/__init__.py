@@ -66,14 +66,6 @@ from app.orchestrator.self_observer import (
     Alert,
 )
 
-from app.orchestrator.orchestrator import (
-    CentralOrchestrator,
-    OrchestratorConfig,
-    OrchestratorState,
-    get_orchestrator,
-    reset_orchestrator,
-)
-
 from app.orchestrator.capabilities import (
     create_all_capabilities,
     MemoryManagementCapability,
@@ -126,6 +118,20 @@ from app.orchestrator.workflow_orchestrator import (
     get_workflow_orchestrator,
     reset_workflow_orchestrator,
 )
+
+def __getattr__(name):
+    """Load the legacy central orchestrator only for explicit compatibility use."""
+    if name in {
+        "CentralOrchestrator",
+        "OrchestratorConfig",
+        "OrchestratorState",
+        "get_orchestrator",
+        "reset_orchestrator",
+    }:
+        from app.orchestrator import orchestrator as legacy_orchestrator
+        return getattr(legacy_orchestrator, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     # Capability Registry

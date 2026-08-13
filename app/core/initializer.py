@@ -52,10 +52,8 @@ from app.conversational_control import ConversationControlHandler
 # Agent Facade (composes all above)
 from app.agent.facade_impl import AgentFacadeImpl
 
-# Optional: Autonomy
-from app.long_term_autonomy.manager import AutonomyManager
-
-# Optional: Orchestrator
+# Canonical autonomy and orchestration
+from app.autonomy.manager import AutonomyManager
 from app.orchestrator.workflow_orchestrator import WorkflowOrchestrator
 from app.orchestrator.capability_registry import CapabilityRegistry
 from app.orchestrator.safety_gate import SafetyGate
@@ -263,26 +261,40 @@ class SystemInitializer:
         logger.debug("[SystemInitializer] AgentFacadeImpl created")
 
         # ------------------------------------------------------------------
-        # 12. Optional: Autonomy (depends on execution_engine, router, memory, chat_activity, priority_llm, event_bus, job_service)
+        # 12. Canonical Workflow Orchestrator
+        # ------------------------------------------------------------------
+        orchestrator = None
+        if self.config.enable_orchestrator:
+            orchestrator = WorkflowOrchestrator(
+                capability_registry=capability_registry,
+                router=unified_router,
+                executor=execution_engine,
+                safety_gate=safety_gate,
+                chat_activity=chat_activity,
+                event_bus=event_bus,
+                job_service=job_service,
+            )
+            orchestrator.start()
+            logger.info("[SystemInitializer] WorkflowOrchestrator started")
+
+        # ------------------------------------------------------------------
+        # 13. Canonical Autonomy Manager (depends on the shared learning and orchestration graph)
         # ------------------------------------------------------------------
         autonomy = None
         if self.config.enable_autonomy:
             autonomy = AutonomyManager(
-                workspace=str(self.workspace),
                 event_bus=event_bus,
-                job_service=job_service,
                 observability=observability,
+                learning_pipeline=learning_pipeline,
+                goal_storage=memory_coordinator.goal_storage,
+                workflow_orchestrator=orchestrator,
+                job_service=job_service,
             )
-            # Set dependencies that AutonomyManager expects
-            autonomy.executor = execution_engine  # Implements ExecutorProvider protocol
-            autonomy._chat_activity_provider = chat_activity
-            # Register background jobs
-            autonomy._register_background_jobs()
             autonomy.start()
             logger.info("[SystemInitializer] AutonomyManager started")
 
         # ------------------------------------------------------------------
-        # 13. Diagnostics (Q1) - depends on workspace, event_bus
+        # 14. Diagnostics (Q1) - depends on workspace, event_bus
         # ------------------------------------------------------------------
         diagnostic_engine = None
         if self.config.enable_diagnostics:
@@ -295,30 +307,13 @@ class SystemInitializer:
             logger.debug("[SystemInitializer] DiagnosticEngine created")
 
         # ------------------------------------------------------------------
-        # 14. SafeSelfImprovement (Q2) - depends on event_bus, workspace
+        # 15. SafeSelfImprovement (Q2) - depends on event_bus, workspace
         # ------------------------------------------------------------------
         self_improvement = None
         if self.config.enable_self_improvement:
             ssi_config = SafeSelfImprovementConfig()
             self_improvement = create_self_improvement_engine(config=ssi_config)
             logger.debug("[SystemInitializer] SafeSelfImprovementEngine created")
-
-        # ------------------------------------------------------------------
-        # 15. Optional: Orchestrator (depends on capability_registry, router, executor, safety_gate, chat_activity, event_bus, job_service)
-        # ------------------------------------------------------------------
-        orchestrator = None
-        if self.config.enable_orchestrator:
-            orchestrator = WorkflowOrchestrator(
-                capability_registry=capability_registry,
-                router=unified_router,  # Shared instance
-                executor=execution_engine,  # Protocol
-                safety_gate=safety_gate,
-                chat_activity=chat_activity,
-                event_bus=event_bus,
-                job_service=job_service,
-            )
-            orchestrator.start()
-            logger.info("[SystemInitializer] WorkflowOrchestrator started")
 
         # ------------------------------------------------------------------
         # Finalize
