@@ -19,6 +19,7 @@ from app.memory.coordinator import MemoryCoordinator
 from app.planner.plan_manager import Plan, PlanManager
 from app.planner.task import Task
 from app.routing.unified_router import UnifiedRouter
+from app.verification.execution_verifier import ExecutionOutcome, ExecutionVerifier
 from app.verification.repair_loop import RepairLoop
 from app.verification.runner import VerificationResult, VerificationRunner
 
@@ -282,6 +283,8 @@ class ExecutionEngine:
         memory: MemoryCoordinator,
         llm: PriorityLLMProvider,
         chat_activity: ChatActivityProvider,
+        learning_pipeline: Any,
+        observability_hub: Any,
         safety_gate=None,
     ):
         self._router = router
@@ -293,6 +296,13 @@ class ExecutionEngine:
         self._planner = UnifiedPlanner(llm=llm, memory=memory, router=router, tools=tools)
 
         verification_runner = VerificationRunner(tools.workspace if hasattr(tools, "workspace") else ".")
+        self._execution_verifier = ExecutionVerifier(
+            verification_runner=verification_runner,
+            learning_pipeline=learning_pipeline,
+            observability_hub=observability_hub,
+            chat_activity=chat_activity,
+        )
+        self._last_learning_outcome: Optional[ExecutionOutcome] = None
         self._executor = UnifiedExecutor(
             planner=self._planner,
             tools=tools,
@@ -355,8 +365,14 @@ class ExecutionEngine:
             else:
                 self._set_lifecycle_state(ExecutionLifecycleState.EXECUTED)
                 self._set_lifecycle_state(ExecutionLifecycleState.VERIFYING)
-                verification = self._executor._verification.dry_run_verify()
-                if not verification.success:
+                verification_outcome = self._execution_verifier.verify_execution(
+                    task=task,
+                    plan_results=results,
+                    allow_mutations=allow_mutations,
+                    route_learning=False,
+                )
+                verification = verification_outcome.verification_result
+                if not verification_outcome.success:
                     self._set_lifecycle_state(ExecutionLifecycleState.REPAIRING)
                     repair_result = self._executor._repair.run(lambda _feedback: [])
                     if repair_result.get("success"):
@@ -370,6 +386,18 @@ class ExecutionEngine:
                         self._set_lifecycle_state(ExecutionLifecycleState.SUCCEEDED)
                 else:
                     self._set_lifecycle_state(ExecutionLifecycleState.SUCCEEDED)
+
+            try:
+                self._last_learning_outcome = self._route_execution_outcome(
+                    task=task,
+                    results=results,
+                    verification=verification,
+                    error=error,
+                    allow_mutations=allow_mutations,
+                )
+            except Exception as learning_error:
+                error = f"Execution learning handoff failed: {learning_error}"
+                self._set_lifecycle_state(ExecutionLifecycleState.FAILED)
 
             if self._lifecycle_state == ExecutionLifecycleState.SUCCEEDED:
                 self._persist_outcome(plan, task, results, verification, None)
@@ -386,6 +414,16 @@ class ExecutionEngine:
             else:
                 self._set_lifecycle_state(ExecutionLifecycleState.FAILED)
             if plan is not None:
+                try:
+                    self._last_learning_outcome = self._route_execution_outcome(
+                        task=task,
+                        results=results,
+                        verification=verification,
+                        error=error,
+                        allow_mutations=allow_mutations,
+                    )
+                except Exception as learning_error:
+                    error = f"{error}; execution learning handoff failed: {learning_error}"
                 self._persist_outcome(plan, task, results, verification, error)
             return self._safe_failure_message(task, error)
         finally:
@@ -411,6 +449,32 @@ class ExecutionEngine:
             return "Execution verification did not produce a result."
         detail = (verification.stderr or verification.stdout or "verification failed").strip()
         return f"Execution verification failed: {detail}"
+
+    def _route_execution_outcome(
+        self,
+        task: str,
+        results: List[Any],
+        verification: Optional[VerificationResult],
+        error: Optional[str],
+        allow_mutations: bool,
+    ) -> ExecutionOutcome:
+        """Route every terminal state through the shared execution-learning contract."""
+        if self._lifecycle_state == ExecutionLifecycleState.SUCCEEDED:
+            if verification is None or not verification.success:
+                raise RuntimeError("A successful execution requires a successful verification result.")
+            return self._execution_verifier.verify_execution(
+                task=task,
+                plan_results=results,
+                allow_mutations=allow_mutations,
+                verification_result=verification,
+            )
+        return self._execution_verifier.record_execution_failure(
+            task=task,
+            plan_results=results,
+            error_message=error or "Execution failed and was not verified.",
+            allow_mutations=allow_mutations,
+            verification_result=verification,
+        )
 
     def _persist_outcome(
         self,
@@ -465,6 +529,10 @@ class ExecutionEngine:
     @property
     def last_outcome(self) -> Optional[ExecutionRecord]:
         return self._last_outcome
+
+    @property
+    def last_learning_outcome(self) -> Optional[ExecutionOutcome]:
+        return self._last_learning_outcome
 
     @property
     def verification_runner(self) -> VerificationRunner:

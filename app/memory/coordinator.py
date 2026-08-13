@@ -106,9 +106,19 @@ class MemoryCoordinator:
             self._working.add_task(task)
 
     def add_experience(self, exp: Any) -> None:
-        """Add an experience entry."""
+        """Persist an experience entry through the ExperienceMemory write contract."""
         with self._lock:
-            self._experience.add(exp)
+            self._experience.store(
+                title=exp.title,
+                description=exp.description,
+                category=exp.category,
+                tags=exp.tags,
+                outcome=exp.outcome,
+                confidence=exp.confidence,
+                metadata=exp.metadata,
+                code_snippet=exp.code_snippet,
+                source=exp.source,
+            )
 
     def add_lesson(self, lesson: Any) -> None:
         """Add an engineering lesson."""

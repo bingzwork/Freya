@@ -44,6 +44,20 @@ class StubRepair:
         return self.result
 
 
+class StubExecutionVerifier:
+    """Minimal verifier adapter used by the engine's direct state-machine tests."""
+
+    def __init__(self, runner):
+        self.runner = runner
+
+    def verify_execution(self, task, plan_results, allow_mutations=True, verification_result=None, route_learning=True):
+        result = verification_result or self.runner.dry_run_verify()
+        return SimpleNamespace(success=result.success, verification_result=result)
+
+    def record_execution_failure(self, task, plan_results, error_message, allow_mutations=True, verification_result=None):
+        return SimpleNamespace(success=False, verification_result=verification_result)
+
+
 def verification(success, stderr=""):
     return VerificationResult(
         success=success,
@@ -195,6 +209,7 @@ def make_engine(plan, gate, verifier, repair, execution_result):
         _verification=verifier,
         _repair=repair,
     )
+    engine._execution_verifier = StubExecutionVerifier(verifier)
     engine._safety_gate = gate
     engine._llm = MagicMock()
     engine._llm.ask.return_value = "verified summary"
@@ -202,6 +217,7 @@ def make_engine(plan, gate, verifier, repair, execution_result):
     engine._lifecycle_state = None
     engine._execution_records = {}
     engine._last_outcome = None
+    engine._last_learning_outcome = None
     engine._conversation_control = None
     return engine
 

@@ -236,7 +236,37 @@ class LearningPipeline:
                 }
             })
 
-        # 4. Context-based learning
+        # 4. Execution-outcome learning retains the verified terminal state so
+        # durable experience memory can distinguish success from failure.
+        if candidate.candidate_type == LearningCandidateType.EXECUTION_OUTCOME:
+            execution_success = candidate.raw_observation.get("execution_success")
+            verification = candidate.raw_observation.get("verification") or {}
+            error = candidate.raw_observation.get("error")
+            task = candidate.raw_observation.get("task", "")
+            outcome_label = "successful" if execution_success else "failed"
+            verification_label = (
+                "not run" if not verification else "passed" if verification.get("success") else "failed"
+            )
+            knowledge_items.append({
+                "title": f"{outcome_label.title()} execution outcome",
+                "content": (
+                    f"Execution for task '{task}' was {outcome_label}; verification {verification_label}."
+                    + (f" Error: {error}" if error else "")
+                ),
+                "category": "execution_outcome",
+                "confidence": observed.confidence,
+                "source": "pipeline_execution_outcome",
+                "metadata": {
+                    "candidate_id": candidate.id,
+                    "task": task,
+                    "execution_success": execution_success,
+                    "verification_success": verification.get("success") if verification else None,
+                    "verification_return_code": verification.get("return_code") if verification else None,
+                    "error": error,
+                },
+            })
+
+        # 5. Context-based learning
         context_keys = observed.structured_observation.get("context_keys", [])
         if context_keys:
             knowledge_items.append({
@@ -392,7 +422,7 @@ class LearningPipeline:
                 # Determine storage type based on category
                 category = item.get("category", "general")
                 
-                if category in ("component_interaction", "event_pattern", "tag_pattern", "contextual_learning"):
+                if category in ("component_interaction", "event_pattern", "tag_pattern", "contextual_learning", "execution_outcome"):
                     # Store as ExperienceMemory entry
                     from app.memory.experience_memory import ExperienceEntry
                     from datetime import datetime, timezone
@@ -403,7 +433,7 @@ class LearningPipeline:
                         description=item.get("content", ""),
                         category=category,
                         tags=["learned", category],
-                        outcome="neutral",
+                        outcome=self._experience_outcome(item),
                         confidence=item.get("confidence", 0.5),
                         metadata={
                             "source_candidate_id": candidate.id,
@@ -467,7 +497,7 @@ class LearningPipeline:
                         description=item.get("content", ""),
                         category=category,
                         tags=["learned", category],
-                        outcome="neutral",
+                        outcome=self._experience_outcome(item),
                         confidence=item.get("confidence", 0.5),
                         metadata={
                             "source_candidate_id": candidate.id,
@@ -486,12 +516,23 @@ class LearningPipeline:
 
             except Exception as e:
                 logger.warning(f"[LearningPipeline] Failed to persist learning item {i}: {e}")
+                raise RuntimeError(f"Failed to persist learning item {i}") from e
 
         # Emit improvement candidate event for SafeSelfImprovement
         if stored_item_ids:
             self._emit_improvement_candidate(candidate, stored_item_ids)
 
         return stored_item_ids
+
+    @staticmethod
+    def _experience_outcome(item: Dict[str, Any]) -> str:
+        """Map an execution-learning item to the durable experience outcome vocabulary."""
+        execution_success = item.get("metadata", {}).get("execution_success")
+        if execution_success is True:
+            return "positive"
+        if execution_success is False:
+            return "negative"
+        return "neutral"
 
     def _emit_improvement_candidate(self, candidate, stored_item_ids):
         """Emit improvement candidate event for SafeSelfImprovement integration."""

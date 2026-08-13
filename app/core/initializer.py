@@ -232,6 +232,8 @@ class SystemInitializer:
             memory=memory_coordinator,
             llm=priority_llm,
             chat_activity=chat_activity,
+            learning_pipeline=learning_pipeline,
+            observability_hub=observability,
             safety_gate=safety_gate,
         )
         logger.debug("[SystemInitializer] ExecutionEngine created")
