@@ -14,7 +14,7 @@ import json
 
 from app.diagnostics.issue import Issue, IssueSeverity, IssueType, IssueCollection
 from app.diagnostics.code_analyzer import CodeAnalyzer
-from app.core.events import get_event_bus, Event
+from app.core.events import Event, EventPriority, get_event_bus
 
 
 @dataclass
@@ -85,24 +85,23 @@ class DiagnosticEngine:
         return self._issues
 
     def _emit_diagnostic_event(self) -> None:
-        """Emit diagnostic results as EventBus event for downstream consumers."""
-        try:
-            summary = self.get_summary()
-            event = Event(
-                name="diagnostics.completed",
-                data={
-                    "summary": summary,
-                    "issues": [i.to_dict() for i in self._issues.issues],
-                    "workspace": str(self.workspace),
-                },
-                source="DiagnosticEngine",
-                priority=EventPriority.NORMAL
-            )
-            self._event_bus.publish(event)
-        except Exception as e:
-            # Don't let event emission fail the diagnostic run
-            import logging
-            logging.getLogger(__name__).warning(f"Failed to emit diagnostic event: {e}")
+        """Emit diagnostic results as an EventBus event for downstream consumers.
+
+        Publication failures deliberately propagate so a completed diagnostic run cannot
+        be mistaken for a successfully delivered diagnostic event.
+        """
+        summary = self.get_summary()
+        event = Event(
+            name="diagnostics.completed",
+            data={
+                "summary": summary,
+                "issues": [i.to_dict() for i in self._issues.issues],
+                "workspace": str(self.workspace),
+            },
+            source="DiagnosticEngine",
+            priority=EventPriority.NORMAL,
+        )
+        self._event_bus.publish(event)
 
     def run_all_checks(self) -> IssueCollection:
         """Run all diagnostic checks."""

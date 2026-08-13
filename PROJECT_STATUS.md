@@ -1,10 +1,10 @@
 # Completion Progress
 
-Overall Freya Functional Completion: 42.5%
-Completed Tasks: 3 / 17
-Remaining Tasks: 14 / 17
+Overall Freya Functional Completion: 46.0%
+Completed Tasks: 4 / 17
+Remaining Tasks: 13 / 17
 Last Updated: 2026-08-14
-Next Active Task: Task 4 — Restore the shared event contract and event-driven improvement flow
+Next Active Task: Task 5 — Connect execution outcomes to learning and durable memory
 
 > The percentage retains the documented capability-weighted operational method: functionality receives credit only when its production path is implemented, wired, reachable, safe where required, and supported by runtime evidence. The task counts are the rolling queue counts and do not replace that capability-weighted percentage.
 
@@ -14,25 +14,21 @@ Next Active Task: Task 4 — Restore the shared event contract and event-driven 
 > Completed, working, and verified items have been removed from the execution queue.
 > Tasks are ordered by documented dependency and execution sequence, not simply by priority.
 >
-> **Verified operational completion:** 42.5% (the current verified estimate in the source document supersedes the earlier 76.6% estimate).
+> **Verified operational completion:** 46.0% (the capability-weighted estimate reflects four completed and verified critical-path tasks; it supersedes the earlier 76.6% estimate).
 
 ---
 
 # Critical Execution Path
 
-1. 🔴 Task 3 — Repair production autonomy startup and scheduled jobs
+1. 🟡 Task 5 — Connect execution outcomes to learning and durable memory
    ↓
-2. 🟡 Task 4 — Restore the shared event contract and event-driven improvement flow
+2. 🔴 Task 6 — Consolidate retrieval and restore cross-session knowledge recall
    ↓
-3. 🟡 Task 5 — Connect execution outcomes to learning and durable memory
+3. 🔴 Task 7 — Replace obsolete tests with production-path integration evidence
    ↓
-4. 🔴 Task 6 — Consolidate retrieval and restore cross-session knowledge recall
+4. 🔴 Task 8 — Implement provider resilience
    ↓
-5. 🔴 Task 7 — Replace obsolete tests with production-path integration evidence
-   ↓
-6. 🔴 Task 8 — Implement provider resilience
-   ↓
-7. 🟡 Task 9 — Repair monitoring and hardware-health evidence
+5. 🟡 Task 9 — Repair monitoring and hardware-health evidence
 
 Tasks 10–17 are parallel or independent work where the existing status document does not establish a prerequisite beyond the relationships stated in each task.
 
@@ -40,49 +36,6 @@ Tasks 10–17 are parallel or independent work where the existing status documen
 
 # Active Work
 
-
-## Task 4 — Restore the shared event contract and event-driven improvement flow
-
-**Size:** 🔴 RED — BIG / COMPLEX
-**Priority:** P1
-**Execution Order:** 4
-
-**Location**
-
-- `app/core/initializer.py`: lines 110, 164–167, 290–304
-- `app/safe_self_improvement/self_improvement.py`: constructor and `create_self_improvement_engine()`
-- `app/diagnostics/diagnostic_engine.py`: `_emit_diagnostic_event()`
-
-**Problem**
-
-The initializer uses a local `EventBus`, while safe self-improvement calls the global `get_event_bus()` and its factory does not accept dependency injection. Production learning and diagnostics events therefore do not reach the improvement engine. Diagnostic event emission also uses `EventPriority.NORMAL` without importing `EventPriority`; a broad exception handler hides the failure.
-
-**Required Work**
-
-- Add explicit event-bus injection to the self-improvement engine and factory.
-- Pass the initializer-local bus to all related components.
-- Import the correct event-priority type.
-- Surface event-publication failures appropriately.
-- Add real integration tests for learning→improvement and diagnostics→improvement.
-
-**Dependencies**
-
-- Must come after Task 1.
-- The event and dependency-injection contract must be fixed before improvement-flow testing.
-- Diagnostics event delivery should coordinate with the event-bus injection fix.
-
-**Why This Order**
-
-The existing status explicitly identifies incompatible event-bus ownership and broken diagnostic emission as critical blockers.
-
-**Acceptance Criteria**
-
-- [ ] Learning and diagnostics publish to the bus consumed by safe self-improvement.
-- [ ] Diagnostic completion events are delivered or failures are surfaced.
-- [ ] Improvement candidates are created through the production event path.
-- [ ] End-to-end event tests pass with real component wiring.
-
----
 
 ## Task 5 — Connect execution outcomes to learning and durable memory
 
@@ -621,25 +574,25 @@ No dependency has been added where the existing status document did not establis
 
 | Size | Remaining tasks |
 |---|---:|
-| 🔴 RED — Big / Complex | 5 |
+| 🔴 RED — Big / Complex | 4 |
 | 🟡 YELLOW — Medium | 7 |
 | 🔵 BLUE — Easy / Small | 3 |
-| **Total** | **14** |
+| **Total** | **13** |
 
 | Priority | Remaining work |
 |---|---|
 | **P0 — Critical** | No remaining P0 task on the active queue; the Task 3 autonomy blocker is complete. |
-| **P1 — High** | Tasks 4–5, 7–8, 11, 14: event wiring, execution learning, production tests, provider resilience, autonomous learning, readiness surface |
+| **P1 — High** | Tasks 5, 7–8, 11, 14: execution learning, production tests, provider resilience, autonomous learning, readiness surface |
 | **P2 — Medium** | Tasks 6, 9–10, 12–13, 16: retrieval, monitoring, workflow capability/safety, legacy migration, vector recall, memory quality |
 | **P3 — Low** | Tasks 14–17: readiness completion, configurable policy, memory-quality tail work, stale contracts |
 
-**Current verified completion:** 42.5%. Task 3’s autonomy-startup blocker and Task 2’s execution-safety blocker are now recorded as complete. The remaining active queue begins with Task 4’s P1 event-contract repair.
+**Current verified completion:** 46.0%. Tasks 2–4 are recorded as complete and verified. The remaining active queue begins with Task 5’s P1 execution-to-learning repair.
 
 ---
 
 # Critical Blockers
 
-1. Learning, diagnostics, and safe self-improvement are disconnected by incompatible event-bus ownership, and diagnostic event emission is broken.
+1. Execution outcomes still do not reliably reach the learning pipeline and durable memory through the normal execution path (Task 5).
 2. The runtime is still fragmented across production, legacy, and test-only implementations, leaving key features unreachable and tests disconnected from the normal application graph.
 
 ---
@@ -648,7 +601,7 @@ No dependency has been added where the existing status document did not establis
 
 Freya reaches 100% only when a normal `FreyaApp` startup reliably composes one supported architecture; safely accepts or rejects actions; plans, executes, verifies, repairs, and persists outcomes; learns from those outcomes; uses persistent and retrievable knowledge across sessions; runs healthy autonomous background work; routes diagnostics and learning through controlled improvement safeguards; survives configured provider and tool failures; and demonstrates these chains through a clean, production-path test suite.
 
-The current verified operational completion is **42.5%**. The earlier 76.6% estimate is superseded by the current verified assessment and is not used as the completion baseline.
+The current verified operational completion is **46.0%**. The earlier 76.6% estimate is superseded by the current verified assessment and is not used as the completion baseline.
 
 ---
 
@@ -730,8 +683,71 @@ The focused suite passed with **35 passed and 1 skipped**: `tests/test_task3_aut
 
 **Remaining Limitations**
 
-- Task 4 still needs to restore the shared event contract and event-driven improvement flow.
 - Broader autonomous-learning feature selection and its full production integration remain queued for Task 11; Task 3 only repairs the handoff and verified execution lifecycle.
 - The repository-wide pytest configuration still contains the pre-existing Windows-only `C:/temp/pytest_tmp` path; focused Linux verification used an equivalent temporary directory without changing project configuration.
 
+**Resolved Later**
+
+- Task 4 — Shared Event Contract & Event-Driven Improvement Flow restored the production shared EventBus contract used by learning, diagnostics, and safe self-improvement.
+
 **Commit Hash:** `7daa2f2`
+
+
+---
+
+## Task 4 — Shared Event Contract & Event-Driven Improvement Flow
+
+**Status:** COMPLETE
+
+**Implementation Summary**
+
+Task 4 restored the production event path from learning and diagnostics into safe self-improvement. The repair uses the existing EventBus and event contracts; it does not introduce another event system or global singleton.
+
+**Files Changed**
+
+- `app/core/initializer.py`
+- `app/diagnostics/diagnostic_engine.py`
+- `app/safe_self_improvement/self_improvement.py`
+- `tests/test_shared_event_improvement_flow.py`
+- `PROJECT_STATUS.md`
+
+**EventBus Ownership and Wiring**
+
+`SystemInitializer` creates, stores, and exposes one production EventBus. That same object is injected into `LearningPipeline`, `DiagnosticEngine`, and `SafeSelfImprovementEngine`. Targeted production-initialization verification confirmed object identity across all four affected components.
+
+**Dependency-Injection Changes**
+
+`SafeSelfImprovementEngine` and `create_self_improvement_engine()` now require an EventBus dependency. Production initialization passes its owned EventBus explicitly, preventing the improvement engine from independently using a different global instance.
+
+**Learning → Improvement Result**
+
+A real `LearningPipeline.run(candidate)` invocation persisted learning items, emitted `learning.improvement_candidate` on the shared EventBus, and caused the subscribed safe self-improvement engine to create and submit an improvement candidate. The handler now maps the existing learning payload to valid existing `ImprovementCandidate` and `ImprovementCategory` contracts.
+
+**Diagnostics → Improvement Result**
+
+A real `DiagnosticEngine.run()` invocation emitted `diagnostics.completed` on the shared EventBus and caused the subscribed safe self-improvement engine to create and submit an improvement candidate for an error-level diagnostic issue. The handler now recognizes the existing diagnostic severity vocabulary (`error` and `critical`) and uses the existing `ImprovementCategory.CORRECTNESS` value.
+
+**Event Failure Behavior**
+
+Diagnostic event construction imports and uses the existing `EventPriority.NORMAL` type. Diagnostic publication no longer swallows broad exceptions: a failed EventBus publication propagates to the caller rather than allowing diagnostics to appear successfully delivered.
+
+**Tests Actually Run**
+
+- `python3 -m pytest -q --basetemp=/tmp/freya-task4-focused tests/test_events.py tests/test_diagnostics.py tests/test_learning_pipeline.py tests/test_shared_event_improvement_flow.py`
+- `git diff --check`
+- `python3 -m compileall -q app/core/initializer.py app/diagnostics/diagnostic_engine.py app/safe_self_improvement/self_improvement.py`
+
+**Verification Results**
+
+The focused Task 4 suite passed with **65 passed**. It verifies explicit EventBus injection, learning-to-improvement delivery, diagnostics-to-improvement delivery, diagnostic priority, diagnostic publication failure visibility, and normal production initialization with shared object identity.
+
+**Remaining Limitations**
+
+- Task 5 still needs to connect normal execution outcomes to `LearningPipeline.run(candidate)` and durable memory. Task 4 verifies the learning event path only once a learning candidate reaches the pipeline.
+- The repository-wide pytest configuration still contains the pre-existing Windows-only `C:/temp/pytest_tmp` path; focused Linux verification used an equivalent temporary-directory override without changing unrelated configuration.
+
+**Resolved Later**
+
+- None.
+
+**Commit Hash:** Pending final Task 4 commit

@@ -106,6 +106,7 @@ class SystemInitializer:
         # 1. Infrastructure (no deps)
         # ------------------------------------------------------------------
         event_bus = EventBus()
+        self.event_bus = event_bus
         logger.debug("[SystemInitializer] EventBus created")
 
         job_service = BackgroundJobService(event_bus=event_bus)
@@ -314,7 +315,10 @@ class SystemInitializer:
         self_improvement = None
         if self.config.enable_self_improvement:
             ssi_config = SafeSelfImprovementConfig()
-            self_improvement = create_self_improvement_engine(config=ssi_config)
+            self_improvement = create_self_improvement_engine(
+                config=ssi_config,
+                event_bus=event_bus,
+            )
             logger.debug("[SystemInitializer] SafeSelfImprovementEngine created")
 
         # ------------------------------------------------------------------
