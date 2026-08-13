@@ -10,72 +10,33 @@
 
 # NEXT TASK
 
-## 🔴 Task 1 — Establish one canonical production runtime graph
+## 🔴 Task 2 — Repair the execution safety and verification state machine
 
-**Size:** 🔴 RED — BIG / COMPLEX
-**Priority:** P1
-**Execution Order:** 1
+**Priority:** P0
 
-**Location**
+**Why this is first:** The canonical runtime graph is now established. Execution and workflow safety enforcement is the next documented prerequisite before autonomous or self-modifying actions can be enabled.
 
-- `app/core/initializer.py`
-- `app/knowledge_retrieval/pipeline.py`
-- `app/autonomous_learning/pipeline.py`
-- `app/agent/core_agent.py`
-- `app/orchestrator/orchestrator.py`
-- `app/orchestrator/workflow_orchestrator.py`
-- `app/memory/unified_retrieval.py`
-
-**Problem**
-
-The runtime is fragmented across production, legacy, and test-only implementations. `KnowledgeRetrievalPipeline` and `AutonomousLearningPipeline` are not instantiated by the normal initializer, while the larger `FreyaAgent` path is not used by the normal `main.py` → `SystemInitializer` → `AgentFacadeImpl` graph. The legacy orchestrator is exercised by tests even though production initializes `workflow_orchestrator.py`. Retrieval, orchestration, agent, and learning implementations therefore have incompatible APIs and unreachable functionality.
-
-**Required Work**
-
-- Select one supported production implementation for each capability.
-- Establish one canonical runtime graph through the initialized application path.
-- Wire the selected retrieval, autonomy, orchestration, agent, and learning components into that graph.
-- Migrate callers and tests to the selected interfaces.
-- Retire or explicitly quarantine obsolete paths, including the legacy orchestrator where appropriate.
-
-**Dependencies**
-
-- Must come before the production-path test-suite migration and retrieval consolidation.
-- Blocks: Tasks 4, 7, 8, 9, 10, 11, 12, and 17.
-- Dependencies: Not specified beyond the documented requirement to make an architecture decision first.
-
-**Why This Order**
-
-The source document identifies duplicate runtime paths as a critical blocker and places canonical-graph consolidation first in the required order to reach 100%.
-
-**Acceptance Criteria**
-
-- [ ] One supported production architecture is documented by the implementation structure.
-- [ ] The normal application graph reaches the selected capability implementations.
-- [ ] Callers and tests no longer rely on incompatible obsolete paths.
-- [ ] Duplicate paths are retired or explicitly quarantined.
+**It must be completed before:** Task 3, Task 5, and Task 11.
 
 ---
 
 # Critical Execution Path
 
-1. 🔴 Task 1 — Establish one canonical production runtime graph
+1. 🔴 Task 2 — Repair the execution safety and verification state machine
    ↓
-2. 🔴 Task 2 — Repair the execution safety and verification state machine
+2. 🔴 Task 3 — Repair production autonomy startup and scheduled jobs
    ↓
-3. 🔴 Task 3 — Repair production autonomy startup and scheduled jobs
+3. 🟡 Task 4 — Restore the shared event contract and event-driven improvement flow
    ↓
-4. 🟡 Task 4 — Restore the shared event contract and event-driven improvement flow
+4. 🟡 Task 5 — Connect execution outcomes to learning and durable memory
    ↓
-5. 🟡 Task 5 — Connect execution outcomes to learning and durable memory
+5. 🔴 Task 6 — Consolidate retrieval and restore cross-session knowledge recall
    ↓
-6. 🟡 Task 6 — Consolidate retrieval and restore cross-session knowledge recall
+6. 🔴 Task 7 — Replace obsolete tests with production-path integration evidence
    ↓
-7. 🟡 Task 7 — Replace obsolete tests with production-path integration evidence
+7. 🔴 Task 8 — Implement provider resilience
    ↓
-8. 🟡 Task 8 — Implement provider resilience
-   ↓
-9. 🔵 Task 9 — Complete health/readiness and configuration hygiene
+8. 🟡 Task 9 — Repair monitoring and hardware-health evidence
 
 Tasks 10–17 are parallel or independent work where the existing status document does not establish a prerequisite beyond the relationships stated in each task.
 
@@ -748,15 +709,15 @@ No dependency has been added where the existing status document did not establis
 
 | Size | Remaining tasks |
 |---|---:|
-| 🔴 RED — Big / Complex | 7 |
+| 🔴 RED — Big / Complex | 6 |
 | 🟡 YELLOW — Medium | 7 |
 | 🔵 BLUE — Easy / Small | 3 |
-| **Total** | **17** |
+| **Total** | **16** |
 
 | Priority | Remaining work |
 |---|---|
 | **P0 — Critical** | Tasks 2–3: production autonomy startup and execution/safety enforcement |
-| **P1 — High** | Tasks 1, 4–5, 7–8, 11, 14: canonical runtime, event wiring, execution learning, production tests, provider resilience, autonomous learning, readiness surface |
+| **P1 — High** | Tasks 4–5, 7–8, 11, 14: event wiring, execution learning, production tests, provider resilience, autonomous learning, readiness surface |
 | **P2 — Medium** | Tasks 6, 9–10, 12–13, 16: retrieval, monitoring, workflow capability/safety, legacy migration, vector recall, memory quality |
 | **P3 — Low** | Tasks 14–17: readiness completion, configurable policy, memory-quality tail work, stale contracts |
 
@@ -781,6 +742,24 @@ The current verified operational completion is **42.5%**. The earlier 76.6% esti
 
 ---
 
+# COMPLETED WORK HISTORY
+
+## Task 1 — Canonical Production Runtime Graph
+
+**Status:** COMPLETE
+
+**Implementation summary**
+
+- **Canonical implementations selected:** `AgentFacadeImpl` remains the production Agent boundary; `WorkflowOrchestrator` is the canonical orchestrator; `MemoryCoordinator.unified_retrieval` / `UnifiedRetrieval` remains the production Retrieval contract; `LearningPipeline` plus `app.autonomy.manager.AutonomyManager` are the canonical learning/autonomy components.
+- **Runtime wiring established:** `SystemInitializer` now constructs the canonical WorkflowOrchestrator before AutonomyManager and injects the shared router, execution engine, safety gate, event bus, job service, learning pipeline, goal storage, and workflow orchestrator.
+- **Legacy-path isolation:** The agent package no longer eagerly imports the legacy `FreyaAgent`; the orchestrator package no longer eagerly imports the legacy `CentralOrchestrator`. Both remain available as lazy compatibility exports without being pulled into the canonical production startup path.
+- **Interfaces/adapters changed:** No broad subsystem rewrite or new parallel implementation was added. The initializer now uses the existing dependency-injection contracts of `app.autonomy.manager.AutonomyManager` and `WorkflowOrchestrator`.
+- **Tests/verification performed:** Python compilation passed for the changed initializer and orchestration modules. A focused production-graph smoke test passed, verifying the Agent facade, WorkflowOrchestrator, UnifiedRetrieval, LearningPipeline, and AutonomyManager are instantiated, connected, reachable, and running. The targeted workflow unit test was attempted; one pre-existing rejection-test failure remains because the test's mocked safety setup does not raise as expected. The repository does not have a `pytest` executable in the environment.
+- **Remaining limitations:** Task 2 safety-state-machine repair, Task 3 autonomy reliability hardening, and other queued work remain unfinished. Capability registration currently emits duplicate-replacement warnings during startup but does not prevent the canonical graph from starting.
+- **Code commit:** `a456860b0565c8802b74895484e5e061a81d1d0d`
+
+---
+
 # Source Boundary
 
-This is a documentation-only reorganization. It uses only information already present in the previous `PROJECT_STATUS.md`. It does not add new technical findings, validate claims against source code, or change implementation requirements beyond making existing remaining work more explicit, separately ordered, and dependency-aware.
+This file is a rolling prioritized work queue. It contains the remaining implementation tasks at the top and records completed task summaries at the bottom. Task 1 completion history reflects the actual code changes and targeted verification performed.
