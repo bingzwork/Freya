@@ -734,4 +734,4 @@ The focused suite passed with **35 passed and 1 skipped**: `tests/test_task3_aut
 - Broader autonomous-learning feature selection and its full production integration remain queued for Task 11; Task 3 only repairs the handoff and verified execution lifecycle.
 - The repository-wide pytest configuration still contains the pre-existing Windows-only `C:/temp/pytest_tmp` path; focused Linux verification used an equivalent temporary directory without changing project configuration.
 
-**Commit Hash:** `d889527`
+**Commit Hash:** `7daa2f2`
