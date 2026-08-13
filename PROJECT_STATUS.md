@@ -1,875 +1,786 @@
-# Freya Project Status - Autonomous AI Software Engineer
+# Freya — Remaining Work
 
-> **Last Updated:** 2026-08-14
-> **Project Status:** AUDITED — corrective implementation is required before Freya can be considered a fully functional General Autonomous AI.
-> **Version:** v0.3.0 (per pyproject.toml)
-> **Authoritative Current Assessment:** The section **“Current Verified Remaining-Work Status (2026-08-14)”** supersedes the earlier 76.6% estimate and any earlier integration claim that conflicts with the audited source and runtime evidence.
-
----
-
-## Session 1 Audit Summary
-
-This document captures the comprehensive audit findings from **Session 1 of 5**. This session focused on:
-- Project structure, configuration, dependencies
-- Startup/initialization path (`main.py` → `SystemInitializer`)
-- Core architecture (protocols, LLM stack, memory, events)
-- Orchestration (workflow orchestrator, autonomy manager)
-- Routing (unified router, knowledge-first resolver, capability router)
-- Memory (coordinator, unified retrieval, 12 memory modules)
-- Execution engine (planner, executor, verification, repair loop)
-- LLM stack (priority LLM, chat activity provider)
-- Diagnostics engine
-- Verification (answer verifier, repair loop, safe failure)
-- Capabilities & intent classification
-- Learning pipeline (5-stage deterministic)
-- Test coverage for all above areas
-
-**Key Finding:** The codebase is **syntactically sound** with **resolved imports**, **comprehensive test coverage**, and a **well-architected protocol-based design**. No P0 blockers found that prevent startup or core functionality.
+> This document contains only remaining work identified in the existing `PROJECT_STATUS.md`.
+> Completed, working, and verified items have been removed from the execution queue.
+> Tasks are ordered by documented dependency and execution sequence, not simply by priority.
+>
+> **Verified operational completion:** 42.5% (the current verified estimate in the source document supersedes the earlier 76.6% estimate).
 
 ---
 
-## Session 2A Audit Summary: Knowledge, Retrieval & Routing Systems
+# NEXT TASK
 
-**Scope:** Knowledge sources, retrieval mechanisms, knowledge-first routing, UnifiedRouter, KnowledgeFirstResolver, routing/resolution logic, query→knowledge→response flow, fallback behavior, model/context handoff, tests, runtime wiring/reachability.
+## 🔴 Task 1 — Establish one canonical production runtime graph
 
-**Method:** Read 20+ core files; traced execution from `main.py` → `SystemInitializer` → `MemoryCoordinator` → `UnifiedRetrieval` → `KnowledgeFirstResolver` → `UnifiedRouter` → `AgentFacadeImpl`; examined `KnowledgeRetrievalPipeline` isolation.
+**Size:** 🔴 RED — BIG / COMPLEX
+**Priority:** P1
+**Execution Order:** 1
 
-### Key Finding: Dual Retrieval Systems - One Production, One Disconnected
+**Location**
 
-| System | Location | Status | Wired in Initializer | Reachable from Chat | Tests |
-|--------|----------|--------|---------------------|---------------------|-------|
-| **UnifiedRetrieval** (legacy, integrated) | `app/memory/unified_retrieval.py` | Active | ✅ Via `MemoryCoordinator` | ✅ `UnifiedRouter` → `KnowledgeFirstResolver` → `UnifiedRetrieval` | No dedicated tests |
-| **KnowledgeRetrievalPipeline** (new, standalone) | `app/knowledge_retrieval/pipeline.py` | Complete | ❌ **Not in `SystemInitializer`** | ❌ **Nowhere in production code** | 500+ lines in `tests/test_knowledge_retrieval.py` |
+- `app/core/initializer.py`
+- `app/knowledge_retrieval/pipeline.py`
+- `app/autonomous_learning/pipeline.py`
+- `app/agent/core_agent.py`
+- `app/orchestrator/orchestrator.py`
+- `app/orchestrator/workflow_orchestrator.py`
+- `app/memory/unified_retrieval.py`
 
-### Evidence: Execution Path Uses UnifiedRetrieval (Not KnowledgeRetrievalPipeline)
+**Problem**
 
-**Actual production flow (verified):**
-```
-main.py:FreyaApp.start() 
-  → SystemInitializer.initialize()  [app/core/initializer.py:103]
-    → MemoryCoordinator created  [L158: create_memory_coordinator()]
-      → UnifiedRetrieval created  [app/memory/coordinator.py:56-67] with ALL 11 memory modules
-    → Intelligence created with unified_retrieval  [L189-194]
-    → UnifiedRouter created with unified_retrieval, intelligence  [L216-225]
-      → KnowledgeFirstResolver created with unified_retrieval, intelligence  [L216-225]
-  → AgentFacadeImpl created with router  [L254-263]
-  → chat() → router.route() → KnowledgeFirstResolver.resolve() → UnifiedRetrieval.retrieve()
-```
+The runtime is fragmented across production, legacy, and test-only implementations. `KnowledgeRetrievalPipeline` and `AutonomousLearningPipeline` are not instantiated by the normal initializer, while the larger `FreyaAgent` path is not used by the normal `main.py` → `SystemInitializer` → `AgentFacadeImpl` graph. The legacy orchestrator is exercised by tests even though production initializes `workflow_orchestrator.py`. Retrieval, orchestration, agent, and learning implementations therefore have incompatible APIs and unreachable functionality.
 
-**KnowledgeRetrievalPipeline is never instantiated in production:**
-- Not imported in `app/core/initializer.py`
-- Not instantiated in `SystemInitializer.initialize()`
-- Not passed to `UnifiedRouter`, `KnowledgeFirstResolver`, `Intelligence`, or `AgentFacadeImpl`
-- Only created in `tests/test_knowledge_retrieval.py` via `create_pipeline_from_agent()` and `KnowledgeRetrievalPipeline()` direct instantiation
-- `tests/test_integration_autonomous.py` imports it but only for unit-test-style isolation testing
+**Required Work**
 
-### KnowledgeFirstResolver Resolution Flow (5 Steps, Uses UnifiedRetrieval)
+- Select one supported production implementation for each capability.
+- Establish one canonical runtime graph through the initialized application path.
+- Wire the selected retrieval, autonomy, orchestration, agent, and learning components into that graph.
+- Migrate callers and tests to the selected interfaces.
+- Retire or explicitly quarantine obsolete paths, including the legacy orchestrator where appropriate.
 
-**`app/routing/knowledge_first_resolver.py: resolve()`:**
-1. **Retrieve** → `unified_retrieval.retrieve_for_planner(query)` / `retrieve_for_execution(query)`  [L112-124]
-2. **Assess answerability** → `intelligence.assess_answerability(query, results)`  [L126-133]
-3. **Answer directly** if confident → returns `ResolutionResult(action="answer", sources=...)`  [L135-150]
-4. **Check capability match** → `capability_router.find_matching(query, intent)`  [L152-163]
-5. **LLM fallback** → returns `ResolutionResult(action="llm_fallback")`  [L165-171]
+**Dependencies**
 
-**UnifiedRouter integrates this:** `app/routing/unified_router.py:189-227` calls `KnowledgeFirstResolver.resolve()` and converts `ResolutionResult` → `RouteResult` (answer/capability/llm_fallback).
+- Must come before the production-path test-suite migration and retrieval consolidation.
+- Blocks: Tasks 4, 7, 8, 9, 10, 11, 12, and 17.
+- Dependencies: Not specified beyond the documented requirement to make an architecture decision first.
 
-### AgentFacadeImpl Fallback Chain (Verified in Production Path)
+**Why This Order**
 
-**`app/agent/facade_impl.py:_answer_directly()` (L123-171):**
-1. Tries capability execution if `route_result.capability_name` matched
-2. **LLM fallback with AnswerVerifier** (V1→AR→SF1):
-   - `priority_llm.ask()` → raw answer
-   - `answer_verifier.verify_fallback_answer(raw_answer, prompt, context)` → verified answer
-   - If verified: return verified answer
-   - If None (SF1 exhausted): return generic "couldn't generate reliable answer" message
-3. Legacy path if no AnswerVerifier
+The source document identifies duplicate runtime paths as a critical blocker and places canonical-graph consolidation first in the required order to reach 100%.
 
-**AnswerVerifier** (`app/verification/answer_verifier.py`): Implements V1 (validation) → AR (AnswerRepairLoop, max 3 retries) → SF1 (AnswerSafeFailure, low-confidence disclosure).
+**Acceptance Criteria**
 
-### KnowledgeRetrievalPipeline: Complete but Disconnected System
-
-**Architecture (from `app/knowledge_retrieval/pipeline.py`):**
-- 11 source adapters: `SemanticMemoryAdapter`, `EpisodicMemoryAdapter`, `ProjectMemoryAdapter`, `WorkingMemoryAdapter`, `LongTermMemoryAdapter`, `ExperienceMemoryAdapter`, `EngineeringLessonsAdapter`, `ExtractedKnowledgeAdapter`, `ConversationMemoryAdapter`, `VectorSearchAdapter`, `DocumentationAdapter`
-- `CalibrationManager` (isotonic/Platt/temperature)
-- `RankingEngine` / `AdaptiveRankingEngine` (7 signals + MMR diversification)
-- `UsageAnalytics` (selection, feedback, task outcome tracking)
-- `RetrievalDecision` enum: `USE_DIRECTLY` / `USE_WITH_CAUTION` / `ACQUIRE_MORE` / `ASK_USER` / `NO_KNOWLEDGE`
-- Integrated with shared infrastructure: EventBus, BackgroundJobService, ObservabilityHub
-
-**Tests pass in isolation:** `tests/test_knowledge_retrieval.py` has 500+ lines testing models, ranking, calibration, analytics, pipeline, adapters with mocks.
-
-**But:** Not one line of production code calls `KnowledgeRetrievalPipeline.retrieve()`. The entire system is orphaned.
-
-### UnifiedRetrieval: Production Retrieval (11 Memory Modules)
-
-**`app/memory/unified_retrieval.py`:**
-- `RetrievalQuery` / `RetrievalResult` dataclasses (different from KnowledgeRetrievalPipeline's)
-- 11 `MemoryRetriever` implementations wrapping each memory module
-- `retrieve_for_planner()` → delegates to `_retrieve()` with `context.phase="planning"`
-- `retrieve_for_execution()` → delegates to `_retrieve()` with `context.phase="execution"`
-- `_retrieve()` queries all 11 retrievers, combines, deduplicates, sorts by score
-- No calibration, no adaptive ranking, no analytics, no decision enum
-
-### Routing & Resolution Logic Summary
-
-| Component | Role | Data Flow |
-|-----------|------|-----------|
-| `UnifiedRouter.route()` | Single entry; control → KnowledgeFirstResolver → legacy | `user_input` → `RouteResult` |
-| `KnowledgeFirstResolver.resolve()` | 5-step: retrieve → assess → answer direct → capability → LLM fallback | `query, context, intent` → `ResolutionResult` |
-| `Intelligence.assess_answerability()` | G1/G2/G3 evaluation of retrieval quality | `results` → `AnswerabilityAssessment` |
-| `AgentFacadeImpl.chat()` | Routes to control / direct_answer / clarification / engineering | `RouteResult` → `str response` |
-| `AnswerVerifier.verify_fallback_answer()` | V1→AR→SF1 verification on LLM answers | `raw_answer` → `verified_answer or None` |
-
-### Reachability & Wiring Verification
-
-| Component | Imported in Initializer? | Instantiated? | Passed to Router/Facade? | Executed from Chat? |
-|-----------|-------------------------|---------------|-------------------------|---------------------|
-| `UnifiedRetrieval` | ✅ (via MemoryCoordinator) | ✅ | ✅ (to UnifiedRouter, KFR, Intelligence) | ✅ |
-| `KnowledgeFirstResolver` | ✅ | ✅ | ✅ (inside UnifiedRouter) | ✅ |
-| `UnifiedRouter` | ✅ | ✅ | ✅ (to AgentFacadeImpl) | ✅ |
-| `Intelligence` | ✅ | ✅ | ✅ (to UnifiedRouter, KFR) | ✅ |
-| `KnowledgeRetrievalPipeline` | ❌ | ❌ | ❌ | ❌ |
-| `AnswerVerifier` | ✅ | ✅ | ✅ (to AgentFacadeImpl) | ✅ |
-
-### Session 2A: What Is Functional (Verified)
-
-1. **Knowledge-first routing works** - `UnifiedRouter` → `KnowledgeFirstResolver` → `UnifiedRetrieval` → `Intelligence` flow is complete and executed
-2. **Control commands short-circuit** - STOP/CANCEL/PAUSE/RESUME/UNDO/REDO/STATUS handled before knowledge retrieval
-3. **Capability routing works** - 15+ direct-answer capabilities registered and matched
-4. **LLM fallback with verification works** - V1→AR→SF1 pipeline in `AgentFacadeImpl._answer_directly()`
-5. **Memory retrieval works** - All 11 memory modules queried via `UnifiedRetrieval`
-6. **Intent classification works** - 9 IntentTypes with confidence thresholds and ambiguity detection
-
-### Session 2A: What Is Incomplete / Broken / Needs Attention
-
-| Priority | Issue | Location | Impact | Evidence |
-|----------|-------|----------|--------|----------|
-| **P1** | **KnowledgeRetrievalPipeline completely disconnected** | `app/core/initializer.py` | New retrieval system (calibration, adaptive ranking, analytics, 11 adapters) never used | Not imported, not instantiated, not wired; 500+ test lines test it in isolation only |
-| **P1** | **Two incompatible retrieval systems** | `app/memory/unified_retrieval.py` vs `app/knowledge_retrieval/pipeline.py` | Confusion, duplicate maintenance, wasted effort | Different APIs (`RetrievalQuery`/`RetrievalResult` vs `RetrievalQuery`/`KnowledgeRetrievalResult`), different decision logic |
-| **P2** | **No integration tests for production retrieval path** | `tests/` | Cannot verify end-to-end knowledge retrieval works | Tests cover `KnowledgeRetrievalPipeline` in isolation; no tests call `FreyaApp` → `chat()` → assert retrieval occurred |
-| **P2** | **KnowledgeFirstResolver uses UnifiedRetrieval but expects AdaptiveRankingEngine features** | `app/routing/knowledge_first_resolver.py` | Calibration, adaptive ranking, analytics unavailable in production | KFR calls `unified_retrieval.retrieve_for_planner()` which has no calibration/decision enum |
-| **P3** | **UnifiedRetrieval lacks calibration/ranking/analytics** | `app/memory/unified_retrieval.py` | Production retrieval less sophisticated than test-only pipeline | No `CalibrationManager`, no `AdaptiveRankingEngine`, no `UsageAnalytics` |
+- [ ] One supported production architecture is documented by the implementation structure.
+- [ ] The normal application graph reaches the selected capability implementations.
+- [ ] Callers and tests no longer rely on incompatible obsolete paths.
+- [ ] Duplicate paths are retired or explicitly quarantined.
 
 ---
 
-## Evidence: Exact Files/Modules/Classes/Functions Examined
+# Critical Execution Path
 
-### Entry Points & Configuration
-| File | Purpose | Status |
-|------|---------|--------|
-| `main.py` | `FreyaApp` entry point, argparse, signal handlers, interactive/single-shot modes | ✅ Functional |
-| `pyproject.toml` | Project config (freya-ai 0.3.0, Python ≥3.11, 17 deps) | ✅ Valid |
-| `requirements.txt` | 62 pinned dependencies | ✅ Valid |
-| `app/core/config.py` | `.env` loading (PROJECT_NAME, MODEL, WORKSPACE, MEMORY_PATH, VECTOR_PATH) | ✅ Functional |
+1. 🔴 Task 1 — Establish one canonical production runtime graph
+   ↓
+2. 🔴 Task 2 — Repair the execution safety and verification state machine
+   ↓
+3. 🔴 Task 3 — Repair production autonomy startup and scheduled jobs
+   ↓
+4. 🟡 Task 4 — Restore the shared event contract and event-driven improvement flow
+   ↓
+5. 🟡 Task 5 — Connect execution outcomes to learning and durable memory
+   ↓
+6. 🟡 Task 6 — Consolidate retrieval and restore cross-session knowledge recall
+   ↓
+7. 🟡 Task 7 — Replace obsolete tests with production-path integration evidence
+   ↓
+8. 🟡 Task 8 — Implement provider resilience
+   ↓
+9. 🔵 Task 9 — Complete health/readiness and configuration hygiene
 
-### Core Architecture & Protocols
-| File | Purpose | Status |
-|------|---------|--------|
-| `app/core/protocols.py` | SystemConfig, InfrastructureBundle, InitializedSystem, ChatActivityProvider, ExecutorProvider, MemoryProvider, ToolProvider, RouterProtocol, IntelligenceBundle | ✅ Complete |
-| `app/core/initializer.py` | `SystemInitializer` - 15-stage single-pass init, `InfrastructureBundle`, `InitializedSystem` return | ✅ Complete |
-| `app/core/events.py` | EventBus for inter-component communication | ✅ Functional |
-| `app/core/background_jobs.py` | BackgroundJobService with chat-aware yielding | ✅ Functional |
-| `app/core/observability.py` | ObservabilityHub with component health tracking | ✅ Functional |
-| `app/core/config_hot_reload.py` | ConfigHotReload with file watching | ✅ Functional |
-| `app/core/file_watcher.py` | FileWatcher for workspace changes | ✅ Functional |
-
-### LLM Stack & Priority Queue
-| File | Purpose | Status |
-|------|---------|--------|
-| `app/core/llm_stack.py` | `LLMStack` wrapping `PriorityLLMProvider` + `FreyaChatActivityProvider` (fallback only) | ✅ Complete |
-| `app/core/priority_llm.py` | `PriorityLLMProvider` - 4 priority levels (CHAT > SAFETY > AUTONOMY_THINK > BACKGROUND), worker thread, Condition-based wait/notify, preemption | ✅ Complete |
-| `app/core/chat_activity.py` | `FreyaChatActivityProvider` - Condition-based chat coordination, callbacks | ✅ Complete |
-| `app/core/llm.py` | Base LLM with Ollama integration, system prompts | ✅ Functional |
-
-### Memory System
-| File | Purpose | Status |
-|------|---------|--------|
-| `app/memory/coordinator.py` | `MemoryCoordinator` - 12 modules, unified retrieval, consolidation/forgetting engines | ✅ Complete |
-| `app/memory/unified_retrieval.py` | `UnifiedRetrieval` - aggregated read across all memory stores | ✅ Complete |
-| `app/memory/working_memory.py` | WorkingMemory for active task state | ✅ Functional |
-| `app/memory/task_memory.py` | TaskMemory for execution results | ✅ Functional |
-| `app/memory/long_term_memory.py` | LongTermMemory for persistent facts | ✅ Functional |
-| `app/memory/episodic_memory.py` | EpisodicMemory for event sequences | ✅ Functional |
-| `app/memory/semantic_memory.py` | SemanticMemory for embeddings | ✅ Functional |
-| `app/memory/project_memory.py` | ProjectMemory for codebase knowledge | ✅ Functional |
-| `app/memory/experience_memory.py` | ExperienceMemory for interaction history | ✅ Functional |
-| `app/memory/engineering_lessons.py` | EngineeringLessonStorage for learned patterns | ✅ Functional |
-| `app/memory/goals/manager.py` | GoalStorage for goal tracking | ✅ Functional |
-| `app/memory/conversation_memory.py` | ConversationMemory for dialogue history | ✅ Functional |
-| `app/memory/consolidation.py` | ConsolidationEngine for memory optimization | ✅ Functional |
-| `app/memory/forgetting.py` | ForgettingEngine for memory optimization | ✅ Functional |
-
-### Routing & Intelligence
-| File | Purpose | Status |
-|------|---------|--------|
-| `app/routing/unified_router.py` | `UnifiedRouter` with `KnowledgeFirstResolver` integration, `ControlCommandParser`, `RouteResult` | ✅ Complete |
-| `app/routing/knowledge_first_resolver.py` | `KnowledgeFirstResolver` - 5-step resolution flow, `ResolutionResult` | ✅ Complete |
-| `app/intelligence/intelligence.py` | `Intelligence` (G1, G2, G3) - code understanding components | ✅ Complete |
-| `app/capabilities/router.py` | `CapabilityRouter` with pattern/keyword matching, global instance | ✅ Complete |
-| `app/capabilities/handlers.py` | 15+ handlers: system status, git, ollama, runtime, time, memory, disk, process + conversational control | ✅ Complete |
-| `app/intent/classifier.py` | `IntentClassifier` - 9 IntentTypes, confidence thresholds (0.70 accept, 0.40 low), engineering ambiguity detection | ✅ Complete |
-
-### Execution & Verification
-| File | Purpose | Status |
-|------|---------|--------|
-| `app/execution/engine.py` | `ExecutionEngine` with `UnifiedPlanner`/`UnifiedExecutor`, `VerificationRunner`, `RepairLoop`, `SafetyGate` | ✅ Complete |
-| `app/verification/answer_verifier.py` | `AnswerVerifier` with `verify_fallback_answer()`, `_is_valid_answer()`, `_has_learning_value()` | ✅ Complete |
-| `app/verification/answer_repair_loop.py` | `AnswerRepairLoop` (max 3 retries) + `AnswerSafeFailure` (low-confidence disclosure) | ✅ Complete |
-| `app/verification/execution_verifier.py` | `ExecutionVerifier` with verification runner, learning pipeline, observability hub | ✅ Complete |
-
-### Orchestration & Autonomy
-| File | Purpose | Status |
-|------|---------|--------|
-| `app/orchestrator/workflow_orchestrator.py` | `WorkflowOrchestrator` with `CapabilityRegistry`, `WorkflowComposer`, `TaskExecutor`, `SafetyGate` | ✅ Complete |
-| `app/orchestrator/capability_registry.py` | `CapabilityRegistry` for dynamic capability registration | ✅ Complete |
-| `app/orchestrator/safety_gate.py` | `SafetyGate` for operation validation | ✅ Complete |
-| `app/autonomy/manager.py` | `AutonomyManager` coordinating Watchdog, SelfInitiated, Maintenance | ✅ Complete |
-| `app/autonomy/watchdog.py` | `Watchdog` - event subscription, health checks, metric alerts | ✅ Functional |
-| `app/autonomy/self_initiated.py` | `SelfInitiatedWorkManager` - goal-driven autonomous work generation | ✅ Functional |
-| `app/autonomy/maintenance.py` | `MaintenanceManager` - scheduled maintenance tasks | ✅ Functional |
-| `app/autonomy/models.py` | Data models: WatchdogObservation, AutonomyConfig, AutonomousWorkItem, GoalContext | ✅ Complete |
-
-### Learning Pipeline
-| File | Purpose | Status |
-|------|---------|--------|
-| `app/learning/pipeline.py` | `LearningPipeline` - 5 stages (Observe→Evaluate→Extract→Validate→Worth Remembering) | ✅ Complete |
-| `app/learning/models.py` | All pipeline data models (LearningCandidate, ObservedData, EvaluationResult, etc.) | ✅ Complete |
-
-### Diagnostics
-| File | Purpose | Status |
-|------|---------|--------|
-| `app/diagnostics/diagnostic_engine.py` | `DiagnosticEngine` with `DiagnosticConfig`, `CodeAnalyzer`, export_json/export_text | ✅ Complete |
-| `app/diagnostics/issue.py` | `Issue`, `IssueSeverity`, `IssueType`, `IssueCollection` | ✅ Functional |
-| `app/diagnostics/code_analyzer.py` | `CodeAnalyzer` - AST-based analysis passes | ✅ Functional |
-
-### Agent Facade
-| File | Purpose | Status |
-|------|---------|--------|
-| `app/agent/facade_impl.py` | `AgentFacadeImpl` - chat(), execute_task(), get_status(), shutdown(), private handlers | ✅ Complete |
-| `app/agent/facade.py` | `AgentFacade` protocol, `AgentStatus` dataclass | ✅ Complete |
-
-### Test Coverage (Session 1 Areas)
-| Test File | Coverage | Status |
-|-----------|----------|--------|
-| `tests/test_llm_stack.py` | 12 tests - LLMStack init, ask, chat activity, stats, shutdown, singleton | ✅ Passing |
-| `tests/test_intent_classification.py` | 80+ tests - IntentType, IntentClassification, routing, control, thresholds | ✅ Passing |
-| `tests/test_capability_routing.py` | 25+ tests - Capability, CapabilityResult, CapabilityRouter, handlers, formatter | ✅ Passing |
-| `tests/test_llm.py` | 6 tests - LLM init, ask with/without ollama, custom system, prompt truncation | ✅ Passing |
-| `tests/test_agent_conversation.py` | Integration tests - conversation state, control short-circuiting | ✅ Passing |
-| `tests/test_diagnostics.py` | 35+ tests - Issue, IssueCollection, CodeAnalyzer, DiagnosticEngine, callbacks | ✅ Passing |
-| `tests/test_learning_pipeline.py` | 20+ tests - all 5 stages, factory, full pipeline runs | ✅ Passing |
-| `tests/test_autonomy.py` | 40+ tests - Watchdog, SelfInitiated, Maintenance, AutonomyManager | ✅ Passing |
-| `tests/test_workflow_orchestrator.py` | 2 tests - execute_workflow approved/rejected | ✅ Passing |
+Tasks 10–17 are parallel or independent work where the existing status document does not establish a prerequisite beyond the relationships stated in each task.
 
 ---
 
-## What Is Functional (Verified)
+# Remaining Work
 
-### ✅ Fully Operational Systems
-1. **Single-Pass Initialization** - `SystemInitializer` constructs all 15 stages in correct dependency order with no circular dependencies
-2. **Protocol-Based Architecture** - All cross-component dependencies flow through protocols in `app/core/protocols.py`
-3. **Priority LLM Queue** - 4-level priority (CHAT > SAFETY > AUTONOMY_THINK > BACKGROUND) with worker thread, preemption, Condition-based coordination
-4. **Chat Activity Coordination** - `FreyaChatActivityProvider` allows background jobs/autonomy to yield to active conversation
-5. **Knowledge-First Routing** - `UnifiedRouter` → `KnowledgeFirstResolver` → `UnifiedRetrieval` → `Intelligence` flow implemented
-5. **Capability Routing** - Pattern/keyword matching with 15+ direct-answer handlers
-6. **Intent Classification** - 9 intent types with confidence thresholds and ambiguity detection
-7. **Conversational Control** - STOP/CANCEL/PAUSE/RESUME/UNDO/REDO/STATUS short-circuit routing
-8. **Unified Memory** - 12 memory modules behind single `MemoryCoordinator` facade with transactional writes
-9. **Unified Retrieval** - Aggregated read across all memory stores for planning/execution context
-10. **Execution Engine** - Unified planner + executor with verification, repair loop, safety gate
-11. **Answer Verification** - V1 (AnswerVerifier) → AR (AnswerRepairLoop, 3 retries) → SF1 (AnswerSafeFailure) pipeline
-12. **Learning Pipeline** - 5-stage deterministic pipeline (Observe→Evaluate→Extract→Validate→Worth Remembering)
-13. **Autonomy** - Watchdog (event monitoring), SelfInitiated (goal-driven work), Maintenance (scheduled tasks)
-14. **Workflow Orchestrator** - Capability registry, workflow composition, execution with safety gate
-15. **Diagnostics** - Multi-check code analysis with JSON/text export
-16. **Event Bus** - Central `EventBus` for all inter-component communication
-17. **Background Job Service** - Chat-aware yielding with priority queue
-18. **Ollama Integration** - Local LLM provider with fallback handling
+## Task 2 — Repair the execution safety and verification state machine
 
-### ✅ Test Quality
-- 8 test files examined, **200+ individual tests** covering all Session 1 areas
-- Tests use proper mocking, fixtures, and cover edge cases
-- Integration tests for conversation flow and control short-circuiting
-- No flaky/test infrastructure issues observed
+**Size:** 🔴 RED — BIG / COMPLEX
+**Priority:** P0
+**Execution Order:** 2
 
----
+**Location**
 
-## What Is Incomplete / Broken / Needs Attention
+- `app/execution/engine.py`: `ExecutionEngine.execute_plan()`
+- `app/execution/engine.py`: `UnifiedExecutor.execute()`
+- `app/orchestrator/workflow_orchestrator.py`: `execute_workflow()`
 
-### ⚠️ P1 - High Priority (Architectural Gaps)
+**Problem**
 
-| Issue | Location | Impact | Evidence |
-|-------|----------|--------|----------|
-| **No provider abstraction for non-Ollama LLMs** | `app/core/llm.py`, `app/core/llm_stack.py` | Blocks multi-provider support | Only Ollama implemented; no Claude/GPT/Gemini/DeepSeek providers despite `pyproject.toml` implying extensibility |
-| **Autonomy/Orchestrator optional but not integrated into main flow** | `app/core/initializer.py:268-321` | Autonomous features require config flags | `enable_autonomy` and `enable_orchestrator` default True but components started separately, not fully wired to main chat flow |
-| **LearningPipeline not invoked from main execution path** | `app/execution/engine.py`, `app/agent/facade_impl.py` | Learning only works via AnswerSafeFailure | Pipeline created in init but only called from `AnswerSafeFailure.handle_exhausted_retries()` - not from successful task execution |
-| **No health/readiness endpoints** | `main.py`, `app/core/observability.py` | No operational visibility | ObservabilityHub tracks components but no HTTP health check endpoint for container orchestration |
-| **KnowledgeRetrievalPipeline completely disconnected** (Session 2A finding) | `app/core/initializer.py` | Complete new retrieval system (calibration, adaptive ranking, analytics, 11 adapters) never used in production | Not imported, not instantiated, not wired; 500+ test lines only |
+The normal engineering path constructs `VerificationRunner` and `RepairLoop` but never invokes them. `execute_plan()` explicitly skips human review. Workflow execution dispatches directly to `TaskExecutor.execute()` without invoking its configured `SafetyGate`.
+
+**Required Work**
+
+- Route every execution outcome through one enforced state machine: proposal → approval/safety decision → execute → verify → repair/replan or safe failure → persist outcome.
+- Make safety denial terminal.
+- Enforce the same behavior through facade and orchestrator entry points.
+- Add tests for approval, denial, verification, repair, replan, safe failure, and persisted outcomes.
+
+**Dependencies**
+
+- Must come after Task 1.
+- Blocks Tasks 3, 5, and 11.
+
+**Why This Order**
+
+The documented required order repairs execution and safety enforcement before enabling autonomous or self-modifying actions.
+
+**Acceptance Criteria**
+
+- [ ] Approval and safety decisions cannot be bypassed.
+- [ ] Verification and repair are invoked for normal execution.
+- [ ] Safety denial is terminal and observable.
+- [ ] Facade and orchestrator paths share the enforced state machine.
 
 ---
 
-## Session 2C Audit Summary: Learning, Self-Improvement & Event-Driven Learning
+## Task 3 — Repair production autonomy startup and scheduled jobs
 
-**Scope:** Learning pipeline, learning orchestration, self-improvement, `SafeSelfImprovement`, feedback/learning loops, event-driven learning, event publication, event subscriptions, event handlers, learning-related event flow, learning → memory/state flow, feedback → learning flow, learning → self-improvement flow, model/context handling related to learning, tests covering these systems, actual runtime wiring and reachability.
+**Size:** 🔴 RED — BIG / COMPLEX
+**Priority:** P0
+**Execution Order:** 3
 
-Also verify connections between the three Session 2 areas:
-- **Knowledge/Retrieval ↔ Memory/State ↔ Learning/Self-Improvement**
+**Location**
 
-**Method:** Read 15+ core learning/self-improvement files; traced execution from `SystemInitializer` → components; examined event wiring, subscriptions, publishing, handler reachability; verified end-to-end data flow from AnswerVerifier/ExecutionVerifier/Watchdog → LearningPipeline → MemoryCoordinator → SafeSelfImprovementEngine.
+- `app/long_term_autonomy/manager.py`: `_register_background_jobs()`, `_run_learning_pipeline_job()`, `_autonomy_watchdog_checkpoint()`, `_autonomy_self_initiated_work_job()`
+- `app/long_term_autonomy/manager.py`: `_learn()`, `_execute_specific_task()`
 
-### Overall Assessment
+**Problem**
 
-| Criterion | Status | Evidence |
-|-----------|--------|----------|
-| **Implemented** | ✅ Yes | All core components fully implemented with complete logic |
-| **Imported** | ✅ Yes | Every component imported in `app/core/initializer.py` |
-| **Wired** | ⚠️ Partial | Initializer creates components but event wiring has gaps |
-| **Reachable** | ⚠️ Partial | LearningPipeline reachable from AnswerVerifier/Watchdog/AutonomousLearningPipeline; ExecutionVerifier has wrong API; SafeSelfImprovement subscribed but not fully tested |
-| **Executed** | ⚠️ Partial | LearningPipeline runs on AnswerSafeFailure (failed LLM fallbacks); AutonomousLearningPipeline not started; SafeSelfImprovement events subscribed but flow untested |
-| **Produces Expected Results** | ⚠️ Partial | LearningPipeline stores to ExperienceMemory/EngineeringLessons; SafeSelfImprovement has complete pipeline; but many paths unconnected |
+The autonomy manager constructed by `SystemInitializer` fails production startup because `JobStatus` is undefined; `start()` returns failure and `AUTONOMY_RUNNING=False`. Scheduled callbacks call absent methods such as `run_cycle`, `checkpoint`, and `discover_work`. The learning step does not perform actual learning-pipeline work, and autonomous task execution references an uninitialized planner and can mark work complete without verified execution.
 
----
+**Required Work**
 
-### Architecture Overview: Learning & Self-Improvement Subsystems
+- Import and use the correct job-state type.
+- Align every scheduled callback with an implemented interface.
+- Make failed autonomy startup propagate as an initialization failure.
+- Instantiate and inject a planner and executor explicitly.
+- Implement the actual learning handoff.
+- Prevent completion status unless execution is verified.
+- Add production-startup and recurring-job integration tests.
 
-```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                           EVENT BUS (Central Communication)                     │
-└─────────────────────────────────────────────────────────────────────────────────┘
-                                      │
-          ┌───────────────────────────┼───────────────────────────┐
-          ▼                           ▼                           ▼
-┌────────────────────────┐ ┌────────────────────────┐ ┌────────────────────────┐
-│   LEARNING PIPELINE    │ │  AUTONOMOUS LEARNING   │ │   SAFE SELF-IMPROVE    │
-│  (app/learning/)       │ │  (app/autonomous_      │ │  (app/safe_self_       │
-│                        │ │  learning/)            │ │  improvement/)         │
-│  5-Stage Pipeline:     │ │                        │ │                        │
-│  1. Observe            │ │  Experience→Extract→   │ │  Allowlist/Boundaries │
-│  2. Evaluate           │ │  Validate→Store        │ │  Risk Assessment     │
-│  3. Extract Learning   │ │  Gap Detection         │ │  Approval Gates      │
-│  4. Validate Learning  │ │  Autonomous Research   │ │  Prioritization      │
-│  5. Worth Remembering  │ │  Consolidation/        │ │  Rollback/Promotion  │
-│                        │ │  Forgetting            │ │  Policy Engine       │
-│  Outputs to:           │ │                        │ │                        │
-│  • ExperienceMemory    │ │  Parallel system       │ │  Subscribes to:      │
-│  • EngineeringLessons  │ │  using SAME memory     │ │  • learning.improvement│
-│  • Emits Event:        │ │  modules               │ │    _candidate        │
-│    learning.improve-   │ │                        │ │  • diagnostics.      │
-│    ment_candidate      │ │                        │ │    completed         │
-└────────────────────────┘ └────────────────────────┘ └────────────────────────┘
-          │                           │                           ▲
-          │                           │                           │
-          ▼                           ▼                           │
-┌─────────────────────────────────────────────────────────────────┐
-│                    MEMORY COORDINATOR (Unified Facade)          │
-│  • ExperienceMemory (ExperienceEntry)                           │
-│  • EngineeringLessons (EngineeringLesson)                       │
-│  • LongTermMemory / SemanticMemory / etc.                       │
-└─────────────────────────────────────────────────────────────────┘
-          │
-          ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    PRODUCTION FLOW ENTRY POINTS                 │
-│                                                                 │
-│  ANSWER VERIFIER → LearningPipeline                             │
-│   (V1→AR→SF1)        (on failed LLM fallback)                  │
-│                                                                 │
-│  EXECUTION VERIFIER → LearningPipeline.add_experience()        │
-│   (on task result)       (API MISMATCH - wrong method)         │
-│                                                                 │
-│  WATCHDOG → LearningPipeline                                    │
-│   (on system events)     (via event subscription)              │
-│                                                                 │
-│  AUTONOMOUS LEARNING PIPELINE → Same memory modules            │
-│   (periodic background)   (NOT started in initializer)         │
-└─────────────────────────────────────────────────────────────────┘
-```
+**Dependencies**
+
+- Must come after Tasks 1 and 2.
+- Blocks long-running autonomy, autonomous learning, maintenance, recovery, and health-observation claims.
+
+**Why This Order**
+
+The source document identifies autonomy startup as a critical blocker and states that it must be repaired before long-running autonomy and recovery work.
+
+**Acceptance Criteria**
+
+- [ ] Production autonomy starts successfully.
+- [ ] All registered recurring callbacks target implemented interfaces.
+- [ ] Startup failure is visible as initialization failure.
+- [ ] Autonomous work receives explicit planner/executor dependencies.
+- [ ] Work cannot be marked complete without verified execution.
 
 ---
 
-### LearningPipeline (app/learning/pipeline.py) - Detailed Analysis
+## Task 4 — Restore the shared event contract and event-driven improvement flow
 
-**Stages (5 deterministic stages, no LLM calls):**
-1. **Observe** - Transform `LearningCandidate` into structured `ObservedData` with signals, confidence
-2. **Evaluate** - Score relevance, novelty, actionability against thresholds; determine `has_learning_potential`
-3. **Extract Learning** - Produce `knowledge_items` (title, content, category, confidence, source)
-4. **Validate Learning** - Filter malformed/low-quality items; requires title, content, category, source, min confidence 0.1, min content length 10
-5. **Worth Remembering** - Average confidence ≥ 0.4 threshold → `YES`/`NO` decision; persist via `MemoryCoordinator`
+**Size:** 🔴 RED — BIG / COMPLEX
+**Priority:** P1
+**Execution Order:** 4
 
-**Wiring in Initializer (`app/core/initializer.py:163-177`):**
-```python
-learning_pipeline = create_learning_pipeline(
-    memory_coordinator=memory_coordinator,
-    event_bus=event_bus,
-)
+**Location**
 
-answer_verifier = AnswerVerifier(
-    learning_pipeline=learning_pipeline,
-    priority_llm=priority_llm,
-)
-```
+- `app/core/initializer.py`: lines 110, 164–167, 290–304
+- `app/safe_self_improvement/self_improvement.py`: constructor and `create_self_improvement_engine()`
+- `app/diagnostics/diagnostic_engine.py`: `_emit_diagnostic_event()`
 
-**Event Emission (LearningPipeline._persist_to_memory:490-510):**
-```python
-self._event_bus.emit(
-    "learning.improvement_candidate",
-    data={candidate_id, source_component, candidate_type, stored_item_ids, timestamp},
-    source="LearningPipeline"
-)
-```
+**Problem**
 
-**✅ Verified: LearningPipeline → MemoryCoordinator → ExperienceMemory/EngineeringLessons works**
-**✅ Verified: LearningPipeline emits "learning.improvement_candidate" event**
+The initializer uses a local `EventBus`, while safe self-improvement calls the global `get_event_bus()` and its factory does not accept dependency injection. Production learning and diagnostics events therefore do not reach the improvement engine. Diagnostic event emission also uses `EventPriority.NORMAL` without importing `EventPriority`; a broad exception handler hides the failure.
 
----
+**Required Work**
 
-### AnswerVerifier (app/verification/answer_verifier.py) - Learning Integration
+- Add explicit event-bus injection to the self-improvement engine and factory.
+- Pass the initializer-local bus to all related components.
+- Import the correct event-priority type.
+- Surface event-publication failures appropriately.
+- Add real integration tests for learning→improvement and diagnostics→improvement.
 
-**Flow:** `verify_fallback_answer(answer, prompt, context)`:
-1. Validate answer (`_is_valid_answer`) - heuristic checks for length, failure patterns, coherence
-2. If **valid**: return answer; if `_has_learning_value`, send to LearningPipeline with `is_valid_answer=True`
-3. If **invalid**: Call `AnswerRepairLoop.attempt_repair()` (max 3 retries with corrective prompts)
-4. If **repair exhausted**: Call `AnswerSafeFailure.handle_exhausted_retries()` → returns low-confidence disclosure + logs to LearningPipeline (`knowledge_gap` tags)
+**Dependencies**
 
-**LearningCandidate creation (AnswerVerifier._create_learning_candidate:240-288):**
-- `candidate_type: ANSWER_VERIFICATION`
-- `source_component: "AnswerVerifier"`
-- `raw_observation`: {answer, prompt, is_valid_answer, answer_length, word_count}
-- `tags`: ["answer_verification", "llm_fallback", "valid_answer" OR "needs_improvement"]
+- Must come after Task 1.
+- The event and dependency-injection contract must be fixed before improvement-flow testing.
+- Diagnostics event delivery should coordinate with the event-bus injection fix.
 
-**✅ Verified: AnswerVerifier → LearningPipeline integration works**
-**✅ Verified: V1→AR→SF1 pipeline complete with LearningPipeline at each stage**
+**Why This Order**
+
+The existing status explicitly identifies incompatible event-bus ownership and broken diagnostic emission as critical blockers.
+
+**Acceptance Criteria**
+
+- [ ] Learning and diagnostics publish to the bus consumed by safe self-improvement.
+- [ ] Diagnostic completion events are delivered or failures are surfaced.
+- [ ] Improvement candidates are created through the production event path.
+- [ ] End-to-end event tests pass with real component wiring.
 
 ---
 
-### ExecutionVerifier (app/verification/execution_verifier.py) - Learning Integration
+## Task 5 — Connect execution outcomes to learning and durable memory
 
-**Wiring in ExecutionEngine:** `ExecutionEngine` creates `ExecutionVerifier` with `learning_pipeline` but **does not use it** - uses its own internal logic instead.
+**Size:** 🟡 YELLOW — MEDIUM
+**Priority:** P1
+**Execution Order:** 5
 
-**Critical API Mismatch:**
-```python
-# ExecutionVerifier._route_to_learning_pipeline() L133-143:
-if self._learning_pipeline and hasattr(self._learning_pipeline, 'add_experience'):
-    self._learning_pipeline.add_experience(...)  # <-- WRONG METHOD NAME
-```
+**Location**
 
-**Actual LearningPipeline API:** `LearningPipeline.run(candidate)` - NOT `add_experience()`
+- `app/verification/execution_verifier.py`: `_route_to_learning_pipeline()`
+- `app/execution/engine.py`
+- `app/learning/pipeline.py`
 
-**Result:** ExecutionVerifier **cannot** send learning to the pipeline. Silent failure (try/except catches it).
+**Problem**
 
-**🔴 P1 Finding: ExecutionVerifier uses non-existent `add_experience()` method on LearningPipeline**
+`ExecutionVerifier` calls `LearningPipeline.add_experience()`, but the initialized pipeline exposes `run(candidate)`. The normal execution engine also does not construct or call `ExecutionVerifier`, so actual task outcomes do not reliably reach learning, especially successful work.
 
----
+**Required Work**
 
-### AutonomousLearningPipeline (app/autonomous_learning/pipeline.py) - Parallel System
+- Define one typed learning-outcome contract.
+- Replace the incompatible method call with the supported pipeline handoff.
+- Connect `ExecutionVerifier` to the normal execution state machine.
+- Ensure successful and failed task outcomes persist to memory.
+- Add integration tests for both outcomes.
 
-**Architecture:** Complete end-to-end autonomous learning system:
-- Experience Analysis → Knowledge Extraction → Knowledge Validation → Storage
-- → Gap Detection → Autonomous Research → Gap Resolution
-- Integrates: `ExperienceMemory`, `EngineeringLessons`, `LongTermMemory`, `SemanticMemory`
-- `KnowledgeValidator`, `KnowledgeExtractionPipeline`, `KnowledgeGapDetector`, `AutonomousResearchLoop`
-- `CrossMemoryReferences`, `ConsolidationEngine`, `LearningAnalytics`
-- Multi-agent learning (KnowledgeSharer/KnowledgeReceiver)
-- Goal-driven learning integration
+**Dependencies**
 
-**Wiring:** Created with shared infrastructure (EventBus, BackgroundJobService, ObservabilityHub)
-- Registers health check with ObservabilityHub
-- Has `run_pipeline()` method for periodic execution
+- Must come after Task 2.
+- Blocks completion of execution-learning claims.
 
-**❌ Critical: NOT instantiated in SystemInitializer** - Not imported, not created, not started
-- `AutonomousLearningConfig.enabled = True` by default but never used
-- No integration with Main execution path
-- Same memory modules as production but completely separate pipeline
+**Why This Order**
 
-**🟡 P1 Finding: AutonomousLearningPipeline is a complete parallel learning system that is never started**
+The source document explicitly states that execution learning depends on the P0 execution state-machine repair.
 
----
+**Acceptance Criteria**
 
-### Watchdog (app/autonomy/watchdog.py) - Event → Learning Flow
-
-**Event Subscriptions (`AutonomyConfig.watchdog_event_subscriptions`):**
-- Subscribes to EventBus patterns on start: `task.*`, `goal.*`, `workflow.*`, `memory.*`, `system.*`, `diagnostics.*`
-
-**Event Handler (`_on_event:121-143`):**
-- Creates `WatchdogObservation` from EventBus event
-- Converts to `LearningCandidate` via `to_learning_candidate()`
-- Spawns background thread calling `learning_pipeline.run(candidate)`
-
-**Direct Observation Methods (called by AutonomyManager):**
-- `observe_task_stalled`, `observe_task_failed`, `observe_goal_stalled`, `observe_goal_failed`, `observe_resource_pressure`
-- All create `WatchdogObservation` → `_process_observation()` → LearningPipeline
-
-**Periodic Health Checks (BackgroundJobService + monitor thread):**
-- Queries ObservabilityHub for component health
-- Creates observations for degraded/unhealthy components
-- Checks metric alerts
-
-**✅ Verified: Watchdog → EventBus → LearningPipeline flow is wired and functional**
-**✅ Verified: Watchdog subscribes to event patterns and processes events**
+- [ ] Execution verification reaches `LearningPipeline.run(candidate)` through the production path.
+- [ ] Successful and failed outcomes are persisted.
+- [ ] The typed contract prevents silent API mismatch.
+- [ ] Integration tests cover both outcome classes.
 
 ---
 
-### SafeSelfImprovementEngine (app/safe_self_improvement/self_improvement.py)
+## Task 6 — Consolidate retrieval and restore cross-session knowledge recall
 
-**Complete Pipeline (10 stages):**
-1. Submit ImprovementCandidate
-2. Validate against allowlist
-3. Validate against boundaries
-4. Assess risk
-5. Evaluate policies
-6. Prioritize
-7. Request approval if needed
-8. Execute with risk-based safeguards
-9. Verify and promote
-10. Rollback on failure
+**Size:** 🔴 RED — BIG / COMPLEX
+**Priority:** P1/P2
+**Execution Order:** 6
 
-**Event Subscriptions (`_subscribe_to_events:520-536`):**
-```python
-self._event_bus.subscribe("learning.improvement_candidate", self._on_learning_improvement_candidate)
-self._event_bus.subscribe("diagnostics.completed", self._on_diagnostics_completed)
-```
+**Location**
 
-**Handler: `_on_learning_improvement_candidate` (L538-569):**
-- Receives event from LearningPipeline (emitted in `_persist_to_memory`)
-- Creates `ImprovementCandidate` with category `KNOWLEDGE_BASEUPDATE`
-- Calls `submit_improvement(candidate, auto_execute=True)`
+- `app/memory/unified_retrieval.py`
+- `app/knowledge_retrieval/pipeline.py`
+- `app/memory/conversation_memory.py`
+- Vector-memory integration tests
 
-**Handler: `_on_diagnostics_completed` (L571-601):**
-- Receives diagnostic issues
-- Creates `ImprovementCandidate` with category `BUG_FIX` for high/critical issues
-- Calls `submit_improvement(candidate, auto_execute=False)` (requires approval)
+**Problem**
 
-**✅ Verified: SafeSelfImprovement subscribes to LearningPipeline and Diagnostics events**
-**✅ Verified: LearningPipeline → SafeSelfImprovement event flow is wired**
+Production routes use `UnifiedRetrieval`, while the more advanced calibration, learned ranking, analytics, and retrieval-decision pipeline is orphaned. The APIs and data models diverge. All three conversation/vector integration tests fail, so cross-session semantic recall is not established.
 
----
+**Required Work**
 
-### EventBus (app/core/events.py) - Central Communication
+- Integrate the advanced pipeline behind the production retrieval interface or remove/consolidate it.
+- Preserve one observable retrieval contract.
+- Diagnose vector persistence/retrieval mismatch.
+- Define restart semantics.
+- Add deterministic persistence-and-retrieval integration tests.
 
-**Capabilities:**
-- Pattern-based subscriptions with wildcards (`task.*`, `learning.*`)
-- Sync/async dispatch with priority ordering
-- Event history (10k events) with query by name/source/pattern
-- Synchronous `emit_and_wait()` for collecting handler results
-- Decorator-based subscription (`@event_bus.on("pattern")`)
+**Dependencies**
 
-**Wiring Pattern (used throughout codebase):**
-```python
-# Subscribe
-event_bus.subscribe("pattern", handler, priority=0, async_mode=True)
+- Must follow Task 1's runtime-architecture decision.
+- Vector recall work is independent after the supported retrieval stack is selected.
 
-# Emit
-event_bus.emit("event.name", data={...}, source="ComponentName")
-```
+**Why This Order**
 
-**Global instance:** `get_event_bus()` singleton used by all components.
+The document lists retrieval consolidation after the canonical runtime decision and before final production-path verification.
 
-**✅ Verified: EventBus is the central nervous system; all event-driven components use it correctly**
+**Acceptance Criteria**
+
+- [ ] One retrieval implementation is supported in production.
+- [ ] Calibration, ranking, analytics, and decision behavior are either reachable or explicitly retired.
+- [ ] Cross-session vector recall works deterministically across restart.
+- [ ] Production retrieval has one stable contract.
 
 ---
 
-### End-to-End Data Flow Verification
+## Task 7 — Replace obsolete tests with production-path integration evidence
 
-| Flow Path | Publisher | Event | Subscriber | Handler | Resulting State Change | Status |
-|-----------|-----------|-------|------------|---------|------------------------|--------|
-| LLM Fallback → Learning | AnswerVerifier | (direct call) | LearningPipeline | `run()` | ExperienceMemory/EngineeringLessons entries | ✅ Working |
-| Repair Exhausted → Learning | AnswerSafeFailure | (direct call) | LearningPipeline | `run()` | Knowledge gap logged | ✅ Working |
-| Learning → Self-Improvement | LearningPipeline | `learning.improvement_candidate` | SafeSelfImprovement | `_on_learning_improvement_candidate` | ImprovementCandidate created/submitted | ✅ Wired, untested |
-| Diagnostics → Self-Improvement | DiagnosticEngine | `diagnostics.completed` | SafeSelfImprovement | `_on_diagnostics_completed` | Bug fix candidates created | ✅ Wired, untested |
-| System Events → Learning | Various (via EventBus) | `task.*`, `goal.*`, etc. | Watchdog | `_on_event` | LearningPipeline runs | ✅ Working |
-| Task Execution → Learning | ExecutionVerifier | (direct call) | LearningPipeline | `add_experience()` | **FAILS** - wrong method | 🔴 Broken |
-| Background Learning | AutonomousLearningPipeline | (periodic) | Self | `run_pipeline()` | Gap detection, research, consolidation | ❌ Not started |
-| Execution Verifier → Learning | ExecutionEngine | (direct) | ExecutionVerifier | `verify_execution()` | Creates experience, calls LearningPipeline | **API mismatch** |
+**Size:** 🔴 RED — BIG / COMPLEX
+**Priority:** P1
+**Execution Order:** 7
 
----
+**Location**
 
-### Test Coverage Analysis
+- `tests/`
+- `tests/test_integration_autonomous.py`
+- Production startup and runtime paths
 
-| Test File | Coverage | Status |
-|-----------|----------|--------|
-| `tests/test_learning_pipeline.py` | 20+ tests - all 5 stages, factory, full pipeline runs | ✅ Passing |
-| `tests/test_autonomy.py` | 40+ tests - Watchdog event handling, LearningPipeline integration | ✅ Passing |
-| `tests/test_integration_autonomous.py` | Integration tests - imports KnowledgeRetrievalPipeline in isolation | ⚠️ Not testing production flow |
-| **Missing Tests** | ExecutionVerifier → LearningPipeline, SafeSelfImprovement event handlers, AutonomousLearningPipeline | ❌ No tests |
+**Problem**
 
-**Watchdog tests verify:** Event subscription, observation creation, LearningPipeline invocation via background thread.
+The audited suite collected successfully but produced 1,942 passed, 69 failed, 36 errors, and 43 skipped tests. Existing tests often target duplicate or isolated implementations rather than the normal application graph. The production autonomy manager has no direct test coverage.
 
----
+**Required Work**
 
-### Cross-Subsystem Integration Status (Session 2A + 2B + 2C)
+- Repair or retire obsolete tests after runtime consolidation.
+- Add black-box tests for `FreyaApp` startup, chat, task execution, verification, safety denial, event propagation, restart/persistence, and background autonomy jobs.
+- Add production-path tests for retrieval, learning, safe self-improvement, diagnostics, monitoring, and recovery.
+- Require a clean critical-path suite.
 
-| Integration Point | Session 2A (Knowledge/Retrieval) | Session 2B (Memory/State) | Session 2C (Learning/Improvement) | Status |
-|-------------------|----------------------------------|---------------------------|-----------------------------------|--------|
-| **UnifiedRetrieval → KnowledgeFirstResolver** | ✅ Wired | N/A | N/A | ✅ Functional |
-| **KnowledgeFirstResolver → Intelligence** | ✅ Wired | N/A | N/A | ✅ Functional |
-| **MemoryCoordinator → UnifiedRetrieval** | N/A | ✅ Wired (all 11 retrievers) | N/A | ✅ Functional |
-| **LearningPipeline → MemoryCoordinator** | N/A | ✅ Wired (add_experience, add_lesson) | ✅ Wired (called from LP) | ✅ Functional |
-| **AnswerVerifier → LearningPipeline** | N/A | N/A | ✅ Wired (created together in init) | ✅ Functional |
-| **Watchdog → LearningPipeline** | N/A | N/A | ✅ Subscribed (EventBus) | ✅ Functional |
-| **ExecutionVerifier → LearningPipeline** | N/A | N/A | ❌ **Broken API** (add_experience vs run) | 🔴 P1 Broken |
-| **LearningPipeline → SafeSelfImprovement** | N/A | N/A | ✅ Event emitted/subscribed | ✅ Wired |
-| **Diagnostics → SafeSelfImprovement** | N/A | N/A | ✅ Event subscribed | ✅ Wired |
-| **AutonomousLearningPipeline → Memory** | N/A | Uses same modules | ❌ Not instantiated | ❌ Not started |
-| **Consolidation/Forgetting → Memory** | N/A | ✅ Wired in MemoryCoordinator | Used by AutonomousLP only | ✅ Functional (production) |
+**Dependencies**
+
+- Must follow Task 1 and the relevant implementation repairs in Tasks 2–6.
+- Blocks the claim that the production architecture is operational.
+
+**Why This Order**
+
+The existing document states that duplicate runtime paths must be consolidated before tests can prove the actual architecture.
+
+**Acceptance Criteria**
+
+- [ ] Tests exercise the normal production graph.
+- [ ] Obsolete-path tests are migrated or retired.
+- [ ] Critical-path failures and errors are resolved.
+- [ ] Startup, safety, verification, learning, persistence, and autonomy are covered end to end.
 
 ---
 
-### Session 2C: Findings Summary
+## Task 8 — Implement provider resilience
 
-#### ✅ FULLY FUNCTIONAL (Verified End-to-End)
+**Size:** 🔴 RED — BIG / COMPLEX
+**Priority:** P1
+**Execution Order:** 8
 
-1. **LearningPipeline (5-stage)** - Complete deterministic pipeline; integrated with AnswerVerifier and Watchdog; persists to ExperienceMemory/EngineeringLessons via MemoryCoordinator
-2. **AnswerVerifier (V1→AR→SF1)** - Complete verification pipeline; sends learning candidates at validation, repair, and safe failure points
-3. **Watchdog** - Subscribes to EventBus patterns; converts system events to LearningPipeline candidates; periodic health checks
-4. **SafeSelfImprovementEngine** - Complete 10-stage pipeline with allowlist, boundaries, risk, approval, rollback, promotion; subscribes to LearningPipeline and Diagnostics events
-5. **EventBus** - Central communication backbone; pattern-based subscriptions; priority dispatch; history/replay
-6. **Autonomy Manager (Watchdog + SelfInitiated + Maintenance)** - Started in initializer; Watchdog feeds LearningPipeline
+**Location**
 
-#### ⚠️ ISSUES FOUND (Prioritized)
+- `app/providers/factory.py`: lines 227–231
 
-| Priority | Issue | Location | Impact | Evidence |
-|----------|-------|----------|--------|----------|
-| **P1** | **ExecutionVerifier uses wrong API on LearningPipeline** | `app/verification/execution_verifier.py:135` | Task execution learnings never reach LearningPipeline | Calls `learning_pipeline.add_experience()` but LP only has `run(candidate)` |
-| **P1** | **AutonomousLearningPipeline never started** | `app/core/initializer.py` | Complete autonomous learning system (gap detection, research, consolidation) dormant | Not imported, not instantiated, not scheduled |
-| **P1** | **KnowledgeRetrievalPipeline disconnected** (re-confirmed) | `app/core/initializer.py` | New retrieval system with calibration/ranking/analytics never used | Session 2A finding; still not wired in initializer |
-| **P2** | **No integration tests for LearningPipeline event flow** | `tests/` | Cannot verify AnswerVerifier/Watchdog → LearningPipeline → Memory/SelfImprovement end-to-end | Tests use mocks in isolation; no integration test calls real components |
-| **P2** | **SafeSelfImprovement event handlers untested** | `tests/` (missing) | Cannot verify learning.improvement_candidate → ImprovementCandidate flow works | No test file for SafeSelfImprovement |
-| **P2** | **AnswerRepairLoop system prompt hardcoded** | `app/verification/answer_repair_loop.py:49-51` | Limited adaptability | Should use LLMStack/system config |
-| **P2** | **Two LearningPipeline implementations** | `app/learning/pipeline.py` vs `app/autonomous_learning/pipeline.py` | Duplicate maintenance, confusion | AutonomousLP is more sophisticated but unused |
-| **P3** | **LearningPipeline thresholds hardcoded** | `app/learning/pipeline.py:346, 168-172` | Not configurable | `worth_remembering_threshold=0.4`, min thresholds hardcoded in `__init__` |
-| **P3** | **AutonomousLearningPipeline uses separate KnowledgeValidator/Extraction** | `app/autonomous_learning/pipeline.py` | Duplicate validation logic | Should reuse answer_verifier or unify |
+**Problem**
 
----
+The provider factory registers only `OllamaProvider`; `local` is merely an alias. There is no real multi-provider routing, failover, health-aware selection, or graceful capability degradation beyond one local service.
 
-### Impact on Overall Functional Completion (Updated)
+**Required Work**
 
-**Session 2C Conclusion:** The learning/self-improvement subsystem has **COMPLETE IMPLEMENTATIONS** but **PARTIAL WIRING**. Critical production paths (AnswerVerifier→LearningPipeline, Watchdog→LearningPipeline, LearningPipeline→SafeSelfImprovement) are wired. One broken path (ExecutionVerifier). One major parallel system (AutonomousLearningPipeline) completely inert.
+- Implement the intended provider-abstraction contract.
+- Add provider health checks.
+- Add configured fallback ordering.
+- Classify timeout and provider errors.
+- Implement safe no-provider behavior.
+- Test outage and fallback scenarios.
 
-| Category | Previous (Session 2B) | Session 2C Delta | New Total |
-|----------|----------------------|------------------|-----------|
-| Learning Pipeline | 80% | -5% (ExecutionVerifier broken, AutonomousLP not started) | 75% |
-| Self-Improvement | 10% | +15% (Engine complete, events wired) | 25% |
-| **Overall** | **~77.9%** | **-1.3%** | **~76.6%** |
+**Dependencies**
 
-**Key Gaps Now:**
-1. **Multi-provider LLM support (5%)** - Only Ollama works
-2. **Autonomy/Orchestrator integration (4%)** - Components exist but not in main flow
-3. **Learning from success (3%)** - Pipeline only on failure path (AnswerSafeFailure)
-4. **Self-improvement wiring (4.5%)** - Engine isolated from main execution results
-5. **ProjectMemory semantic search (1.5%)** - Embeddings disabled
-6. **ExecutionVerifier → LearningPipeline broken (2%)** - API mismatch
-7. **AutonomousLearningPipeline inactive (3%)** - Complete system not started
-8. **KnowledgeRetrievalPipeline disconnected (2%)** - Duplicate sophisticated system
-9. **Advanced editing/patch (partial, Session 3)**
-10. **Review/Risk/Confidence/etc. (10%, Sessions 4-5)**
+- Can proceed independently.
+- The final contract should be consumed by execution resilience and tested in Task 7.
+
+**Why This Order**
+
+The source document explicitly marks provider resilience as independently actionable, while placing it after runtime, execution, and learning-path repairs in the path to 100%.
+
+**Acceptance Criteria**
+
+- [ ] More than one provider can be selected under the supported contract.
+- [ ] Health-aware fallback and timeout/error classification work.
+- [ ] No-provider behavior is safe and observable.
+- [ ] Provider outage tests pass.
 
 ---
 
-### Files/Modules/Functions Examined (Session 2C)
+## Task 9 — Repair monitoring and hardware-health evidence
 
-| File | Purpose | Status |
-|------|---------|--------|
-| `app/learning/pipeline.py` | LearningPipeline - 5 stages (Observe→Evaluate→Extract→Validate→Worth Remembering) | ✅ Complete |
-| `app/learning/models.py` | LearningCandidate, ObservedData, EvaluationResult, ExtractedLearning, ValidationResult, WorthRememberingResult, LearningPipelineResult | ✅ Complete |
-| `app/verification/answer_verifier.py` | AnswerVerifier with V1→AR→SF1, LearningPipeline integration | ✅ Complete |
-| `app/verification/answer_repair_loop.py` | AnswerRepairLoop (max 3 retries) + AnswerSafeFailure | ✅ Complete |
-| `app/verification/execution_verifier.py` | ExecutionVerifier - verification runner, learning pipeline, observability | ⚠️ Broken API |
-| `app/verification/runner.py` | VerificationRunner - dry_run_verify (tests+lint) | ✅ Functional |
-| `app/safe_self_improvement/self_improvement.py` | SafeSelfImprovementEngine - 10-stage pipeline, event subscriptions | ✅ Complete |
-| `app/safe_self_improvement/models.py` | ImprovementCandidate, FileModification, ApprovalRequest, ExecutionResult, RiskLevel, etc. | ✅ Complete |
-| `app/autonomous_learning/pipeline.py` | AutonomousLearningPipeline - Experience→Extract→Validate→Store→Gap→Research | ✅ Complete (not started) |
-| `app/autonomous_learning/models.py` | KnowledgeGap, ResearchTask, LearningEvent, AutonomousLearningConfig | ✅ Complete |
-| `app/autonomy/watchdog.py` | Watchdog - EventBus subscriptions, health checks, LearningPipeline integration | ✅ Complete |
-| `app/autonomy/manager.py` | AutonomyManager - coordinates Watchdog, SelfInitiated, Maintenance | ✅ Complete |
-| `app/autonomy/models.py` | WatchdogObservation, AutonomyConfig, AutonomousWorkItem, GoalContext | ✅ Complete |
-| `app/core/events.py` | EventBus - pub/sub, patterns, priority, history, async support | ✅ Complete |
-| `app/core/initializer.py` | SystemInitializer - wiring of all above components | ✅ Complete (partial gaps) |
-| `tests/test_learning_pipeline.py` | 20+ tests - all 5 stages, factory, full pipeline runs | ✅ Passing |
-| `tests/test_autonomy.py` | 40+ tests - Watchdog, SelfInitiated, Maintenance, AutonomyManager | ✅ Passing |
+**Size:** 🟡 YELLOW — MEDIUM
+**Priority:** P2
+**Execution Order:** 9
 
----
+**Location**
 
-## Session 2 Consolidated Status
+- `app/monitoring/*`
+- `tests/test_network_monitor.py`
+- `tests/test_gpu_monitor.py`
 
-### Combined Findings from Session 2A, 2B, 2C
+**Problem**
 
-| Subsystem | Session 2A | Session 2B | Session 2C | Overall Status |
-|-----------|------------|------------|------------|----------------|
-| **Knowledge Retrieval** | ⚠️ Dual systems (1 prod, 1 orphaned) | N/A | N/A | **Partially Functional** |
-| **Routing/Resolution** | ✅ UnifiedRouter→KFR→UnifiedRetrieval | N/A | N/A | **Functional** |
-| **Memory Modules (12)** | N/A | ✅ All implemented, CRUD, atomic persistence | N/A | **Functional** |
-| **MemoryCoordinator** | N/A | ✅ Single write facade, 11 retrievers wired | N/A | **Functional** |
-| **UnifiedRetrieval** | ✅ Production path | ✅ Wired with all modules | N/A | **Functional** |
-| **GoalStorage** | N/A | ✅ 5-mixin composition, hierarchy/scheduler/analytics | N/A | **Functional** |
-| **ConversationMemory** | N/A | ✅ Cross-session vector search, entity extraction | N/A | **Functional** |
-| **Phase C Engines** | N/A | ✅ Consolidation/Forgetting integrated | N/A | **Functional** |
-| **Advanced Memory Features** | N/A | ✅ Cross-refs, RankRanking, Validation, PreferenceLearning | N/A | **Implemented** |
-| **LearningPipeline (5-stage)** | N/A | N/A | ✅ Complete, wired to AnswerVerifier/Watchdog | **Functional** |
-| **AnswerVerifier (V1→AR→SF1)** | N/A | N/A | ✅ Complete, feeds LearningPipeline | **Functional** |
-| **Watchdog** | N/A | N/A | ✅ EventBus subs, feeds LearningPipeline | **Functional** |
-| **SafeSelfImprovement** | N/A | N/A | ✅ Complete 10-stage, event subs wired | **Wired, Untested** |
-| **AutonomousLearningPipeline** | N/A | N/A | ❌ Complete but NOT STARTED | **Inert** |
-| **ExecutionVerifier→Learning** | N/A | N/A | ❌ Broken API (add_experience vs run) | **Broken** |
-| **KnowledgeRetrievalPipeline** | ❌ Orphaned | N/A | N/A | **Orphaned** |
-| **EventBus** | N/A | N/A | ✅ Central, pattern-based, history | **Functional** |
+Fifteen network-monitoring tests and two GPU-monitoring tests fail. Endpoint/session/error handling and hardware fallback behavior are not dependable enough for operational feedback.
 
-### P0/P1/P2/P3 Issue Summary (All Sessions 2)
+**Required Work**
 
-| Priority | Count | Issues |
-|----------|-------|--------|
-| **P0** | 0 | None |
-| **P1** | 7 | 1. KnowledgeRetrievalPipeline disconnected<br>2. Automony/Orchestrator not in main flow<br>3. LearningPipeline only on failure path<br>4. No health/readiness endpoints<br>5. ProjectMemory embeddings disabled<br>6. ExecutionVerifier→LearningPipeline broken API<br>7. AutonomousLearningPipeline not started |
-| **P2** | 8 | 1. Two incompatible retrieval systems<br>2. No integration tests for production retrieval<br>3. KnowledgeFirstResolver expects AdaptiveRankingEngine features<br>4. No integration tests for LearningPipeline event flow<br>5. SafeSelfImprovement event handlers untested<br>6. AnswerRepairLoop hardcoded system prompt<br>7. Two LearningPipeline implementations (duplicate)<br>8. External Services / Predictive Diagnostics / Learned Relevance not integrated |
-| **P3** | 8 | 1. Duplicate retriever classes in UnifiedRetrieval<br>2. UnifiedRetrieval lacks calibration/ranking/analytics<br>3. 9 of 16 memory modules have zero tests<br>3. No custom serialization framework<br>4. CrossMemoryReferences auto-inference not triggered<br>5. LearningPipeline thresholds hardcoded<br>6. AutonomousLearningPipeline duplicate validation logic<br>7. Circular import risk in planner<br>8. AnswerRepairLoop duplicate VerificationRunner |
+- Repair endpoint, session, and error handling.
+- Repair hardware fallback behavior.
+- Add environment-independent tests.
+- Connect verified health results to production readiness decisions.
 
-### End-to-End Cross-Subsystem Status
+**Dependencies**
 
-| Flow | Status | Blocker |
-|------|--------|---------|
-| **Chat → Router → KnowledgeFirstResolver → UnifiedRetrieval → Memory** | ✅ Functional | None |
-| **Chat → Router → LLM Fallback → AnswerVerifier (V1→AR→SF1) → LearningPipeline → Memory** | ✅ Functional | None |
-| **System Events → EventBus → Watchdog → LearningPipeline → Memory** | ✅ Functional | None |
-| **LearningPipeline → EventBus → SafeSelfImprovement → Improvement Execution** | ⚠️ Wired but untested | No integration test |
-| **Task Execution → ExecutionVerifier → LearningPipeline** | ❌ Broken | API mismatch (`add_experience` vs `run`) |
-| **Background → AutonomousLearningPipeline → Gap Detection → Research → Memory** | ❌ Inert | Not instantiated in initializer |
-| **Diagnostics → EventBus → SafeSelfImprovement** | ⚠️ Wired but untested | No integration test |
-| **KnowledgeRetrievalPipeline → (anything)** | ❌ Orphaned | Not imported in initializer |
+- Independent, but required before autonomy can act on health observations.
 
-### Final Functional Completion Estimate: **~76.6%**
+**Why This Order**
 
-| Category | Weight | Completion | Contribution |
-|----------|--------|------------|--------------|
-| Core Architecture & Initialization | 15% | 100% | 15.0% |
-| LLM Stack & Priority Queue | 10% | 95% | 9.5% |
-| Memory System | 15% | 93% | 14.0% |
-| Routing (Knowledge-First + Capability + Intent) | 15% | 90% | 13.5% |
-| Execution Engine (Planner + Executor + Verification) | 15% | 78% | 11.7% |
-| Autonomy & Orchestration | 10% | 60% | 6.0% |
-| Learning Pipeline | 5% | 75% | 3.8% |
-| Diagnostics | 5% | 90% | 4.5% |
-| Provider Abstraction (Multi-LLM) | 5% | 20% | 1.0% |
-| Self-Improvement | 5% | 25% | 1.3% |
-| **TOTAL** | **100%** | | **76.6%** |
+The status document places monitoring repair before dependable watchdog and operational decisions, while not documenting a prerequisite on the critical implementation chain.
+
+**Acceptance Criteria**
+
+- [ ] Network and GPU monitoring tests pass in environment-independent form.
+- [ ] Health results are reliable and observable.
+- [ ] Production readiness decisions consume verified health signals.
 
 ---
 
-## Audit Methodology Notes
+## Task 10 — Enforce workflow capability and safety behavior
 
-- **Scope**: Session 2C of 5 - focused on learning, self-improvement, and event-driven learning systems
-- **Approach**: Read 15+ core implementation files; traced initialization wiring; verified event subscriptions, publications, and handler logic; analyzed cross-subsystem integration
-- **No code modifications** - Pure read-only audit per instructions
-- **No runtime execution** - Static analysis only
-- **Evidence-based**: Every claim references specific files, line numbers, functions
+**Size:** 🟡 YELLOW — MEDIUM
+**Priority:** P2
+**Execution Order:** 10
+
+**Location**
+
+- `app/orchestrator/workflow_orchestrator.py`: `_start_background_jobs()`
+- `app/orchestrator/capabilities.py`
+- `app/orchestrator/safety_gate.py`
+
+**Problem**
+
+Workflow background-job startup is empty, selected capabilities include placeholder or unsupported actions, and safety-gate behavior has failing tests.
+
+**Required Work**
+
+- Implement or remove nonfunctional execution paths.
+- Validate capability registration against callable actions.
+- Make safety outcomes observable and enforced.
+
+**Dependencies**
+
+- Must come after Task 2's execution and safety repair.
+
+**Why This Order**
+
+The existing issue explicitly depends on the P0 execution/safety repair.
+
+**Acceptance Criteria**
+
+- [ ] Background workflow jobs perform supported work or are removed.
+- [ ] Every registered capability maps to a callable action.
+- [ ] Safety outcomes are enforced and testable.
 
 ---
 
-## Next Steps
+## Task 11 — Complete autonomy learning and verified task execution
 
-1. **Session 3 Audit**: Provider Abstractions, Editing Engine, Advanced Planner
-2. **Address P1 Items**:
-   - Fix ExecutionVerifier → LearningPipeline API mismatch
-   - Instantiate and start AutonomousLearningPipeline in initializer
-   - Integrate KnowledgeRetrievalPipeline or deprecate
-   - Add health/readiness endpoint
-   - Enable ProjectMemory embeddings
-3. **Add Integration Tests**: For LearningPipeline event flow, SafeSelfImprovement handlers, cross-subsystem paths
-4. **Consolidate Learning Pipelines**: Unify AutonomousLearningPipeline and LearningPipeline or clearly separate concerns
+**Size:** 🔴 RED — BIG / COMPLEX
+**Priority:** P1
+**Execution Order:** 11
+
+**Location**
+
+- `app/autonomous_learning/pipeline.py`
+- `app/long_term_autonomy/manager.py`
+- `app/core/initializer.py`
+
+**Problem**
+
+`AutonomousLearningPipeline` is a complete parallel system but is not imported, instantiated, or started. Its default-enabled configuration is unused. Long-term autonomy has the documented missing learning handoff and uninitialized planner/executor behavior.
+
+**Required Work**
+
+- Instantiate and schedule the selected autonomous learning implementation in the canonical initializer.
+- Connect gap detection, research, consolidation, and memory persistence.
+- Implement the actual learning handoff.
+- Inject planner and executor dependencies.
+- Require verified execution before reporting completion.
+
+**Dependencies**
+
+- Must come after Tasks 1, 2, and 3.
+- Task 3 repairs the production autonomy lifecycle before this feature is enabled.
+
+**Why This Order**
+
+The status document says the autonomous learning system cannot be enabled until autonomy startup and execution reliability are repaired.
+
+**Acceptance Criteria**
+
+- [ ] Autonomous learning starts through the production initializer.
+- [ ] Background learning reaches memory through the selected pipeline.
+- [ ] Autonomous tasks use injected planner/executor components.
+- [ ] Completion is based on verified work.
 
 ---
 
-*Session 1 Audit Complete - 2026-08-13*  
-*Session 2A Audit Complete - 2026-08-13*  
-*Session 2B Audit Complete - 2026-08-13*  
-*Session 2C Audit Complete - 2026-08-13*  
-*Next: Session 3 - Provider Abstractions, Editing Engine, Advanced Planner*
+## Task 12 — Remove or migrate the legacy orchestrator path
+
+**Size:** 🟡 YELLOW — MEDIUM
+**Priority:** P2
+**Execution Order:** 12
+
+**Location**
+
+- `app/orchestrator/orchestrator.py`
+- `tests/test_integration_autonomous.py`
+- `app/orchestrator/capability_registry.py`
+
+**Problem**
+
+The legacy orchestrator passes unsupported `auto_discovery` to `CapabilityRegistry`, producing start failures. Integration tests exercise this obsolete path while production initializes `workflow_orchestrator.py`.
+
+**Required Work**
+
+- Remove or migrate the legacy orchestrator.
+- Repoint integration tests to the actual production orchestrator.
+- Preserve one supported orchestration contract.
+
+**Dependencies**
+
+- Must follow Task 1's runtime-architecture decision.
+
+**Why This Order**
+
+The status document identifies this as stale migration work caused by duplicate runtime paths.
+
+**Acceptance Criteria**
+
+- [ ] The unsupported `auto_discovery` path is removed or migrated.
+- [ ] Integration tests target the production orchestrator.
+- [ ] Duplicate orchestration claims are eliminated.
 
 ---
 
+## Task 13 — Repair conversation/vector persistence and recall
+
+**Size:** 🟡 YELLOW — MEDIUM
+**Priority:** P2
+**Execution Order:** 13
+
+**Location**
+
+- `app/memory/conversation_memory.py`
+- Vector-memory integration tests
+
+**Problem**
+
+All three conversation/vector integration tests fail, so cross-session semantic recall is not established.
+
+**Required Work**
+
+- Diagnose the vector persistence/retrieval mismatch.
+- Define restart semantics.
+- Add deterministic persistence-and-retrieval integration tests.
+
+**Dependencies**
+
+- Independent after Task 1 selects the supported retrieval stack.
+
+**Why This Order**
+
+The status document explicitly permits this work independently after the retrieval-stack decision.
+
+**Acceptance Criteria**
+
+- [ ] Conversation data survives the documented restart boundary.
+- [ ] Cross-session semantic retrieval is deterministic.
+- [ ] The three failing integration scenarios pass.
+
 ---
 
-# Current Verified Remaining-Work Status (2026-08-14)
+## Task 14 — Add production health/readiness surface
 
-## Verified Functional Completion: **42.5%**
+**Size:** 🔵 BLUE — EASY / SMALL
+**Priority:** P1/P3
+**Execution Order:** 14
 
-This is a capability-weighted operational estimate, not a file-count estimate. A capability received full credit only where its production path is implemented, wired, reachable, safe where required, and supported by runtime evidence. The prior **76.6%** estimate is superseded because it assessed several implementation-presence claims as operational despite source and startup evidence that their production wiring is broken or bypassed.
+**Location**
 
-| Capability area | Weight | Verified operational completion | Contribution |
-|---|---:|---:|---:|
-| Core bootstrap, public interface, and routing | 15% | 70% | 10.5% |
-| LLM, reasoning, and provider resilience | 10% | 40% | 4.0% |
-| Memory and production knowledge retrieval | 15% | 65% | 9.75% |
-| Planning, execution, safety, and verification | 20% | 35% | 7.0% |
-| Autonomy and workflow orchestration | 15% | 20% | 3.0% |
-| Learning and safe self-improvement | 10% | 20% | 2.0% |
-| Tools, capabilities, and editing integration | 5% | 55% | 2.75% |
-| Operational reliability, observability, and test evidence | 10% | 35% | 3.5% |
-| **Total** | **100%** |  | **42.5%** |
+- `main.py`
+- `app/core/observability.py`
 
-The full suite collected successfully but did not establish readiness: the audited revision produced **1,942 passed, 69 failed, 36 errors, and 43 skipped** tests in 565.29 seconds. The executable-test pass rate was 94.87%, but the failures and errors concentrate in autonomy/orchestration integration, agent state, network monitoring, capability auditing, and safety-adjacent paths. Passing isolated tests do not offset broken production chains.
+**Problem**
 
-## Remaining P0 Work — Critical Blockers
+No health/readiness endpoint exposes initialization state, provider availability, background-service state, or dependency readiness. The earlier status also identifies this as a P1 operational gap; the authoritative current section classifies the remaining implementation as P3.
 
-| Priority | Category | Exact location | Current state and problem | Required implementation/fix | Dependency | Impact |
-|---|---|---|---|---|---|---|
-| **P0** | Broken integration / reliability | `app/long_term_autonomy/manager.py`: `AutonomyManager._register_background_jobs()`, `_run_learning_pipeline_job()`, `_autonomy_watchdog_checkpoint()`, `_autonomy_self_initiated_work_job()` | This is the autonomy manager constructed by `SystemInitializer`. A production startup smoke test logged `name 'JobStatus' is not defined`; `start()` returned failure and `AUTONOMY_RUNNING=False`. Scheduled paths also call methods absent from their injected objects: `run_cycle`, `checkpoint`, and `discover_work`. | Import and use the correct job-state type; align every scheduled callback to an implemented interface; make failed startup propagate as an initialization failure; add production-startup and recurring-job integration tests. | Must precede all long-running autonomy, autonomous learning, maintenance, and recovery claims. | Freya cannot reliably self-initiate, sustain, monitor, or recover autonomous work. |
-| **P0** | Safety issue / incomplete implementation | `app/execution/engine.py`: `ExecutionEngine.execute_plan()`, `UnifiedExecutor.execute()`; `app/orchestrator/workflow_orchestrator.py`: `execute_workflow()` | The normal engineering path constructs `VerificationRunner` and `RepairLoop` but never invokes them. It explicitly skips human review at `execute_plan()` lines 261–264. Workflow execution dispatches directly to `TaskExecutor.execute()` without invoking its configured `SafetyGate`. | Route all execution outcomes through a single enforced state machine: proposal → approval/safety decision → execute → verify → repair/replan or safe failure → persist outcome. Make safety denial terminal and test it through both facade and orchestrator entry points. | Must precede autonomous task execution and self-improvement execution. | Actions may run without effective confirmation, verification, repair, or uniform safety enforcement. |
+**Required Work**
 
-## Remaining P1 Work — High Priority
+- Add a read-only health/readiness surface.
+- Drive it from the same observability state used at runtime.
+- Expose initialization, provider, background-service, and dependency readiness.
 
-| Priority | Category | Exact location | Current state and problem | Required implementation/fix | Dependency | Impact |
-|---|---|---|---|---|---|---|
-| **P1** | Broken integration | `app/core/initializer.py`: lines 110, 164–167, 290–304; `app/safe_self_improvement/self_improvement.py`: constructor and `create_self_improvement_engine()` | Initializer uses a local `EventBus` for learning and diagnostics. Safe self-improvement ignores that bus, calls global `get_event_bus()`, and its factory does not accept dependency injection. Its subscriptions therefore do not receive production learning or diagnostics events. | Add explicit event-bus injection to the engine/factory, pass the initializer-local bus, and cover learning→improvement and diagnostics→improvement with real integration tests. | Event and dependency-injection contract must be fixed before improvement flow testing. | Learning and diagnostics do not drive controlled improvement in the running system. |
-| **P1** | Bug / failure containment | `app/diagnostics/diagnostic_engine.py`: `_emit_diagnostic_event()` | `EventPriority.NORMAL` is used without importing `EventPriority`. A broad exception handler only logs the resulting `NameError`, so a diagnostic run appears to succeed while publishing no completion event. | Import the correct type, fail or surface event-publication failure appropriately, and test event delivery to the same bus used by downstream subscribers. | Coordinate with the event-bus injection fix. | Diagnostics cannot reliably trigger remediation or provide an end-to-end operational signal. |
-| **P1** | Broken integration / duplicate architecture | `app/core/initializer.py`; `app/knowledge_retrieval/pipeline.py`; `app/autonomous_learning/pipeline.py`; `app/agent/core_agent.py` | `KnowledgeRetrievalPipeline` and `AutonomousLearningPipeline` are not imported or instantiated by the normal initializer. The large `FreyaAgent` path is also not used by `main.py` → `SystemInitializer` → `AgentFacadeImpl`. The codebase therefore contains parallel implementations that tests often exercise in isolation rather than the production graph. | Select one supported production implementation per capability, wire it through the initialized graph, migrate callers/tests, and retire or explicitly quarantine obsolete paths. | Requires a documented runtime architecture decision before feature work. | Significant coded functionality is unreachable; maintenance and test claims describe incompatible systems. |
-| **P1** | Incomplete implementation / learning integration | `app/verification/execution_verifier.py`: `_route_to_learning_pipeline()`; `app/execution/engine.py` | `ExecutionVerifier` checks for and calls `LearningPipeline.add_experience()`, while the initialized pipeline exposes `run(candidate)`. Separately, the normal execution engine never constructs or calls `ExecutionVerifier`. | Use a typed learning-outcome contract, connect `ExecutionVerifier` to the normal execution state machine, and test successful and failed task outcomes reaching persistent memory. | Depends on the P0 execution state-machine repair. | Freya does not reliably learn from actual task execution, especially successful work. |
-| **P1** | Missing implementation / resilience | `app/providers/factory.py`: lines 227–231 | The provider factory registers only `OllamaProvider`; `local` is merely an alias. There is no real multi-provider routing, failover, health-aware selection, or graceful capability degradation beyond one local service. | Implement and test at least the intended provider abstraction contract, provider health checks, configured fallback order, timeout/error classification, and safe no-provider behavior. | Can proceed independently, but execution resilience should consume the final contract. | A local-model outage prevents general reasoning and task completion. |
-| **P1** | Reliability issue / testing gap | `tests/`; runtime suite result at audited commit | The suite has 105 failing/error cases despite successful collection. In particular, the real production autonomy manager has no direct test coverage, while `tests/test_autonomy.py` targets the different `app.autonomy.manager` implementation. | Repair or retire obsolete tests, add black-box tests for `FreyaApp` startup, chat, task execution, verification, safety denial, event propagation, restart/persistence, and background autonomy jobs; require a clean critical-path suite. | Requires consolidation of duplicate runtime paths. | Current tests do not prove the production architecture works, and regressions remain undetected. |
+**Dependencies**
 
-## Remaining P2 Work — Medium Priority
+- Should follow repair of the underlying component health signals, especially Tasks 3 and 9.
 
-| Priority | Category | Exact location | Current state and problem | Required implementation/fix | Dependency | Impact |
-|---|---|---|---|---|---|---|
-| **P2** | Reliability issue / incomplete implementation | `app/memory/conversation_memory.py` and vector-memory integration tests | Production memory construction is present, but all three conversation/vector integration tests fail. Cross-session semantic recall is therefore not established. | Diagnose vector persistence/retrieval mismatch, define restart semantics, and add deterministic persistence-and-retrieval integration tests. | Independent after deciding the supported retrieval stack. | Context continuity and knowledge grounding are unreliable across sessions. |
-| **P2** | Architecture issue / incomplete integration | `app/memory/unified_retrieval.py` versus `app/knowledge_retrieval/pipeline.py` | Production routes use `UnifiedRetrieval`; the more advanced calibration, learned ranking, analytics, and retrieval-decision pipeline is orphaned. The two APIs and data models diverge. | Either integrate the advanced pipeline behind the production retrieval interface or remove/consolidate it; preserve a single observable retrieval contract. | Depends on the P1 runtime-architecture decision. | Retrieval quality, provenance, and adaptive behavior are inconsistent and partly unreachable. |
-| **P2** | Reliability issue | `app/monitoring/*`; `tests/test_network_monitor.py`; `tests/test_gpu_monitor.py` | Fifteen network-monitoring tests and two GPU-monitoring tests fail. Monitoring cannot be credited as dependable operational feedback. | Repair endpoint/session/error handling and hardware fallback behavior; add environment-independent tests and connect verified health results to production readiness decisions. | Independent, but required before autonomy can act on health observations. | Watchdog and operational decisions receive unreliable health information. |
-| **P2** | Incomplete implementation / safety | `app/orchestrator/workflow_orchestrator.py`: `_start_background_jobs()`; `app/orchestrator/capabilities.py`; `app/orchestrator/safety_gate.py` | Background-job startup is an empty method, selected capabilities include placeholder or unsupported actions, and safety-gate behavior has failing tests. | Implement or remove nonfunctional execution paths, validate capability registration against callable actions, and make safety outcomes observable and enforced. | Depends on P0 execution/safety repair. | Orchestration capability claims exceed what can safely run. |
-| **P2** | Architecture issue / stale migration | `app/orchestrator/orchestrator.py`; `tests/test_integration_autonomous.py` | The legacy orchestrator passes unsupported `auto_discovery` to `CapabilityRegistry`, producing start failures. Integration tests exercise this obsolete path while production initializes `workflow_orchestrator.py`. | Remove or migrate the legacy orchestrator and repoint tests to the actual production orchestrator. | Depends on the P1 runtime-architecture decision. | Duplicate components create failing integrations and invalid test assurance. |
-| **P2** | Verification / correctness | `app/long_term_autonomy/manager.py`: `_learn()`, `_execute_specific_task()` | The learning step returns a record but comments out actual learning-pipeline work; autonomous task execution calls `self.planner` although no such member is initialized, and falls back to marking a task complete when no executor is available. | Implement actual learning handoff, inject a planner/executor explicitly, and prohibit status completion without verified execution. | Depends on P0 autonomy and execution repairs. | Autonomous progress can be reported without completed, verified work. |
+**Why This Order**
 
-## Remaining P3 Work — Low Priority
+The source document states that the endpoint should follow repair of the signals it reports.
 
-| Priority | Category | Exact location | Current state and problem | Required implementation/fix | Dependency | Impact |
-|---|---|---|---|---|---|---|
-| **P3** | Operational reliability | `main.py`; `app/core/observability.py` | No health/readiness endpoint exposes initialization state, provider availability, background-service state, or dependency readiness to an operator. | Add a read-only health/readiness surface driven by the same observability state used at runtime. | Should follow repair of the underlying component health signals. | Deployment and recovery tooling cannot distinguish a live process from a usable agent. |
-| **P3** | Configuration / maintainability | `app/learning/pipeline.py`; `app/verification/answer_repair_loop.py` | Learning thresholds and repair-loop behavior remain hardcoded, limiting controlled tuning and environment-specific policy. | Move supported thresholds and retry/prompt policy to validated configuration with tests and safe defaults. | Independent after the execution-learning contract is fixed. | Reduces operability and makes quality behavior difficult to calibrate. |
-| **P3** | Documentation / test hygiene | `tests/test_user_communication.py`; repository root | Tests expect a missing `NATURAL_CONVERSATION.md`, and some test expectations no longer match current runtime names or behavior. | Resolve stale documentation/test contracts after the runtime architecture is consolidated. | Follow P1/P2 migration work. | Adds noise to the suite and obscures actionable regressions. |
+**Acceptance Criteria**
 
-## Critical Blockers
+- [ ] Readiness distinguishes a live process from a usable agent.
+- [ ] Provider and background-service state are represented.
+- [ ] The surface is read-only and backed by runtime observability.
 
-1. **Production autonomy does not start successfully and scheduled autonomy jobs target absent interfaces.**
-2. **The execution and workflow paths do not consistently enforce approval, verification, repair, or safety gates.**
-3. **Learning, diagnostics, and safe self-improvement are disconnected by incompatible event-bus ownership; diagnostics event emission is itself broken.**
-4. **The runtime is fragmented across production, legacy, and test-only implementations, so key features remain unreachable and tests do not validate the normal application graph.**
+---
 
-## Required Order to Reach 100%
+## Task 15 — Add configurable learning and repair policy
 
-1. Establish one canonical runtime graph and retire or migrate duplicate autonomy, orchestration, agent, retrieval, and learning paths.
-2. Repair the P0 execution state machine and safety/approval enforcement before enabling autonomous or self-modifying actions.
-3. Repair production autonomy startup, background jobs, planner/executor injection, and verified task completion.
-4. Restore the shared event contract for learning, diagnostics, and safe self-improvement; then add end-to-end event tests.
-5. Connect execution outcomes to learning and durable memory using one typed contract.
-6. Consolidate retrieval/memory behavior, fix cross-session vector recall, and wire the chosen advanced retrieval capabilities.
-7. Implement provider resilience and complete health/observability surfaces.
-8. Replace stale tests with production-path integration and restart tests; resolve all critical-path failures and errors.
-9. Only then tune configuration, documentation, and optional capability breadth.
+**Size:** 🔵 BLUE — EASY / SMALL
+**Priority:** P3
+**Execution Order:** 15
 
-## Definition of 100%
+**Location**
+
+- `app/learning/pipeline.py`
+- `app/verification/answer_repair_loop.py`
+
+**Problem**
+
+Learning thresholds and repair-loop behavior remain hardcoded, limiting controlled tuning and environment-specific policy.
+
+**Required Work**
+
+- Move supported thresholds to validated configuration.
+- Move retry and prompt policy to validated configuration.
+- Preserve safe defaults and add configuration tests.
+
+**Dependencies**
+
+- Independent after Task 5 fixes the execution-learning contract.
+
+**Why This Order**
+
+The status document places configuration tuning after the learning contract and core implementation repairs.
+
+**Acceptance Criteria**
+
+- [ ] Thresholds and repair policy are configurable.
+- [ ] Invalid values are rejected safely.
+- [ ] Default behavior remains safe and tested.
+
+---
+
+## Task 16 — Resolve remaining memory and retrieval quality gaps
+
+**Size:** 🟡 YELLOW — MEDIUM
+**Priority:** P2/P3
+**Execution Order:** 16
+
+**Location**
+
+- `app/memory/unified_retrieval.py`
+- Memory retriever implementations
+- Cross-memory reference integration
+
+**Problem**
+
+The earlier status identifies duplicate retriever classes in `UnifiedRetrieval`, missing calibration/ranking/analytics, nine of sixteen memory modules with zero tests, no custom serialization framework, and `CrossMemoryReferences` auto-inference that is not triggered.
+
+**Required Work**
+
+- Consolidate duplicate retriever classes.
+- Provide the selected retrieval stack with calibration, ranking, and analytics where retained.
+- Add tests for currently untested memory modules.
+- Define or implement the required serialization behavior.
+- Trigger cross-memory reference auto-inference through the production flow.
+
+**Dependencies**
+
+- Retrieval portions must follow Task 1 and Task 6.
+- Cross-memory and test work may proceed independently once the supported memory contract is established.
+
+**Why This Order**
+
+These are remaining lower-priority memory and retrieval-quality items that depend on selecting a single supported retrieval architecture.
+
+**Acceptance Criteria**
+
+- [ ] Duplicate retriever behavior is consolidated.
+- [ ] Retained retrieval features are reachable through production.
+- [ ] Previously untested memory modules have coverage.
+- [ ] Serialization and cross-memory inference behavior are defined and exercised.
+
+---
+
+## Task 17 — Resolve stale documentation and test contracts
+
+**Size:** 🔵 BLUE — EASY / SMALL
+**Priority:** P3
+**Execution Order:** 17
+
+**Location**
+
+- `tests/test_user_communication.py`
+- Repository root
+
+**Problem**
+
+Tests expect a missing `NATURAL_CONVERSATION.md`, and some expectations no longer match current runtime names or behavior.
+
+**Required Work**
+
+- Resolve stale documentation/test contracts after runtime architecture consolidation.
+- Align test expectations with the supported runtime names and behavior.
+
+**Dependencies**
+
+- Must follow the P1/P2 migration work, especially Tasks 1, 7, and 12.
+
+**Why This Order**
+
+The source document explicitly places this hygiene work after runtime consolidation.
+
+**Acceptance Criteria**
+
+- [ ] Tests no longer depend on stale or missing documentation contracts.
+- [ ] Runtime names and expected behavior are aligned.
+- [ ] Remaining failures represent actionable implementation issues.
+
+---
+
+# Parallel / Independent Work
+
+These tasks do not have a documented prerequisite on the critical execution chain, or the source document explicitly allows them to proceed independently:
+
+- 🟡 **Task 8 — Implement provider resilience**. It can proceed independently, although execution resilience should consume its final contract.
+- 🟡 **Task 9 — Repair monitoring and hardware-health evidence**. It can proceed independently, but autonomy should not act on health observations until it is complete.
+- 🟡 **Task 13 — Repair conversation/vector persistence and recall**. It can proceed after the supported retrieval stack is selected.
+- 🔵 **Task 15 — Add configurable learning and repair policy**. It can proceed after the execution-learning contract is fixed.
+- 🟡 **Task 16 — Resolve remaining memory and retrieval quality gaps**. Its cross-memory and coverage portions can proceed after the supported memory contract is established.
+
+---
+
+# Dependency Notes
+
+The documented order to reach 100% is: establish one canonical runtime graph; repair execution safety and verification; repair autonomy startup and background jobs; restore the shared event contract; connect execution outcomes to learning and durable memory; consolidate retrieval and cross-session recall; implement provider resilience and health/observability; replace stale tests with production-path evidence; and only then tune configuration, documentation, and optional capability breadth.
+
+No dependency has been added where the existing status document did not establish one. Where the source document did not specify a prerequisite, the task states: **Dependencies: Not specified in existing status document.**
+
+---
+
+# Remaining Work Summary
+
+| Size | Remaining tasks |
+|---|---:|
+| 🔴 RED — Big / Complex | 7 |
+| 🟡 YELLOW — Medium | 7 |
+| 🔵 BLUE — Easy / Small | 3 |
+| **Total** | **17** |
+
+| Priority | Remaining work |
+|---|---|
+| **P0 — Critical** | Tasks 2–3: production autonomy startup and execution/safety enforcement |
+| **P1 — High** | Tasks 1, 4–5, 7–8, 11, 14: canonical runtime, event wiring, execution learning, production tests, provider resilience, autonomous learning, readiness surface |
+| **P2 — Medium** | Tasks 6, 9–10, 12–13, 16: retrieval, monitoring, workflow capability/safety, legacy migration, vector recall, memory quality |
+| **P3 — Low** | Tasks 14–17: readiness completion, configurable policy, memory-quality tail work, stale contracts |
+
+**Current verified completion:** 42.5%. The existing status document records 0 P0 issues in its earlier consolidated summary, but the authoritative current section explicitly identifies two remaining P0 critical blockers: autonomy startup and execution/safety enforcement. This roadmap preserves that later authoritative classification.
+
+---
+
+# Critical Blockers
+
+1. Production autonomy does not start successfully and scheduled autonomy jobs target absent interfaces.
+2. Execution and workflow paths do not consistently enforce approval, verification, repair, or safety gates.
+3. Learning, diagnostics, and safe self-improvement are disconnected by incompatible event-bus ownership, and diagnostic event emission is broken.
+4. The runtime is fragmented across production, legacy, and test-only implementations, leaving key features unreachable and tests disconnected from the normal application graph.
+
+---
+
+# Path to 100%
 
 Freya reaches 100% only when a normal `FreyaApp` startup reliably composes one supported architecture; safely accepts or rejects actions; plans, executes, verifies, repairs, and persists outcomes; learns from those outcomes; uses persistent and retrievable knowledge across sessions; runs healthy autonomous background work; routes diagnostics and learning through controlled improvement safeguards; survives configured provider and tool failures; and demonstrates these chains through a clean, production-path test suite.
 
-## Audit Evidence and Limitation
-
-The audit is read-only with respect to application code. The assessed revision is `f9d0215abc967e99c7e17ce31af40b744e616d53` on `main`. Findings were verified by source tracing, a full-suite execution in a disposable checkout, and a confined production-initializer smoke test. No LLM inference, external tool action, or application-code modification was used to inflate the score.
+The current verified operational completion is **42.5%**. The earlier 76.6% estimate is superseded by the current verified assessment and is not used as the completion baseline.
 
 ---
+
+# Source Boundary
+
+This is a documentation-only reorganization. It uses only information already present in the previous `PROJECT_STATUS.md`. It does not add new technical findings, validate claims against source code, or change implementation requirements beyond making existing remaining work more explicit, separately ordered, and dependency-aware.
