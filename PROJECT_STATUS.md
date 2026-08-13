@@ -733,7 +733,7 @@ The current verified operational completion is **42.5%**. The earlier 76.6% esti
 - **Failure handling repaired:** Capability lookup failures, execution exceptions, unsuccessful tool results, invalid or incomplete results, cancellation, and verification failures no longer become successful completion. Final outcome metadata is persisted through `PlanManager` and workflow events/status.
 - **Tests and verification:** The focused lifecycle, workflow, and executor suite passes: `35 passed`. A deterministic production-path smoke test also passed through `WorkflowOrchestrator` → `TaskExecutor`, covering allowed and safety-denied execution. The repository-wide pytest configuration still contains a Windows-only `C:/temp/pytest_tmp` basetemp; targeted runs used an equivalent Linux-safe override. The broader component run had unrelated pre-existing failures in interactive permission fixtures and `FreyaAgent.experience_memory`.
 - **Remaining Task 2 limitations:** The normal `WorkflowOrchestrator.start()` path still encounters the documented unrelated `CapabilityRegistry(auto_discovery=...)` constructor defect, and the smoke harness injected the registry/composed workflow to isolate Task 2. That startup issue remains queued under later work and was not modified.
-- **Implementation commit:** pending until commit.
+- **Implementation commit:** `44f078eca47a149b97bb2a0eb656d8067acb0d72`
 
 ---
 
