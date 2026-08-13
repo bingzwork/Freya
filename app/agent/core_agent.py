@@ -438,7 +438,12 @@ class FreyaAgent:
             )
 
             # Long-Term Autonomy
-            self.autonomy_manager = AutonomyManager(workspace=workspace)
+            self.autonomy_manager = AutonomyManager(
+                workspace=workspace,
+                planner=self.planner,
+                executor=self.executor,
+                verifier=self.verifier,
+            )
 
             # Config Hot-Reload - watches .env file for changes and reloads configuration
             self.config_hot_reload: Optional[ConfigHotReload] = None
@@ -2746,12 +2751,11 @@ Estimated Hours: {task.estimated_hours or 'Not set'}""")
     def start_autonomy(self) -> None:
         """Start the long-term autonomy manager background loop."""
         if hasattr(self, 'autonomy_manager') and self.autonomy_manager:
-            # Set executor on autonomy manager if not already set
-            if hasattr(self.autonomy_manager, 'set_executor') and self.autonomy_manager.executor is None:
-                self.autonomy_manager.set_executor(self.llm, self.tools, self.engineering_lessons)
+            if self.autonomy_manager.planner is None or self.autonomy_manager.executor is None:
+                raise RuntimeError("Long-term autonomy is missing planner or executor dependencies")
 
-            # Start autonomy manager
-            self.autonomy_manager.start()
+            if not self.autonomy_manager.start():
+                raise RuntimeError("Long-term autonomy failed to start")
             logger.info("[FreyaAgent] Long-term autonomy started")
 
             # Register autonomy with job service for background scheduling

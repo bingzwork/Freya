@@ -274,7 +274,8 @@ class SystemInitializer:
                 event_bus=event_bus,
                 job_service=job_service,
             )
-            orchestrator.start()
+            if not orchestrator.start():
+                raise RuntimeError("WorkflowOrchestrator failed to start")
             logger.info("[SystemInitializer] WorkflowOrchestrator started")
 
         # ------------------------------------------------------------------
@@ -290,7 +291,8 @@ class SystemInitializer:
                 workflow_orchestrator=orchestrator,
                 job_service=job_service,
             )
-            autonomy.start()
+            if not autonomy.start() or not autonomy.is_running():
+                raise RuntimeError("AutonomyManager failed to start")
             logger.info("[SystemInitializer] AutonomyManager started")
 
         # ------------------------------------------------------------------

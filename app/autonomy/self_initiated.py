@@ -7,6 +7,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from app.memory.goals.manager import GoalStorage
 from app.orchestrator.workflow_orchestrator import WorkflowOrchestrator, WorkflowSpec, WorkflowStrategy, get_workflow_orchestrator
+from app.orchestrator.workflow_composer import IntentType
 from app.core.background_jobs import BackgroundJobService, get_job_service, JobTriggerConfig, JobTriggerType
 
 from .models import (
@@ -97,36 +98,31 @@ class SelfInitiatedWorkManager:
             self._check_thread.join(timeout=5.0)
 
     def _ensure_dependencies(self) -> None:
-        """Ensure required dependencies are available."""
+        """Require the dependencies supplied by the production initializer."""
+        missing = []
         if self._goal_storage is None:
-            # Will be set later via setter
-            pass
+            missing.append("goal_storage")
         if self._workflow_orchestrator is None:
-            try:
-                self._workflow_orchestrator = get_workflow_orchestrator()
-            except Exception:
-                pass
-        if self._job_service is None:
-            try:
-                self._job_service = get_job_service()
-            except Exception:
-                pass
+            missing.append("workflow_orchestrator")
+        if self.config.use_background_job_service and self._job_service is None:
+            missing.append("job_service")
+        if missing:
+            raise RuntimeError(
+                "Self-initiated work requires injected dependencies: " + ", ".join(missing)
+            )
 
     def _schedule_periodic_check(self) -> None:
         """Schedule periodic goal check via BackgroundJobService."""
-        try:
-            trigger = JobTriggerConfig(
-                type=JobTriggerType.RECURRING,
-                interval_seconds=self.config.self_initiated_check_interval_seconds,
-            )
-            self._check_job_id = self._job_service.schedule(
-                job_id="self_initiated_work_check",
-                func=self._check_and_generate_work,
-                trigger=trigger,
-                name="Self-Initiated Work Check",
-            )
-        except Exception:
-            pass
+        trigger = JobTriggerConfig(
+            type=JobTriggerType.RECURRING,
+            interval_seconds=self.config.self_initiated_check_interval_seconds,
+        )
+        self._check_job_id = self._job_service.schedule(
+            job_id="self_initiated_work_check",
+            func=self._check_and_generate_work,
+            trigger=trigger,
+            name="Self-Initiated Work Check",
+        )
 
     def _check_loop(self) -> None:
         """Background check loop as fallback."""
@@ -208,7 +204,7 @@ class SelfInitiatedWorkManager:
                     
             return eligible
         except Exception:
-            return []
+            raise
 
     def _create_work_from_goal(self, goal_ctx: GoalContext) -> Optional[AutonomousWorkItem]:
         """Create an autonomous work item from a goal context."""
@@ -219,7 +215,9 @@ class SelfInitiatedWorkManager:
         workflow_spec = {
             "name": f"Autonomous: {goal_ctx.name}",
             "description": f"Autonomous work to make progress on goal: {goal_ctx.description}",
+            "intent": IntentType.TASK,
             "strategy": WorkflowStrategy.ADAPTIVE.value,
+            "required_capabilities": ["planning_engine", "code_execution"],
             "context": {
                 "autonomous": True,
                 "goal_id": goal_ctx.goal_id,
@@ -298,6 +296,7 @@ class SelfInitiatedWorkManager:
             work_item.status = "failed"
             work_item.metadata["error"] = str(e)
             self._complete_work(work_item, False, {"error": str(e)})
+            raise
 
     def _monitor_work(self, work_item: AutonomousWorkItem) -> None:
         """Monitor a work item until completion."""

@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 from app.orchestrator.workflow_orchestrator import WorkflowOrchestrator, WorkflowSpec, WorkflowStrategy, get_workflow_orchestrator
+from app.orchestrator.workflow_composer import IntentType
 from app.core.background_jobs import BackgroundJobService, get_job_service, JobTriggerConfig, JobTriggerType
 
 from .models import (
@@ -166,33 +167,29 @@ class MaintenanceManager:
             self._check_thread.join(timeout=5.0)
 
     def _ensure_dependencies(self) -> None:
-        """Ensure required dependencies are available."""
+        """Require the dependencies supplied by the production initializer."""
+        missing = []
         if self._workflow_orchestrator is None:
-            try:
-                self._workflow_orchestrator = get_workflow_orchestrator()
-            except Exception:
-                pass
-        if self._job_service is None:
-            try:
-                self._job_service = get_job_service()
-            except Exception:
-                pass
+            missing.append("workflow_orchestrator")
+        if self.config.use_background_job_service and self._job_service is None:
+            missing.append("job_service")
+        if missing:
+            raise RuntimeError(
+                "Maintenance requires injected dependencies: " + ", ".join(missing)
+            )
 
     def _schedule_periodic_check(self) -> None:
         """Schedule periodic maintenance check via BackgroundJobService."""
-        try:
-            trigger = JobTriggerConfig(
-                type=JobTriggerType.RECURRING,
-                interval_seconds=self.config.maintenance_check_interval_seconds,
-            )
-            self._check_job_id = self._job_service.schedule(
-                job_id="maintenance_check",
-                func=self._check_and_run_maintenance,
-                trigger=trigger,
-                name="Maintenance Check",
-            )
-        except Exception:
-            pass
+        trigger = JobTriggerConfig(
+            type=JobTriggerType.RECURRING,
+            interval_seconds=self.config.maintenance_check_interval_seconds,
+        )
+        self._check_job_id = self._job_service.schedule(
+            job_id="maintenance_check",
+            func=self._check_and_run_maintenance,
+            trigger=trigger,
+            name="Maintenance Check",
+        )
 
     def _check_loop(self) -> None:
         """Background check loop as fallback."""
@@ -246,8 +243,11 @@ class MaintenanceManager:
             spec = WorkflowSpec(
                 name=workflow_spec_dict.get("name", f"Maintenance: {task_type}"),
                 description=workflow_spec_dict.get("description", ""),
-                intent=None,
+                intent=IntentType.SYSTEM_STATUS,
                 strategy=WorkflowStrategy(workflow_spec_dict.get("strategy", "sequential")),
+                required_capabilities=workflow_spec_dict.get(
+                    "required_capabilities", ["system_monitoring"]
+                ),
                 context=workflow_spec_dict.get("context", {}),
                 max_steps=workflow_spec_dict.get("max_steps", 5),
                 max_parallel=workflow_spec_dict.get("max_parallel", 1),
@@ -285,8 +285,8 @@ class MaintenanceManager:
                 name=f"MaintMonitor-{work_item.id[:8]}"
             ).start()
             
-        except Exception as e:
-            pass
+        except Exception:
+            raise
 
     def _monitor_work(self, work_item: AutonomousWorkItem) -> None:
         """Monitor a maintenance work item until completion."""

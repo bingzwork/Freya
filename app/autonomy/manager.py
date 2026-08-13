@@ -16,6 +16,10 @@ from .self_initiated import SelfInitiatedWorkManager
 from .maintenance import MaintenanceManager
 
 
+class AutonomyStartupError(RuntimeError):
+    """Raised when required autonomy dependencies are unavailable at startup."""
+
+
 class AutonomyManager:
     """
     AutonomyManager - Main coordinator for Autonomy + Observation.
@@ -100,28 +104,72 @@ class AutonomyManager:
         """Get the MaintenanceManager component."""
         return self._maintenance
 
+    def _validate_startup_dependencies(self) -> None:
+        """Ensure every enabled autonomy path has its explicit production dependency."""
+        missing = []
+        if self._event_bus is None:
+            missing.append("event_bus")
+        if self._observability is None:
+            missing.append("observability")
+        if self.config.use_background_job_service and self._job_service is None:
+            missing.append("job_service")
+        if self.config.watchdog_enabled and self._learning_pipeline is None:
+            missing.append("learning_pipeline")
+        if self.config.self_initiated_enabled:
+            if self._goal_storage is None:
+                missing.append("goal_storage")
+            if self._workflow_orchestrator is None:
+                missing.append("workflow_orchestrator")
+        if self.config.maintenance_enabled and self._workflow_orchestrator is None:
+            missing.append("workflow_orchestrator")
+        if missing:
+            raise AutonomyStartupError(
+                "Autonomy startup requires injected dependencies: "
+                + ", ".join(sorted(set(missing)))
+            )
+
+    def _stop_started_components(self) -> None:
+        """Best-effort rollback for a partially completed startup."""
+        for component in (self._maintenance, self._self_initiated, self._watchdog):
+            if component:
+                try:
+                    component.stop()
+                except Exception:
+                    pass
+
     def start(self) -> bool:
-        """Start all autonomy components."""
-        if self._running:
-            return True
-            
-        if not self.config.enabled:
-            return False
-            
-        try:
-            # Start all sub-components
-            if self._watchdog:
-                self._watchdog.start()
-            if self._self_initiated:
-                self._self_initiated.start()
-            if self._maintenance:
-                self._maintenance.start()
-                
-            self._running = True
-            return True
-        except Exception:
-            self.stop()
-            return False
+        """Start all enabled autonomy components after validating their dependencies."""
+        with self._lock:
+            if self._running:
+                return True
+            if not self.config.enabled:
+                return False
+
+            self._validate_startup_dependencies()
+            try:
+                if self._watchdog:
+                    self._watchdog.start()
+                if self._self_initiated:
+                    self._self_initiated.start()
+                if self._maintenance:
+                    self._maintenance.start()
+
+                for enabled, component, name in (
+                    (self.config.watchdog_enabled, self._watchdog, "watchdog"),
+                    (self.config.self_initiated_enabled, self._self_initiated, "self_initiated"),
+                    (self.config.maintenance_enabled, self._maintenance, "maintenance"),
+                ):
+                    if enabled and (component is None or not component.is_running()):
+                        raise AutonomyStartupError(f"Autonomy component failed to start: {name}")
+
+                self._running = True
+                return True
+            except Exception as exc:
+                self._stop_started_components()
+                self._running = False
+                if isinstance(exc, AutonomyStartupError):
+                    raise
+                raise AutonomyStartupError("Autonomy startup failed") from exc
 
     def stop(self) -> None:
         """Stop all autonomy components."""

@@ -67,6 +67,11 @@ class CapabilityMetadata:
     supported_actions: List[str] = field(default_factory=list)
     dependencies: List[str] = field(default_factory=list)
     tags: List[str] = field(default_factory=list)
+    # Compatibility fields consumed by the production workflow composer.
+    depends_on: List[str] = field(default_factory=list)
+    conflicts_with: List[str] = field(default_factory=list)
+    provides: List[str] = field(default_factory=list)
+    timeout_seconds: float = 30.0
 
 
 class Capability:
@@ -165,12 +170,26 @@ class CapabilityRegistry:
         """Get all capabilities."""
         return dict(self._capabilities)
 
+    def get_capabilities_by_category(
+        self,
+        category: CapabilityCategory,
+        active_only: bool = True,
+    ) -> List[Capability]:
+        """Return registered capability objects for workflow composition."""
+        return [
+            capability
+            for capability in self._capabilities.values()
+            if capability.category == category
+            and (not active_only or capability.state == CapabilityState.ACTIVE)
+        ]
+
     def start(self) -> None:
         """Start the registry."""
         self._running = True
         for cap in self._capabilities.values():
             cap._initialize()
-            cap._activate()
+            if cap._activate():
+                cap.state = CapabilityState.ACTIVE
         logger.info("[CapabilityRegistry] Started")
 
     def stop(self) -> None:

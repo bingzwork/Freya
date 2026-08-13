@@ -303,6 +303,10 @@ class WorkflowOrchestrator:
         for cap in capabilities:
             if self._capability_registry.register(cap):
                 registered_count += 1
+        if self._capability_registry.is_running():
+            # Re-registration replaces instances; reactivate the shared registry
+            # so autonomy-created workflows can resolve reachable capabilities.
+            self._capability_registry.start()
         logger.info(f"Registered {registered_count} built-in capabilities")
 
     def _start_background_jobs(self):

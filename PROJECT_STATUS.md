@@ -1,15 +1,10 @@
-# Freya — Remaining Work
-
 # Completion Progress
 
 Overall Freya Functional Completion: 42.5%
-
-Completed Tasks: 2 / 17
-Remaining Tasks: 15 / 17
-
+Completed Tasks: 3 / 17
+Remaining Tasks: 14 / 17
 Last Updated: 2026-08-14
-
-Next Active Task: Task 3 — Repair production autonomy startup and scheduled jobs
+Next Active Task: Task 4 — Restore the shared event contract and event-driven improvement flow
 
 > The percentage retains the documented capability-weighted operational method: functionality receives credit only when its production path is implemented, wired, reachable, safe where required, and supported by runtime evidence. The task counts are the rolling queue counts and do not replace that capability-weighted percentage.
 
@@ -45,50 +40,6 @@ Tasks 10–17 are parallel or independent work where the existing status documen
 
 # Active Work
 
-
-## Task 3 — Repair production autonomy startup and scheduled jobs
-
-**Size:** 🔴 RED — BIG / COMPLEX
-**Priority:** P0
-**Execution Order:** 3
-
-**Location**
-
-- `app/long_term_autonomy/manager.py`: `_register_background_jobs()`, `_run_learning_pipeline_job()`, `_autonomy_watchdog_checkpoint()`, `_autonomy_self_initiated_work_job()`
-- `app/long_term_autonomy/manager.py`: `_learn()`, `_execute_specific_task()`
-
-**Problem**
-
-The autonomy manager constructed by `SystemInitializer` fails production startup because `JobStatus` is undefined; `start()` returns failure and `AUTONOMY_RUNNING=False`. Scheduled callbacks call absent methods such as `run_cycle`, `checkpoint`, and `discover_work`. The learning step does not perform actual learning-pipeline work, and autonomous task execution references an uninitialized planner and can mark work complete without verified execution.
-
-**Required Work**
-
-- Import and use the correct job-state type.
-- Align every scheduled callback with an implemented interface.
-- Make failed autonomy startup propagate as an initialization failure.
-- Instantiate and inject a planner and executor explicitly.
-- Implement the actual learning handoff.
-- Prevent completion status unless execution is verified.
-- Add production-startup and recurring-job integration tests.
-
-**Dependencies**
-
-- Must come after Tasks 1 and 2.
-- Blocks long-running autonomy, autonomous learning, maintenance, recovery, and health-observation claims.
-
-**Why This Order**
-
-The source document identifies autonomy startup as a critical blocker and states that it must be repaired before long-running autonomy and recovery work.
-
-**Acceptance Criteria**
-
-- [ ] Production autonomy starts successfully.
-- [ ] All registered recurring callbacks target implemented interfaces.
-- [ ] Startup failure is visible as initialization failure.
-- [ ] Autonomous work receives explicit planner/executor dependencies.
-- [ ] Work cannot be marked complete without verified execution.
-
----
 
 ## Task 4 — Restore the shared event contract and event-driven improvement flow
 
@@ -670,27 +621,26 @@ No dependency has been added where the existing status document did not establis
 
 | Size | Remaining tasks |
 |---|---:|
-| 🔴 RED — Big / Complex | 6 |
+| 🔴 RED — Big / Complex | 5 |
 | 🟡 YELLOW — Medium | 7 |
 | 🔵 BLUE — Easy / Small | 3 |
-| **Total** | **16** |
+| **Total** | **14** |
 
 | Priority | Remaining work |
 |---|---|
-| **P0 — Critical** | Tasks 2–3: production autonomy startup and execution/safety enforcement |
+| **P0 — Critical** | No remaining P0 task on the active queue; the Task 3 autonomy blocker is complete. |
 | **P1 — High** | Tasks 4–5, 7–8, 11, 14: event wiring, execution learning, production tests, provider resilience, autonomous learning, readiness surface |
 | **P2 — Medium** | Tasks 6, 9–10, 12–13, 16: retrieval, monitoring, workflow capability/safety, legacy migration, vector recall, memory quality |
 | **P3 — Low** | Tasks 14–17: readiness completion, configurable policy, memory-quality tail work, stale contracts |
 
-**Current verified completion:** 42.5%. The existing status document records 0 P0 issues in its earlier consolidated summary, but the authoritative current section explicitly identifies two remaining P0 critical blockers: autonomy startup and execution/safety enforcement. This roadmap preserves that later authoritative classification.
+**Current verified completion:** 42.5%. Task 3’s autonomy-startup blocker and Task 2’s execution-safety blocker are now recorded as complete. The remaining active queue begins with Task 4’s P1 event-contract repair.
 
 ---
 
 # Critical Blockers
 
-1. Production autonomy does not start successfully and scheduled autonomy jobs target absent interfaces.
-2. Learning, diagnostics, and safe self-improvement are disconnected by incompatible event-bus ownership, and diagnostic event emission is broken.
-3. The runtime is fragmented across production, legacy, and test-only implementations, leaving key features unreachable and tests disconnected from the normal application graph.
+1. Learning, diagnostics, and safe self-improvement are disconnected by incompatible event-bus ownership, and diagnostic event emission is broken.
+2. The runtime is still fragmented across production, legacy, and test-only implementations, leaving key features unreachable and tests disconnected from the normal application graph.
 
 ---
 
@@ -740,3 +690,48 @@ The current verified operational completion is **42.5%**. The earlier 76.6% esti
 # Source Boundary
 
 This file is a rolling prioritized work queue. It contains the remaining implementation tasks at the top and records completed task summaries at the bottom. Task 1 and Task 2 completion histories reflect the actual code changes and targeted verification performed.
+
+---
+
+## Task 3 — Production Autonomy Startup & Scheduled Jobs
+
+**Status:** COMPLETE
+
+**Implementation Summary**
+
+Task 3 repaired the production autonomy lifecycle and the directly related legacy long-term autonomy path. The canonical `SystemInitializer` now treats failed workflow-orchestrator or autonomy startup as an initialization failure rather than silently continuing. Canonical autonomy validates explicit dependencies, propagates recurring-job registration failures, and preserves accurate running state. The long-term manager now resolves the shared `JobStatus` type, targets implemented checkpoint, learning, and self-initiated-work interfaces, and exposes callback failures to the shared scheduler.
+
+The learning handoff now persists autonomy-cycle experiences and invokes the existing autonomous learning pipeline. Autonomous task execution requires injected planner, executor, and verifier dependencies; it records planning, execution, result, verification, and terminal states; and it cannot mark a task complete unless the verifier reports success. Failed, invalid, or unverified work remains failed or verification-failed.
+
+**Files Changed**
+
+- `app/agent/core_agent.py`
+- `app/autonomy/maintenance.py`
+- `app/autonomy/manager.py`
+- `app/autonomy/self_initiated.py`
+- `app/autonomy/watchdog.py`
+- `app/core/initializer.py`
+- `app/long_term_autonomy/manager.py`
+- `app/orchestrator/capability_registry.py`
+- `app/orchestrator/workflow_orchestrator.py`
+- `tests/test_task3_autonomy.py`
+
+**Startup and Scheduled-Job Behavior**
+
+The production smoke path `SystemInitializer → WorkflowOrchestrator → AutonomyManager → start()` passed with autonomy reporting `running=True`. Watchdog, self-initiated-work, and maintenance recurring jobs were registered against the shared background-job service, and their callbacks reached implemented interfaces. Callback and registration failures are re-raised so the scheduler can record retry or failed state rather than recording false success.
+
+**Learning, Planner/Executor Wiring, and Verification**
+
+The scheduled learning job calls the existing callable autonomous learning pipeline. The long-term manager receives planner, executor, and verifier instances explicitly from the legacy agent path. Work discovery reaches planning and execution, and opportunity completion occurs only after verified execution. The false-completion regression tests cover missing dependencies, failed verification, and verified success.
+
+**Tests and Verification Results**
+
+The focused suite passed with **35 passed and 1 skipped**: `tests/test_task3_autonomy.py`, `tests/test_autonomy.py`, and `tests/test_execution_safety_state_machine.py`. The production startup and recurring-callback smoke test passed and printed `production_startup=ok` without workflow-composition or callback errors after the final interface repairs. `git diff --check` also passed.
+
+**Remaining Limitations**
+
+- Task 4 still needs to restore the shared event contract and event-driven improvement flow.
+- Broader autonomous-learning feature selection and its full production integration remain queued for Task 11; Task 3 only repairs the handoff and verified execution lifecycle.
+- The repository-wide pytest configuration still contains the pre-existing Windows-only `C:/temp/pytest_tmp` path; focused Linux verification used an equivalent temporary directory without changing project configuration.
+
+**Commit Hash:** `d889527`

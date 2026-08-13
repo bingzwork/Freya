@@ -160,19 +160,16 @@ class Watchdog:
 
     def _schedule_periodic_health_check(self) -> None:
         """Schedule periodic health check via BackgroundJobService."""
-        try:
-            trigger = JobTriggerConfig(
-                type=JobTriggerType.RECURRING,
-                interval_seconds=self.config.self_initiated_check_interval_seconds,
-            )
-            self._health_check_job_id = self._job_service.schedule(
-                job_id="watchdog_health_check",
-                func=self._periodic_health_check,
-                trigger=trigger,
-                name="Watchdog Periodic Health Check",
-            )
-        except Exception:
-            pass
+        trigger = JobTriggerConfig(
+            type=JobTriggerType.RECURRING,
+            interval_seconds=self.config.self_initiated_check_interval_seconds,
+        )
+        self._health_check_job_id = self._job_service.schedule(
+            job_id="watchdog_health_check",
+            func=self._periodic_health_check,
+            trigger=trigger,
+            name="Watchdog Periodic Health Check",
+        )
 
     def _periodic_health_check(self) -> None:
         """Perform periodic health check."""
@@ -217,7 +214,7 @@ class Watchdog:
                         details=comp,
                     )
         except Exception:
-            pass
+            raise
 
     def _monitor_loop(self) -> None:
         """Background monitoring loop as fallback."""

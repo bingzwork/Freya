@@ -10,6 +10,7 @@ import time
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any, Callable
 from enum import Enum
+from uuid import uuid4
 import traceback
 
 from app.long_term_autonomy.models import (
@@ -22,7 +23,13 @@ from app.long_term_autonomy.models import (
 )
 from app.long_term_autonomy.storage import AutonomyStorage
 # Use shared infrastructure instead of duplicate implementations
-from app.core.background_jobs import get_job_service, JobTriggerConfig, JobTriggerType, JobPriority
+from app.core.background_jobs import (
+    get_job_service,
+    JobStatus,
+    JobTriggerConfig,
+    JobTriggerType,
+    JobPriority,
+)
 from app.core.observability import get_observability_hub, HealthCheck, HealthResult, HealthStatus, ComponentInfo, ComponentType
 from app.core.events import get_event_bus
 from app.long_term_autonomy.watchdog import Watchdog, WatchdogConfig
@@ -90,6 +97,9 @@ class AutonomyManager:
         event_bus: Optional[object] = None,
         job_service: Optional[object] = None,
         observability: Optional[object] = None,
+        planner: Optional[object] = None,
+        executor: Optional[object] = None,
+        verifier: Optional[object] = None,
     ):
         """
         Initialize the Autonomy Manager.
@@ -99,6 +109,9 @@ class AutonomyManager:
             event_bus: Optional shared EventBus instance (uses global if not provided)
             job_service: Optional shared BackgroundJobService instance (uses global if not provided)
             observability: Optional shared ObservabilityHub instance (uses global if not provided)
+            planner: Planner used to create autonomous task plans
+            executor: Executor used to run autonomous task plans
+            verifier: Verification runner required before task completion
         """
         self.workspace = workspace
 
@@ -137,8 +150,10 @@ class AutonomyManager:
             goal_storage=self.goal_storage,
             planner=self.planner_scheduler,
         )
-        # Note: Executor requires LLM and tools - we'll set these later or get from context
-        self.executor = None  # Will be set via set_executor method
+        # Autonomous work must receive explicit planning, execution, and verification dependencies.
+        self.planner = planner
+        self.executor = executor
+        self.verifier = verifier
 
         # Initialize new Long-Term Autonomy systems
         self.watchdog = Watchdog(WatchdogConfig())
@@ -312,55 +327,83 @@ class AutonomyManager:
             with self._lock:
                 self._sync_state_to_storage()
             logger.debug("Autonomy state persisted successfully")
-        except Exception as e:
-            logger.error(f"Failed to persist autonomy state: {e}")
+        except Exception:
+            logger.exception("Failed to persist autonomy state")
+            raise
 
-    def _run_learning_pipeline_job(self) -> None:
-        """Background job to run the learning pipeline."""
+    def _run_learning_pipeline_job(self):
+        """Run the real autonomous learning pipeline and expose failures to the scheduler."""
+        if self.learning_pipeline is None:
+            raise RuntimeError("Autonomous learning pipeline is not initialized")
         try:
-            if self.learning_pipeline:
-                self.learning_pipeline.run_cycle()
-            logger.debug("Learning pipeline job completed")
-        except Exception as e:
-            logger.error(f"Learning pipeline job failed: {e}")
+            result = self.learning_pipeline()
+        except Exception:
+            logger.exception("Learning pipeline job failed")
+            raise
+        if getattr(result, "errors", None):
+            raise RuntimeError(f"Learning pipeline reported errors: {result.errors}")
+        logger.debug("Learning pipeline job completed")
+        return result
 
     def _autonomy_maintenance_job(self) -> None:
         """Background job for autonomy maintenance tasks."""
         try:
-            # Clean up completed/failed tasks older than 7 days
             if self.tasks:
                 self._cleanup_old_tasks(max_age_days=7)
             logger.debug("Autonomy maintenance job completed")
-        except Exception as e:
-            logger.error(f"Autonomy maintenance job failed: {e}")
+        except Exception:
+            logger.exception("Autonomy maintenance job failed")
+            raise
 
     def _autonomy_watchdog_checkpoint(self) -> None:
-        """Background job for watchdog checkpoint."""
+        """Persist an autonomy checkpoint through the implemented continuous-operation API."""
+        if self.continuous_operation is None:
+            raise RuntimeError("Continuous operation manager is not initialized")
         try:
-            if self.watchdog:
-                self.watchdog.checkpoint("autonomy_system")
-            logger.debug("Watchdog checkpoint job completed")
-        except Exception as e:
-            logger.error(f"Watchdog checkpoint job failed: {e}")
+            if not self.continuous_operation.force_checkpoint():
+                raise RuntimeError("Continuous operation checkpoint failed")
+        except Exception:
+            logger.exception("Autonomy checkpoint job failed")
+            raise
+        logger.debug("Autonomy checkpoint job completed")
 
     def _autonomy_self_initiated_work_job(self) -> None:
-        """Background job for self-initiated work discovery."""
+        """Discover and schedule self-initiated work through implemented interfaces."""
+        if self.self_initiated_work is None:
+            raise RuntimeError("Self-initiated work manager is not initialized")
         try:
-            if self.self_initiated_work:
-                self.self_initiated_work.discover_work()
-            logger.debug("Self-initiated work job completed")
-        except Exception as e:
-            logger.error(f"Self-initiated work job failed: {e}")
+            self.self_initiated_work._scan_and_generate()
+            scheduled = []
+            failed = []
+            for opportunity in self.self_initiated_work.get_pending_opportunities():
+                task_id = self.self_initiated_work.schedule_opportunity(opportunity.id)
+                if not task_id:
+                    continue
+                scheduled.append(task_id)
+                execution = self._execute_specific_task({'task_id': task_id})
+                if execution.get('verified'):
+                    self.self_initiated_work.mark_opportunity_completed(opportunity.id)
+                else:
+                    failed.append(task_id)
+            if failed:
+                raise RuntimeError(
+                    f"Autonomous execution failed or remained unverified for tasks: {failed}"
+                )
+        except Exception:
+            logger.exception("Self-initiated work job failed")
+            raise
+        logger.debug(f"Self-initiated work job completed; scheduled {len(scheduled)} tasks")
+        return scheduled
 
     def _autonomy_health_check_job(self) -> None:
         """Background job for autonomy health check."""
         try:
             if not self.is_healthy():
-                logger.warning("[AutonomyManager] Health check failed")
-            else:
-                logger.debug("[AutonomyManager] Health check passed")
-        except Exception as e:
-            logger.error(f"[AutonomyManager] Health check error: {e}")
+                raise RuntimeError("Autonomy health check failed")
+            logger.debug("[AutonomyManager] Health check passed")
+        except Exception:
+            logger.exception("[AutonomyManager] Health check error")
+            raise
 
     def _cleanup_old_tasks(self, max_age_days: int = 7) -> None:
         """Clean up old completed/failed tasks."""
@@ -453,18 +496,25 @@ class AutonomyManager:
         self.storage._state = self.state
         self.storage.save_state()
 
-    def set_executor(self, llm, tools, engineering_lessons=None) -> None:
-        """
-        Set the executor for running tasks.
+    def set_execution_dependencies(
+        self,
+        planner: object,
+        executor: object,
+        verifier: Optional[object] = None,
+    ) -> None:
+        """Inject the planner, executor, and optional verification runner for autonomous work."""
+        if planner is None or executor is None:
+            raise ValueError("Autonomous task execution requires both planner and executor")
+        self.planner = planner
+        self.executor = executor
+        if verifier is not None:
+            self.verifier = verifier
 
-        Args:
-            llm: The language model to use
-            tools: The tools available to the agent
-            engineering_lessons: Optional engineering lessons for learning
-        """
+    def set_executor(self, llm, tools, engineering_lessons=None) -> None:
+        """Create an executor for backwards-compatible callers with an existing planner."""
         from app.agent.executor import Executor
-        self.executor = Executor(llm, tools, engineering_lessons)
-        self.executor.set_conversation_control(self)  # Use self as conversation control
+        executor = Executor(llm, tools, engineering_lessons)
+        self.set_execution_dependencies(self.planner, executor)
 
     def set_chat_activity_provider(self, provider: ChatActivityProvider) -> None:
         """
@@ -495,6 +545,11 @@ class AutonomyManager:
                 return False
 
             try:
+                if self.planner is None or self.executor is None or self.verifier is None:
+                    raise RuntimeError(
+                        "Autonomy startup requires injected planner, executor, and verifier"
+                    )
+
                 # Initialize state
                 self._running = True
                 self._shutdown_event.clear()
@@ -528,12 +583,13 @@ class AutonomyManager:
                 logger.info("Autonomy system started")
                 return True
 
-            except Exception as e:
-                logger.error(f"Failed to start autonomy system: {e}")
+            except Exception as exc:
+                logger.exception("Failed to start autonomy system")
                 self._running = False
                 self.state.is_running = False
                 self._sync_state_to_storage()
-                return False
+                self._unregister_background_jobs()
+                raise RuntimeError("Autonomy startup failed") from exc
 
     def stop(self) -> bool:
         """
@@ -1217,84 +1273,143 @@ class AutonomyManager:
                 }
             }
 
-            # Use the learning pipeline to process this experience
-            # The learning pipeline would update models, extract patterns, etc.
-            # For now, we'll create a simple learning update
+            if self.learning_pipeline is None:
+                raise RuntimeError("Autonomous learning pipeline is not initialized")
+
+            verified_success = bool(
+                verification_result.get('action_successful')
+                and verification_result.get('expected_outcome_met')
+            )
+            outcome = 'positive' if verified_success else 'negative'
+            experience = self.experience_memory.store(
+                title=f"Autonomy cycle {self._cycle_count}",
+                description=(
+                    f"Decision: {decision.action_type if decision else 'none'}; "
+                    f"verification: {verification_result.get('verification_notes', '')}"
+                ),
+                category='autonomy',
+                tags=['autonomy', 'verified' if verified_success else 'unverified'],
+                outcome=outcome,
+                confidence=0.9 if verified_success else 0.5,
+                metadata=learning_data,
+                source='long_term_autonomy',
+            )
+            pipeline_result = self.learning_pipeline()
+            if getattr(pipeline_result, 'errors', None):
+                raise RuntimeError(f"Learning pipeline reported errors: {pipeline_result.errors}")
+
             learning_update = LearningUpdate()
-            learning_update.update_type = 'experience_recorded'
-            learning_update.description = f"Recorded experience from cycle {self._cycle_count}"
-            learning_update.data = learning_data
-            learning_update.confidence = 0.8
-
-            # In a full implementation, we would call:
-            # self.learning_pipeline.experience(learning_data)
-
+            learning_update.update_type = 'pipeline_processed'
+            learning_update.description = f"Processed autonomy experience from cycle {self._cycle_count}"
+            learning_update.data = {
+                'experience_id': experience.id,
+                'learning_data': learning_data,
+                'pipeline_result': getattr(pipeline_result, '__dict__', {}),
+            }
+            learning_update.confidence = 0.9 if verified_success else 0.5
             return learning_update
 
-        except Exception as e:
-            logger.error(f"Error during learning phase: {e}")
-            return None
+        except Exception:
+            logger.exception("Error during learning phase")
+            raise
 
     # ==================== Action Implementations ====================
 
     def _execute_specific_task(self, action_details: dict) -> dict:
-        """Execute a specific task defined in action details."""
+        """Plan, execute, and verify one autonomous task before marking it complete."""
         from app.agent.executor import Executor
-        from app.planner.task import TaskStatus
 
         task_id = action_details.get('task_id')
         if not task_id:
-            return {
-                'action_taken': False,
-                'reason': 'No task_id provided in action details'
-            }
+            return {'action_taken': False, 'reason': 'No task_id provided in action details'}
 
-        # Find task in storage
         task = self.storage.get_task(task_id)
         if not task:
+            return {'action_taken': False, 'reason': f'Task {task_id} not found'}
+        if task.status not in {'pending', 'scheduled'}:
             return {
                 'action_taken': False,
-                'reason': f'Task {task_id} not found'
+                'task_id': task_id,
+                'reason': f'Invalid autonomous task state: {task.status}',
             }
+        if self.planner is None or self.executor is None:
+            task.status = 'failed'
+            task.error = 'Autonomous execution requires injected planner and executor'
+            self.storage.save_task(task)
+            return {'action_taken': False, 'task_id': task_id, 'error': task.error}
 
         try:
-            # If we have an executor, execute the task
-            if self.executor:
-                # Convert AutonomousTask to a format executor can run
-                # For now, create a simple plan from the task description
-                plan = self.planner.create_plan(task.description)
-                if plan and plan.tasks:
-                    allowed_tools = set(Executor.READ_ONLY_TOOLS)
-                    allowed_tools.update(Executor.MUTATING_TOOLS)
-                    results = self.executor.execute_plan(plan, allowed_tools)
-
-                    task.status = 'completed'
-                    self.storage.save_task(task)
-                    return {
-                        'action_taken': True,
-                        'task_id': task_id,
-                        'result': results,
-                        'steps_executed': len(results)
-                    }
-
-            # Fallback: mark task as completed if no executor
-            task.status = 'completed'
+            task.status = 'planned'
             self.storage.save_task(task)
+            plan = self.planner.create_plan(task.description)
+            if not plan or not getattr(plan, 'tasks', None):
+                raise RuntimeError('Planner produced no executable task plan')
+
+            task.status = 'execution_requested'
+            self.storage.save_task(task)
+            task.status = 'executing'
+            task.started_at = datetime.now(timezone.utc).isoformat()
+            self.storage.save_task(task)
+            if self.watchdog:
+                self.watchdog.register_task(task.id, task.description)
+
+            allowed_tools = set(Executor.READ_ONLY_TOOLS)
+            allowed_tools.update(Executor.MUTATING_TOOLS)
+            results = self.executor.execute_plan(plan, allowed_tools)
+            if not results:
+                raise RuntimeError('Executor returned no execution results')
+            for result in results:
+                detail = result.get('result', {}) if isinstance(result, dict) else {}
+                if getattr(detail, 'error', None) or (isinstance(detail, dict) and detail.get('error')):
+                    raise RuntimeError(f"Executor reported failure: {detail}")
+
+            task.status = 'execution_result'
+            task.result = {'results': results}
+            self.storage.save_task(task)
+            task.status = 'verification'
+            self.storage.save_task(task)
+
+            verifier = self.verifier or getattr(self.executor, '_verification', None)
+            if verifier is None:
+                raise RuntimeError('Executor has no verification dependency')
+            verification = verifier.dry_run_verify()
+            if not getattr(verification, 'success', False):
+                task.status = 'verification_failed'
+                task.error = getattr(verification, 'stderr', 'Execution verification failed')
+                task.result['verification'] = getattr(verification, '__dict__', {})
+                self.storage.save_task(task)
+                if self.watchdog:
+                    self.watchdog.mark_task_failed(task.id)
+                return {
+                    'action_taken': False,
+                    'task_id': task_id,
+                    'result': task.result,
+                    'verification_failed': True,
+                    'error': task.error,
+                }
+
+            task.status = 'completed'
+            task.completed_at = datetime.now(timezone.utc).isoformat()
+            task.result['verification'] = getattr(verification, '__dict__', {})
+            self.storage.save_task(task)
+            if self.watchdog:
+                self.watchdog.mark_task_completed(task.id)
             return {
                 'action_taken': True,
                 'task_id': task_id,
-                'result': 'Task marked completed (no executor available)'
+                'result': task.result,
+                'steps_executed': len(results),
+                'verified': True,
             }
 
-        except Exception as e:
-            logger.error(f"Error executing task {task_id}: {e}")
+        except Exception as exc:
+            logger.exception("Error executing task %s", task_id)
             task.status = 'failed'
-            task.error = str(e)
+            task.error = str(exc)
             self.storage.save_task(task)
-            return {
-                'action_taken': False,
-                'error': str(e)
-            }
+            if self.watchdog:
+                self.watchdog.mark_task_failed(task.id)
+            return {'action_taken': False, 'task_id': task_id, 'error': str(exc)}
 
     def _create_goal_from_decision(self, action_details: dict) -> dict:
         """Create a new goal based on decision details."""
@@ -1601,13 +1716,20 @@ class AutonomyManager:
         if metadata is None:
             metadata = {}
 
-        job_id = self.background_scheduler.add_job(
+        job_id = f"autonomy_custom_{uuid4().hex}"
+        self.job_service.schedule(
+            job_id=job_id,
             func=func,
-            interval=interval,
+            trigger=JobTriggerConfig(
+                type=JobTriggerType.RECURRING,
+                interval_seconds=interval,
+                max_runs=max_runs,
+            ),
+            priority=JobPriority.NORMAL,
             args=args,
             kwargs=kwargs,
-            max_runs=max_runs,
-            metadata=metadata
+            replace_existing=False,
+            **metadata,
         )
 
         logger.info(f"Scheduled background task {job_id} with interval {interval}s")
@@ -1615,7 +1737,7 @@ class AutonomyManager:
 
     def cancel_background_task(self, job_id: str) -> bool:
         """Cancel a scheduled background task."""
-        result = self.background_scheduler.remove_job(job_id)
+        result = self.job_service.remove_job(job_id)
         if result:
             logger.info(f"Cancelled background task {job_id}")
         return result
@@ -1694,7 +1816,7 @@ class AutonomyManager:
                 'config': self.config.__dict__,
                 'is_running': self._running,
                 'is_paused': self._pause_event.is_set() and self._running,
-                'background_jobs': len(self.background_scheduler.list_jobs()),
+                'background_jobs': len(self.job_service.list_jobs()),
                 'autonomous_tasks': len(self.storage.list_tasks()),
                 'goals': len(self.goal_storage.all())
             }
@@ -1714,8 +1836,8 @@ class AutonomyManager:
         if self.state.error_count > self.config.max_consecutive_failures:
             return False
 
-        # Check background scheduler
-        if not self.background_scheduler:  # Should always exist if initialized
+        # Check shared background job service
+        if not self.job_service:
             return False
 
         return True
