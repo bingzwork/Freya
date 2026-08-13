@@ -1,10 +1,10 @@
 # Completion Progress
 
-Overall Freya Functional Completion: 46.0%
-Completed Tasks: 4 / 17
-Remaining Tasks: 13 / 17
+Overall Freya Functional Completion: 50.0%
+Completed Tasks: 5 / 17
+Remaining Tasks: 12 / 17
 Last Updated: 2026-08-14
-Next Active Task: Task 5 — Connect execution outcomes to learning and durable memory
+Next Active Task: Task 6 — Consolidate retrieval and restore cross-session knowledge recall
 
 > The percentage retains the documented capability-weighted operational method: functionality receives credit only when its production path is implemented, wired, reachable, safe where required, and supported by runtime evidence. The task counts are the rolling queue counts and do not replace that capability-weighted percentage.
 
@@ -14,21 +14,19 @@ Next Active Task: Task 5 — Connect execution outcomes to learning and durable 
 > Completed, working, and verified items have been removed from the execution queue.
 > Tasks are ordered by documented dependency and execution sequence, not simply by priority.
 >
-> **Verified operational completion:** 46.0% (the capability-weighted estimate reflects four completed and verified critical-path tasks; it supersedes the earlier 76.6% estimate).
+> **Verified operational completion:** 50.0% (the capability-weighted estimate reflects five completed and verified critical-path tasks; it supersedes the earlier 76.6% estimate).
 
 ---
 
 # Critical Execution Path
 
-1. 🟡 Task 5 — Connect execution outcomes to learning and durable memory
+1. 🔴 Task 6 — Consolidate retrieval and restore cross-session knowledge recall
    ↓
-2. 🔴 Task 6 — Consolidate retrieval and restore cross-session knowledge recall
+2. 🔴 Task 7 — Replace obsolete tests with production-path integration evidence
    ↓
-3. 🔴 Task 7 — Replace obsolete tests with production-path integration evidence
+3. 🔴 Task 8 — Implement provider resilience
    ↓
-4. 🔴 Task 8 — Implement provider resilience
-   ↓
-5. 🟡 Task 9 — Repair monitoring and hardware-health evidence
+4. 🟡 Task 9 — Repair monitoring and hardware-health evidence
 
 Tasks 10–17 are parallel or independent work where the existing status document does not establish a prerequisite beyond the relationships stated in each task.
 
@@ -37,47 +35,6 @@ Tasks 10–17 are parallel or independent work where the existing status documen
 # Active Work
 
 
-## Task 5 — Connect execution outcomes to learning and durable memory
-
-**Size:** 🟡 YELLOW — MEDIUM
-**Priority:** P1
-**Execution Order:** 5
-
-**Location**
-
-- `app/verification/execution_verifier.py`: `_route_to_learning_pipeline()`
-- `app/execution/engine.py`
-- `app/learning/pipeline.py`
-
-**Problem**
-
-`ExecutionVerifier` calls `LearningPipeline.add_experience()`, but the initialized pipeline exposes `run(candidate)`. The normal execution engine also does not construct or call `ExecutionVerifier`, so actual task outcomes do not reliably reach learning, especially successful work.
-
-**Required Work**
-
-- Define one typed learning-outcome contract.
-- Replace the incompatible method call with the supported pipeline handoff.
-- Connect `ExecutionVerifier` to the normal execution state machine.
-- Ensure successful and failed task outcomes persist to memory.
-- Add integration tests for both outcomes.
-
-**Dependencies**
-
-- Must come after Task 2.
-- Blocks completion of execution-learning claims.
-
-**Why This Order**
-
-The source document explicitly states that execution learning depends on the P0 execution state-machine repair.
-
-**Acceptance Criteria**
-
-- [ ] Execution verification reaches `LearningPipeline.run(candidate)` through the production path.
-- [ ] Successful and failed outcomes are persisted.
-- [ ] The typed contract prevents silent API mismatch.
-- [ ] Integration tests cover both outcome classes.
-
----
 
 ## Task 6 — Consolidate retrieval and restore cross-session knowledge recall
 
@@ -582,17 +539,17 @@ No dependency has been added where the existing status document did not establis
 | Priority | Remaining work |
 |---|---|
 | **P0 — Critical** | No remaining P0 task on the active queue; the Task 3 autonomy blocker is complete. |
-| **P1 — High** | Tasks 5, 7–8, 11, 14: execution learning, production tests, provider resilience, autonomous learning, readiness surface |
+| **P1 — High** | Tasks 7–8, 11, 14: production tests, provider resilience, autonomous learning, readiness surface |
 | **P2 — Medium** | Tasks 6, 9–10, 12–13, 16: retrieval, monitoring, workflow capability/safety, legacy migration, vector recall, memory quality |
 | **P3 — Low** | Tasks 14–17: readiness completion, configurable policy, memory-quality tail work, stale contracts |
 
-**Current verified completion:** 46.0%. Tasks 2–4 are recorded as complete and verified. The remaining active queue begins with Task 5’s P1 execution-to-learning repair.
+**Current verified completion:** 50.0%. Tasks 2–5 are recorded as complete and verified. The remaining active queue begins with Task 6’s retrieval-consolidation repair.
 
 ---
 
 # Critical Blockers
 
-1. Execution outcomes still do not reliably reach the learning pipeline and durable memory through the normal execution path (Task 5).
+1. Cross-session retrieval remains fragmented and does not yet provide deterministic persistent semantic recall through one production contract (Task 6).
 2. The runtime is still fragmented across production, legacy, and test-only implementations, leaving key features unreachable and tests disconnected from the normal application graph.
 
 ---
@@ -601,7 +558,7 @@ No dependency has been added where the existing status document did not establis
 
 Freya reaches 100% only when a normal `FreyaApp` startup reliably composes one supported architecture; safely accepts or rejects actions; plans, executes, verifies, repairs, and persists outcomes; learns from those outcomes; uses persistent and retrievable knowledge across sessions; runs healthy autonomous background work; routes diagnostics and learning through controlled improvement safeguards; survives configured provider and tool failures; and demonstrates these chains through a clean, production-path test suite.
 
-The current verified operational completion is **46.0%**. The earlier 76.6% estimate is superseded by the current verified assessment and is not used as the completion baseline.
+The current verified operational completion is **50.0%**. The earlier 76.6% estimate is superseded by the current verified assessment and is not used as the completion baseline.
 
 ---
 
@@ -743,11 +700,61 @@ The focused Task 4 suite passed with **65 passed**. It verifies explicit EventBu
 
 **Remaining Limitations**
 
-- Task 5 still needs to connect normal execution outcomes to `LearningPipeline.run(candidate)` and durable memory. Task 4 verifies the learning event path only once a learning candidate reaches the pipeline.
 - The repository-wide pytest configuration still contains the pre-existing Windows-only `C:/temp/pytest_tmp` path; focused Linux verification used an equivalent temporary-directory override without changing unrelated configuration.
+
+**Resolved Later**
+
+- Task 5 — Execution Outcomes → Learning & Durable Memory now routes normal verified execution outcomes into `LearningPipeline.run(candidate)` and durable experience memory.
+
+**Commit Hash:** `ac4d029`
+
+
+---
+
+## Task 5 — Execution Outcomes → Learning & Durable Memory
+
+**Status:** COMPLETE
+
+**Implementation Summary**
+
+Task 5 connects the canonical execution state machine to the existing `LearningPipeline.run(candidate)` contract and its durable-memory write path. `LearningCandidate` with `LearningCandidateType.EXECUTION_OUTCOME` is the single typed verification-to-learning contract; it carries the task, serialized execution results, success/failure state, verification result when available, failure detail, execution context, and timestamp. No duplicate learning outcome type was introduced.
+
+**Files Changed**
+
+- `app/core/initializer.py`
+- `app/execution/engine.py`
+- `app/learning/pipeline.py`
+- `app/memory/coordinator.py`
+- `app/verification/execution_verifier.py`
+- `tests/test_execution_safety_state_machine.py`
+- `tests/test_task5_execution_learning.py`
+- `PROJECT_STATUS.md`
+
+**Execution → Verification Wiring**
+
+`SystemInitializer` now injects its shared `LearningPipeline` and `ObservabilityHub` into the normal `ExecutionEngine`. The engine constructs and invokes `ExecutionVerifier` for verification on the canonical execution path. It routes a successful verified execution through the verifier into learning, and routes execution failures or unrepaired verification failures through the same typed candidate contract.
+
+**Verification → Learning and Durable-Memory Result**
+
+`ExecutionVerifier` no longer calls the incompatible `LearningPipeline.add_experience()` interface. It invokes `LearningPipeline.run(candidate)` directly. The learning pipeline extracts a dedicated `execution_outcome` item retaining task identity, execution result, verification status, and error context. Durable `ExperienceMemory` records successful outcomes as `positive` and failed outcomes as `negative`; `MemoryCoordinator.add_experience()` now delegates to the existing synchronous `ExperienceMemory.store()` persistence contract. Memory-write failures are re-raised to the execution path, which changes the terminal state to failed rather than reporting a false successful execution.
+
+**Tests Actually Run**
+
+- `python3 -m py_compile app/verification/execution_verifier.py app/execution/engine.py app/learning/pipeline.py app/memory/coordinator.py app/core/initializer.py`
+- `python3 -m pytest -q --basetemp=/tmp/freya-task5-focused tests/test_task5_execution_learning.py tests/test_execution_safety_state_machine.py tests/test_learning_pipeline.py tests/test_shared_event_improvement_flow.py`
+- `git diff --check`
+
+**Verification Results**
+
+The focused suite passed with **33 passed**. It verifies production dependency injection, successful execution → verification → `LearningPipeline.run(candidate)` → durable positive experience memory, failed verification → learning → durable negative experience memory, and the requirement that a learning-persistence failure cannot be reported as a successful execution. The related state-machine, learning-pipeline, and shared-event regression tests also pass in the same focused run.
+
+**Remaining Limitations**
+
+- The repository-wide pytest configuration still contains the pre-existing Windows-only `C:/temp/pytest_tmp` path; focused Linux verification used an equivalent temporary-directory override without changing unrelated configuration.
+- Task 6 remains required to consolidate retrieval and establish deterministic cross-session knowledge recall; Task 5 verifies durable write persistence, not retrieval behavior.
 
 **Resolved Later**
 
 - None.
 
-**Commit Hash:** `ac4d029`
+**Implementation Commit Hash:** `63dc6f0`
