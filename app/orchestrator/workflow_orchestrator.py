@@ -241,10 +241,9 @@ class WorkflowOrchestrator:
 
     def _initialize_components(self):
         if self._capability_registry is None:
-            self._capability_registry = CapabilityRegistry(
-                auto_discovery=self.config.auto_discovery,
-                health_check_interval=self.config.health_check_interval
-            )
+            # CapabilityRegistry does not yet implement auto-discovery or
+            # health-check configuration; use its supported constructor.
+            self._capability_registry = CapabilityRegistry()
         if self._safety_gate is None:
             safety_policy = SafetyPolicy(
                 mode=self.config.safety_mode,
