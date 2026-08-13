@@ -122,7 +122,6 @@ class SafeSelfImprovementEngine:
             raise ValueError("SafeSelfImprovementEngine requires an injected EventBus")
         self._event_bus = event_bus
         self._subscriptions = []
-        self._subscribe_to_events()
 
         self._callbacks: Dict[str, List[Callable]] = {
             "on_submit": [],
@@ -145,6 +144,7 @@ class SafeSelfImprovementEngine:
             "rolled_back": 0,
             "promoted": 0,
         }
+        self._subscribe_to_events()
 
     def submit_improvement(
         self,

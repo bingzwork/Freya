@@ -316,7 +316,7 @@ class SafetyGate:
 
         self.risk_analyzer.register_pattern(
             name="code_execution",
-            patterns=[r"(eval|exec|subprocess|os\.system|shell=True)"],
+            patterns=[r"(\beval\b|\bexec\b|subprocess|os\.system|shell=True)"],
             severity=RiskLevel.HIGH,
             probability=RiskProbability.POSSIBLE,
             category=RiskCategory.SECURITY,
@@ -562,12 +562,14 @@ class SafetyGate:
         if self._is_always_approval_required(assessment.operation_type):
             return SafetyAction.REQUIRE_APPROVAL
 
-        # Check confidence
-        if assessment.confidence < self.policy.min_confidence_for_auto:
+        # A DecisionManager confidence is meaningful only when a decision was
+        # actually produced.  The production initializer intentionally keeps
+        # this collaborator optional; without one, policy risk rules remain
+        # authoritative instead of silently blocking every operation.
+        if assessment.decision_result is not None and assessment.confidence < self.policy.min_confidence_for_auto:
             if assessment.confidence >= self.policy.min_confidence_for_approval:
                 return SafetyAction.REQUIRE_APPROVAL
-            else:
-                return SafetyAction.BLOCK
+            return SafetyAction.BLOCK
 
         # Map risk level to ordinal for comparison
         risk_order = {

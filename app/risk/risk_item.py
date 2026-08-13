@@ -3,10 +3,12 @@
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+from functools import total_ordering
 from typing import Dict, List, Any, Optional
 import uuid
 
 
+@total_ordering
 class RiskSeverity(Enum):
     """Severity levels for risks."""
     CRITICAL = "critical"      # System failure, data loss, security breach
@@ -25,6 +27,11 @@ class RiskSeverity(Enum):
             "low": 2,
             "info": 1,
         }[self.value]
+
+    def __lt__(self, other: "RiskSeverity") -> bool:
+        if not isinstance(other, RiskSeverity):
+            return NotImplemented
+        return self.score < other.score
 
 
 class RiskProbability(Enum):

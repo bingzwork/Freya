@@ -279,27 +279,27 @@ class ExperienceMemory:
 
     def _save(self) -> None:
         """Save entries to storage file."""
-        # Validate write access
-        self.file_allowlist.require_allowed(self.storage_path, FileOperation.WRITE, "ExperienceMemory._save")
+        # Periodic persistence and learning writes can arrive concurrently.
+        # Keep snapshot creation and its fixed temporary path under the same
+        # re-entrant lock used by ``store`` so atomic replacement remains real.
+        with self._lock:
+            self.file_allowlist.require_allowed(self.storage_path, FileOperation.WRITE, "ExperienceMemory._save")
+            self._ensure_storage_dir()
 
-        self._ensure_storage_dir()
-
-        # Write to temporary file first, then rename for atomicity
-        temp_path = self.storage_path.with_suffix(".tmp")
-
-        data = {
-            "entries": [entry.to_dict() for entry in self._entries.values()],
-            "metadata": {
-                "count": len(self._entries),
-                "last_updated": datetime.now(timezone.utc).isoformat(),
+            # Write to a temporary file first, then rename for atomicity.
+            temp_path = self.storage_path.with_suffix(".tmp")
+            data = {
+                "entries": [entry.to_dict() for entry in self._entries.values()],
+                "metadata": {
+                    "count": len(self._entries),
+                    "last_updated": datetime.now(timezone.utc).isoformat(),
+                }
             }
-        }
 
-        with open(temp_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
+            with open(temp_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
 
-        # Atomic rename
-        temp_path.replace(self.storage_path)
+            temp_path.replace(self.storage_path)
 
     def store(
         self,

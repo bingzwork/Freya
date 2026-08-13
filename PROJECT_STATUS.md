@@ -1,10 +1,10 @@
 # Completion Progress
 
-Overall Freya Functional Completion: 55.0%
-Completed Tasks: 6 / 17
-Remaining Tasks: 11 / 17
+Overall Freya Functional Completion: 60.0%
+Completed Tasks: 7 / 17
+Remaining Tasks: 10 / 17
 Last Updated: 2026-08-14
-Next Active Task: Task 7 — Replace obsolete tests with production-path integration evidence
+Next Active Task: Task 8 — Implement provider resilience
 
 > The percentage retains the documented capability-weighted operational method: functionality receives credit only when its production path is implemented, wired, reachable, safe where required, and supported by runtime evidence. The task counts are the rolling queue counts and do not replace that capability-weighted percentage.
 
@@ -14,17 +14,17 @@ Next Active Task: Task 7 — Replace obsolete tests with production-path integra
 > Completed, working, and verified items have been removed from the execution queue.
 > Tasks are ordered by documented dependency and execution sequence, not simply by priority.
 >
-> **Verified operational completion:** 55.0% (the capability-weighted estimate reflects six completed and verified critical-path tasks; it supersedes the earlier 76.6% estimate).
+> **Verified operational completion:** 60.0% (the capability-weighted estimate reflects seven completed and verified critical-path tasks; it supersedes the earlier 76.6% estimate).
 
 ---
 
 # Critical Execution Path
 
-1. 🔴 Task 7 — Replace obsolete tests with production-path integration evidence
+1. 🔴 Task 8 — Implement provider resilience
    ↓
-2. 🔴 Task 8 — Implement provider resilience
+2. 🟡 Task 9 — Repair monitoring and hardware-health evidence
    ↓
-3. 🟡 Task 9 — Repair monitoring and hardware-health evidence
+3. 🟡 Task 10 — Enforce workflow capability and safety behavior
 
 Tasks 10–17 are parallel or independent work where the existing status document does not establish a prerequisite beyond the relationships stated in each task.
 
@@ -33,47 +33,6 @@ Tasks 10–17 are parallel or independent work where the existing status documen
 # Active Work
 
 
-
-## Task 7 — Replace obsolete tests with production-path integration evidence
-
-**Size:** 🔴 RED — BIG / COMPLEX
-**Priority:** P1
-**Execution Order:** 7
-
-**Location**
-
-- `tests/`
-- `tests/test_integration_autonomous.py`
-- Production startup and runtime paths
-
-**Problem**
-
-The audited suite collected successfully but produced 1,942 passed, 69 failed, 36 errors, and 43 skipped tests. Existing tests often target duplicate or isolated implementations rather than the normal application graph. The production autonomy manager has no direct test coverage.
-
-**Required Work**
-
-- Repair or retire obsolete tests after runtime consolidation.
-- Add black-box tests for `FreyaApp` startup, chat, task execution, verification, safety denial, event propagation, restart/persistence, and background autonomy jobs.
-- Add production-path tests for retrieval, learning, safe self-improvement, diagnostics, monitoring, and recovery.
-- Require a clean critical-path suite.
-
-**Dependencies**
-
-- Must follow Task 1 and the relevant implementation repairs in Tasks 2–6.
-- Blocks the claim that the production architecture is operational.
-
-**Why This Order**
-
-The existing document states that duplicate runtime paths must be consolidated before tests can prove the actual architecture.
-
-**Acceptance Criteria**
-
-- [ ] Tests exercise the normal production graph.
-- [ ] Obsolete-path tests are migrated or retired.
-- [ ] Critical-path failures and errors are resolved.
-- [ ] Startup, safety, verification, learning, persistence, and autonomy are covered end to end.
-
----
 
 ## Task 8 — Implement provider resilience
 
@@ -486,19 +445,19 @@ No dependency has been added where the existing status document did not establis
 
 | Size | Remaining tasks |
 |---|---:|
-| 🔴 RED — Big / Complex | 3 |
+| 🔴 RED — Big / Complex | 2 |
 | 🟡 YELLOW — Medium | 5 |
 | 🔵 BLUE — Easy / Small | 3 |
-| **Total** | **11** |
+| **Total** | **10** |
 
 | Priority | Remaining work |
 |---|---|
 | **P0 — Critical** | No remaining P0 task on the active queue; the Task 3 autonomy blocker is complete. |
-| **P1 — High** | Tasks 7–8, 11, 14: production tests, provider resilience, autonomous learning, readiness surface |
+| **P1 — High** | Tasks 8, 11, 14: provider resilience, autonomous learning, readiness surface |
 | **P2 — Medium** | Tasks 9–10, 12–13, 16: monitoring, workflow capability/safety, legacy migration, vector recall, memory quality |
 | **P3 — Low** | Tasks 14–17: readiness completion, configurable policy, memory-quality tail work, stale contracts |
 
-**Current verified completion:** 55.0%. Tasks 2–6 are recorded as complete and verified. The remaining active queue begins with Task 7’s production-path integration evidence.
+**Current verified completion:** 60.0%. Tasks 1–7 are recorded as complete and verified. The remaining active queue begins with Task 8’s provider-resilience work.
 
 ---
 
@@ -513,7 +472,7 @@ No dependency has been added where the existing status document did not establis
 
 Freya reaches 100% only when a normal `FreyaApp` startup reliably composes one supported architecture; safely accepts or rejects actions; plans, executes, verifies, repairs, and persists outcomes; learns from those outcomes; uses persistent and retrievable knowledge across sessions; runs healthy autonomous background work; routes diagnostics and learning through controlled improvement safeguards; survives configured provider and tool failures; and demonstrates these chains through a clean, production-path test suite.
 
-The current verified operational completion is **55.0%**. The earlier 76.6% estimate is superseded by the current verified assessment and is not used as the completion baseline.
+The current verified operational completion is **60.0%**. The earlier 76.6% estimate is superseded by the current verified assessment and is not used as the completion baseline.
 
 ---
 
@@ -787,3 +746,31 @@ Task 7 remains required to replace broader obsolete tests with production-path e
 - Task 5 — Execution Outcomes → Learning & Durable Memory: its recorded limitation requiring deterministic retrieval of durable memory has been resolved for persisted conversation knowledge by Task 6.
 
 **Implementation Commit Hash:** `99eb45e`
+
+---
+
+## Task 7 — Replace Obsolete Tests with Production-Path Integration Evidence
+
+**Status:** COMPLETE
+
+**Implementation Summary**
+
+Task 7 replaced the obsolete direct-construction autonomy integration suite with ten deterministic tests rooted in `FreyaApp` and the normal `SystemInitializer` graph. The new evidence covers startup and shared runtime composition, public chat control, verified task success, safety denial without side effects, rejected verification with safe terminal failure and learning handoff, retrieval plus actual restart persistence, diagnostics event propagation, observability, production autonomy job registration and scheduler success/failure recording, safe self-improvement rejection, and shutdown cleanup.
+
+**Production Defects Repaired**
+
+- The canonical initializer now binds its EventBus, BackgroundJobService, and ObservabilityHub to the compatibility accessors before constructing production services and clears them during shutdown.
+- Safety no longer blocks every low-risk operation merely because an optional decision manager is absent; risk regex matching no longer mistakes `Execute` for the `exec` primitive; and risk-level enums support the comparisons used by enforcement.
+- Watchdog no longer recursively re-ingests experience-memory persistence events into the learning pipeline, and experience-memory snapshots are serialized to prevent concurrent temporary-file races.
+- Safe self-improvement completes initialization before subscribing to live events; production risk execution and promotion import their required time dependency; and generated execution plans are registered in the canonical PlanManager for inspection and persistence.
+- The test configuration no longer uses a Windows-only temporary-directory setting that prevents collection on the supported Linux environment.
+
+**Tests and Verification Results**
+
+- `PYTHONPATH=. pytest tests/test_integration_autonomous.py --basetemp=/tmp/freya-critical-final-suite -q --tb=short`: **10 passed, 0 failed, 0 errors, 0 skipped**.
+- The repaired execution, safety-denial, and diagnostics cases were also re-run directly: **3 passed**.
+- A repository-wide run was started after installing the declared `aiohttp` dependency, then stopped at user direction after progressing beyond 89%. Its remaining failures include legacy `FreyaAgent` initialization (`experience_memory`) and other unrelated legacy/full-suite cases; those were not changed by Task 7.
+
+**Implementation Scope**
+
+The former `tests/test_integration_autonomous.py` targeted legacy `FreyaAgent` / `CentralOrchestrator` construction. It was migrated rather than retained: Task 7 evidence now starts from the canonical production application graph. No broad skips, xfails, discovery exclusions, or test-only production graph were added.

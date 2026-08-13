@@ -343,6 +343,12 @@ class ExecutionEngine:
                 self._set_lifecycle_state(ExecutionLifecycleState.FAILED)
                 return error
 
+            # AgentPlanner produces the canonical Plan object, while
+            # conversational control and outcome inspection use this manager.
+            # Register it before execution so the real task lifecycle is
+            # inspectable and persisted even if a later safety check rejects it.
+            self.plan_manager.register_plan(plan)
+
             self._set_lifecycle_state(ExecutionLifecycleState.VALIDATED)
             self._set_lifecycle_state(ExecutionLifecycleState.SAFETY_CHECKING)
             if self._safety_gate:

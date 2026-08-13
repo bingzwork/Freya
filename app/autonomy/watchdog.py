@@ -121,6 +121,14 @@ class Watchdog:
     def _on_event(self, event: Event, pattern: str) -> None:
         """Handle incoming EventBus event."""
         try:
+            # Learning observations are persisted as ExperienceMemory entries.
+            # Re-observing those persistence events feeds the same observation
+            # back into LearningPipeline and creates an unbounded thread/event
+            # loop.  They are evidence of a completed handoff, not a new system
+            # condition, so retain other memory events while ignoring this sink.
+            if event.name == "memory.experience_stored":
+                return
+
             # Create observation from event
             observation = WatchdogObservation(
                 event_type=WatchdogEventType.SYSTEM_EVENT,

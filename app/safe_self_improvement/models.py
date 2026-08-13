@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
+from functools import total_ordering
 import uuid
 
 
@@ -34,6 +35,7 @@ class ApprovalStatus(Enum):
     NOT_REQUIRED = "not_required"
 
 
+@total_ordering
 class RiskLevel(Enum):
     """Risk levels for operations."""
 
@@ -57,6 +59,8 @@ class RiskLevel(Enum):
         return cls.NONE
 
     def __lt__(self, other: "RiskLevel") -> bool:
+        if not isinstance(other, RiskLevel):
+            return NotImplemented
         order = {
             RiskLevel.NONE: 0,
             RiskLevel.LOW: 1,

@@ -18,9 +18,9 @@ from app.core.protocols import (
 )
 
 # Infrastructure (no deps)
-from app.core.events import EventBus
-from app.core.background_jobs import BackgroundJobService
-from app.core.observability import ObservabilityHub, ComponentInfo, ComponentType
+from app.core.events import EventBus, set_event_bus
+from app.core.background_jobs import BackgroundJobService, set_job_service
+from app.core.observability import ObservabilityHub, ComponentInfo, ComponentType, set_observability_hub
 from app.core.config_hot_reload import ConfigHotReload, create_config_hot_reload
 from app.core.file_watcher import FileWatcher
 
@@ -107,13 +107,19 @@ class SystemInitializer:
         # ------------------------------------------------------------------
         event_bus = EventBus()
         self.event_bus = event_bus
+        # Compatibility collaborators still obtain shared infrastructure through
+        # module-level accessors.  Bind those accessors before constructing any
+        # production component so every service joins this application graph.
+        set_event_bus(event_bus)
         logger.debug("[SystemInitializer] EventBus created")
 
         job_service = BackgroundJobService(event_bus=event_bus)
+        set_job_service(job_service)
         job_service.start()
         logger.debug("[SystemInitializer] BackgroundJobService started")
 
         observability = ObservabilityHub(event_bus=event_bus)
+        set_observability_hub(observability)
         if self.config.enable_observability:
             observability.start()
         logger.debug("[SystemInitializer] ObservabilityHub started")
@@ -413,5 +419,11 @@ class SystemInitializer:
 
         system.priority_llm.shutdown()
         logger.debug("[SystemInitializer] PriorityLLMProvider shut down")
+
+        # Do not leave module-level accessors pointing at shut-down services.
+        # The next FreyaApp start constructs and binds a fresh runtime graph.
+        set_observability_hub(None)
+        set_job_service(None)
+        set_event_bus(None)
 
         logger.info("[SystemInitializer] Shutdown complete")

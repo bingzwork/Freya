@@ -601,6 +601,23 @@ class PlanManager:
 
         return plan
 
+    def register_plan(self, plan: Plan) -> Plan:
+        """Register and persist a plan created by another production planner.
+
+        The canonical execution pipeline accepts plans from ``AgentPlanner``.
+        Registering those plans here keeps conversational control, inspection,
+        restart persistence, and execution records on the same public store.
+        """
+        self._plans[plan.id] = plan
+        self._active_plan = plan
+        self.save_plan(plan)
+        self._publish_event("plan.registered", {
+            "plan_id": plan.id,
+            "name": plan.config.name,
+            "description": plan.config.description,
+        })
+        return plan
+
     def load_plan(self, plan_id: str) -> Optional[Plan]:
         """Load a plan by ID.
 
