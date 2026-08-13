@@ -245,16 +245,6 @@ class WorkflowOrchestrator:
                 auto_discovery=self.config.auto_discovery,
                 health_check_interval=self.config.health_check_interval
             )
-        self._workflow_composer = WorkflowComposer(
-            registry=self._capability_registry,
-            decision_manager=None,
-            intent_classifier=None,
-            memory_retrieval=None,
-        )
-        self._task_executor = TaskExecutor(
-            registry=self._capability_registry,
-            max_concurrent_workflows=self.config.max_concurrent_workflows,
-        )
         if self._safety_gate is None:
             safety_policy = SafetyPolicy(
                 mode=self.config.safety_mode,
@@ -265,6 +255,19 @@ class WorkflowOrchestrator:
                 policy=safety_policy,
                 registry=self._capability_registry,
             )
+        self._workflow_composer = WorkflowComposer(
+            registry=self._capability_registry,
+            decision_manager=None,
+            intent_classifier=None,
+            memory_retrieval=None,
+        )
+        self._task_executor = TaskExecutor(
+            registry=self._capability_registry,
+            max_concurrent_workflows=self.config.max_concurrent_workflows,
+            safety_gate=self._safety_gate,
+            verification_runner=getattr(self._executor, "verification_runner", None),
+            repair_loop=getattr(self._executor, "repair_loop", None),
+        )
         self._self_observer = SelfObserver(
             capability_registry=self._capability_registry,
             workflow_composer=self._workflow_composer,
@@ -340,12 +343,39 @@ class WorkflowOrchestrator:
             cap = self._capability_registry.get_capability(step.capability_name)
             if cap:
                 capabilities[step.capability_name] = cap
+
+        try:
+            self._safety_gate.check_and_enforce(
+                f"Execute workflow: {workflow.spec.name or workflow.spec.workflow_id}",
+                "workflow_execution",
+                {
+                    "workflow_id": workflow.spec.workflow_id,
+                    "workflow_name": workflow.spec.name,
+                    "description": workflow.spec.description,
+                    "capabilities": list(capabilities),
+                    "context": spec.context,
+                },
+            )
+        except Exception as error:
+            workflow.status = WorkflowStatus.FAILED
+            workflow.completed_at = datetime.now(timezone.utc).isoformat()
+            workflow.metadata.update({
+                "execution_state": ExecutionState.SAFETY_DENIED.value,
+                "error": str(error),
+            })
+            self._publish_event("workflow.safety_denied", {
+                "workflow_id": workflow.spec.workflow_id,
+                "error": str(error),
+            })
+            raise
+
         execution_id = self._task_executor.execute(
             workflow_id=workflow.spec.workflow_id,
             task_graph=workflow.task_graph,
             capabilities=capabilities,
             global_inputs=spec.context,
             async_mode=async_mode,
+            safety_approved=True,
         )
         workflow.status = WorkflowStatus.EXECUTING
         workflow.started_at = datetime.now(timezone.utc).isoformat()
@@ -370,10 +400,6 @@ class WorkflowOrchestrator:
         return self.execute_workflow(spec, async_mode)
 
     def get_workflow_status(self, workflow_id: str) -> Optional[WorkflowStatus]:
-        with self._workflow_lock:
-            workflow = self._active_workflows.get(workflow_id)
-            if workflow:
-                return workflow.status
         if self._task_executor:
             exec_state = self._task_executor.get_status(workflow_id)
             if exec_state:
@@ -388,8 +414,23 @@ class WorkflowOrchestrator:
                     ExecutionState.RETRYING: WorkflowStatus.EXECUTING,
                     ExecutionState.CHECKPOINTING: WorkflowStatus.EXECUTING,
                     ExecutionState.RECOVERING: WorkflowStatus.EXECUTING,
+                    ExecutionState.SAFETY_CHECKING: WorkflowStatus.EXECUTING,
+                    ExecutionState.SAFETY_DENIED: WorkflowStatus.FAILED,
+                    ExecutionState.AUTHORIZED: WorkflowStatus.EXECUTING,
+                    ExecutionState.VERIFYING: WorkflowStatus.EXECUTING,
+                    ExecutionState.VERIFICATION_FAILED: WorkflowStatus.FAILED,
                 }
-                return mapping.get(exec_state, WorkflowStatus.PENDING)
+                status = mapping.get(exec_state, WorkflowStatus.PENDING)
+                with self._workflow_lock:
+                    workflow = self._active_workflows.get(workflow_id)
+                    if workflow and status in (WorkflowStatus.COMPLETED, WorkflowStatus.FAILED, WorkflowStatus.CANCELLED):
+                        workflow.status = status
+                        workflow.completed_at = workflow.completed_at or datetime.now(timezone.utc).isoformat()
+                return status
+        with self._workflow_lock:
+            workflow = self._active_workflows.get(workflow_id)
+            if workflow:
+                return workflow.status
         return None
 
     def pause_workflow(self, workflow_id: str) -> bool:

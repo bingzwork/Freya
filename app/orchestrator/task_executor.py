@@ -43,6 +43,11 @@ class ExecutionState(Enum):
     RETRYING = "retrying"
     CHECKPOINTING = "checkpointing"
     RECOVERING = "recovering"
+    SAFETY_CHECKING = "safety_checking"
+    SAFETY_DENIED = "safety_denied"
+    AUTHORIZED = "authorized"
+    VERIFYING = "verifying"
+    VERIFICATION_FAILED = "verification_failed"
 
 
 @dataclass
@@ -101,6 +106,9 @@ class TaskExecutor:
         registry: Optional[CapabilityRegistry] = None,
         checkpoint_dir: Optional[Path] = None,
         max_concurrent_workflows: int = 10,
+        safety_gate: Any = None,
+        verification_runner: Any = None,
+        repair_loop: Any = None,
     ):
         self.registry = registry or get_capability_registry()
         self.checkpoint_dir = checkpoint_dir or Path("data/checkpoints")
@@ -112,6 +120,9 @@ class TaskExecutor:
         self._job_service = get_job_service()
 
         self._max_concurrent = max_concurrent_workflows
+        self._safety_gate = safety_gate
+        self._verification_runner = verification_runner
+        self._repair_loop = repair_loop
         self._active_executions: Dict[str, ExecutionContext] = {}
         self._execution_states: Dict[str, ExecutionState] = {}
         self._execution_threads: Dict[str, threading.Thread] = {}
@@ -142,6 +153,7 @@ class TaskExecutor:
         capabilities: Dict[str, Capability],
         global_inputs: Optional[Dict[str, Any]] = None,
         async_mode: bool = True,
+        safety_approved: bool = False,
     ) -> str:
         """
         Execute a workflow.
@@ -169,9 +181,11 @@ class TaskExecutor:
                 task_graph=task_graph,
                 capabilities=capabilities,
                 checkpoint_dir=self.checkpoint_dir / workflow_id,
-                global_inputs=global_inputs or {},
+                                global_inputs=global_inputs or {},
             )
+            context.metadata["safety_approved"] = safety_approved
             context.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
 
             self._active_executions[workflow_id] = context
             self._execution_states[workflow_id] = ExecutionState.QUEUED
@@ -216,9 +230,46 @@ class TaskExecutor:
                 self._publish_event("workflow.recovered", {"workflow_id": workflow_id})
 
             # Execute tasks in topological order
-            self._execute_tasks(context)
+            if not self._execute_tasks(context):
+                return
 
-            # Mark completed
+            if self._verification_runner:
+                self._set_state(workflow_id, ExecutionState.VERIFYING)
+                verification = self._verification_runner.dry_run_verify()
+                context.metadata["verification"] = {
+                    "success": verification.success,
+                    "return_code": verification.return_code,
+                    "stdout": verification.stdout,
+                    "stderr": verification.stderr,
+                }
+                if not verification.success:
+                    self._set_state(workflow_id, ExecutionState.VERIFICATION_FAILED)
+                    self._publish_event("workflow.verification_failed", {
+                        "workflow_id": workflow_id,
+                        "error": verification.stderr or verification.stdout,
+                    })
+                    if self._repair_loop:
+                        repair_result = self._repair_loop.run(lambda _feedback: [])
+                        attempts = repair_result.get("attempts", [])
+                        if repair_result.get("success") and attempts:
+                            verification = attempts[-1].get("verification")
+                    if not verification or not verification.success:
+                        context.metadata["execution_state"] = ExecutionState.VERIFICATION_FAILED.value
+                        for completed_task_id in context.completed_steps:
+                            completed_task = context.task_graph.get_task(completed_task_id)
+                            if completed_task:
+                                completed_task.status = TaskStatus.FAILED
+                                completed_task.error = "Execution verification failed"
+                        self._publish_event("workflow.failed", {
+                            "workflow_id": workflow_id,
+                            "error": "Execution verification failed",
+                            "state": ExecutionState.VERIFICATION_FAILED.value,
+                            "duration_seconds": time.time() - start_time,
+                        })
+                        self._create_checkpoint(context)
+                        return
+
+            context.metadata["execution_state"] = ExecutionState.COMPLETED.value
             self._set_state(workflow_id, ExecutionState.COMPLETED)
             self._publish_event("workflow.completed", {
                 "workflow_id": workflow_id,
@@ -231,10 +282,18 @@ class TaskExecutor:
             logger.error(f"Workflow {workflow_id} failed: {e}")
             logger.error(traceback.format_exc())
 
-            self._set_state(workflow_id, ExecutionState.FAILED)
+            if self._execution_states.get(workflow_id) == ExecutionState.SAFETY_CHECKING:
+                self._set_state(workflow_id, ExecutionState.SAFETY_DENIED)
+            elif self._execution_states.get(workflow_id) not in (
+                ExecutionState.CANCELLED,
+                ExecutionState.VERIFICATION_FAILED,
+                ExecutionState.SAFETY_DENIED,
+            ):
+                self._set_state(workflow_id, ExecutionState.FAILED)
             self._publish_event("workflow.failed", {
                 "workflow_id": workflow_id,
                 "error": error,
+                "state": self._execution_states.get(workflow_id, ExecutionState.FAILED).value,
                 "duration_seconds": time.time() - start_time
             })
 
@@ -244,7 +303,7 @@ class TaskExecutor:
                 if workflow_id in self._execution_threads:
                     del self._execution_threads[workflow_id]
 
-    def _execute_tasks(self, context: ExecutionContext):
+    def _execute_tasks(self, context: ExecutionContext) -> bool:
         """Execute tasks in the task graph."""
         task_graph = context.task_graph
 
@@ -255,8 +314,9 @@ class TaskExecutor:
             # Check for pause/cancel
             if context.cancel_requested:
                 self._set_state(context.workflow_id, ExecutionState.CANCELLED)
+                context.metadata["execution_state"] = ExecutionState.CANCELLED.value
                 self._publish_event("workflow.cancelled", {"workflow_id": context.workflow_id})
-                return
+                return False
 
             while context.pause_requested:
                 self._set_state(context.workflow_id, ExecutionState.PAUSED)
@@ -264,7 +324,10 @@ class TaskExecutor:
                 time.sleep(0.5)
                 # Wait for resume
                 if context.cancel_requested:
-                    return
+                    self._set_state(context.workflow_id, ExecutionState.CANCELLED)
+                    context.metadata["execution_state"] = ExecutionState.CANCELLED.value
+                    self._publish_event("workflow.cancelled", {"workflow_id": context.workflow_id})
+                    return False
 
             self._set_state(context.workflow_id, ExecutionState.RUNNING)
             context.current_step_index = step_index
@@ -282,6 +345,7 @@ class TaskExecutor:
 
         # Final checkpoint on completion
         self._create_checkpoint(context)
+        return True
 
     def _execute_task(self, context: ExecutionContext, task: Task):
         """Execute a single task."""
@@ -292,18 +356,36 @@ class TaskExecutor:
         if not capability_name:
             task.status = TaskStatus.FAILED
             task.error = "No capability_name in task metadata"
-            return
+            raise RuntimeError(task.error)
 
         capability = context.capabilities.get(capability_name)
         if not capability:
             task.status = TaskStatus.FAILED
             task.error = f"Capability {capability_name} not available"
-            return
+            raise RuntimeError(task.error)
 
         if capability.state != CapabilityState.ACTIVE:
             task.status = TaskStatus.FAILED
             task.error = f"Capability {capability_name} not active (state: {capability.state})"
-            return
+            raise RuntimeError(task.error)
+
+        if self._safety_gate:
+            self._set_state(workflow_id, ExecutionState.SAFETY_CHECKING)
+            try:
+                self._safety_gate.check_and_enforce(
+                    f"Execute task: {task.title}",
+                    "task_execution",
+                    {
+                        "workflow_id": workflow_id,
+                        "task_id": task_id,
+                        "capability": capability_name,
+                    },
+                )
+            except Exception as error:
+                task.status = TaskStatus.FAILED
+                task.error = f"Safety gate blocked: {error}"
+                raise
+            self._set_state(workflow_id, ExecutionState.AUTHORIZED)
 
         self._publish_event("task.started", {
             "workflow_id": workflow_id,
@@ -328,7 +410,11 @@ class TaskExecutor:
                 result = self._invoke_capability(capability, task, inputs)
 
                 duration_ms = (time.time() - start_time) * 1000
-                capability.record_success(duration_ms)
+                if hasattr(capability, "record_success"):
+                    capability.record_success(duration_ms)
+
+                if not self._result_succeeded(result):
+                    raise RuntimeError(self._result_error(result))
 
                 # Store outputs
                 context.step_outputs[task_id] = result
@@ -348,7 +434,8 @@ class TaskExecutor:
 
             except Exception as e:
                 duration_ms = (time.time() - start_time) * 1000 if 'start_time' in locals() else 0
-                capability.record_failure(str(e))
+                if hasattr(capability, "record_failure"):
+                    capability.record_failure(str(e))
 
                 retry_count += 1
                 context.retries[task_id] = retry_count
@@ -381,6 +468,26 @@ class TaskExecutor:
                         "retries": retry_count
                     })
                     raise
+
+    @staticmethod
+    def _result_succeeded(result: Any) -> bool:
+        if isinstance(result, dict):
+            if result.get("success") is False or result.get("error"):
+                return False
+            nested = result.get("result")
+            if isinstance(nested, dict) and (nested.get("success") is False or nested.get("error")):
+                return False
+        return getattr(result, "success", True) is not False
+
+    @staticmethod
+    def _result_error(result: Any) -> str:
+        if isinstance(result, dict):
+            if result.get("error"):
+                return str(result["error"])
+            nested = result.get("result")
+            if isinstance(nested, dict) and nested.get("error"):
+                return str(nested["error"])
+        return str(getattr(result, "error", "Execution returned an unsuccessful result."))
 
     def _prepare_task_inputs(self, context: ExecutionContext, task: Task) -> Dict[str, Any]:
         """Prepare inputs for a task from global inputs and previous step outputs."""

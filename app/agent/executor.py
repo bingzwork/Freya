@@ -31,6 +31,15 @@ _COMMON_FILE_NAMES = (
 )
 
 
+class ToolExecutionResult(dict):
+    """Dictionary-compatible tool result with explicit execution status."""
+
+    def __init__(self, payload: dict[str, Any], success: bool, error: Any = None):
+        super().__init__(payload)
+        self.success = success
+        self.error = error
+
+
 class Executor:
     READ_ONLY_TOOLS = {
         "list_files", "read_file", "http_get", "http_post", "http_put", "http_delete",
@@ -449,10 +458,14 @@ Return ONLY this JSON, no markdown, no extra text:
         result = self.tools.execute(tool, **args)
         if not result.success:
             self._log_anti_pattern_hints(step)
-        return {
-            "action": action,
-            "result": result.output if result.success else result.error
-        }
+        return ToolExecutionResult(
+            {
+                "action": action,
+                "result": result.output if result.success else result.error,
+            },
+            success=result.success,
+            error=None if result.success else result.error,
+        )
 
     def execute_plan(
         self, plan: Union[Plan, dict[str, Any]], allowed_tools: set[str] | None = None,

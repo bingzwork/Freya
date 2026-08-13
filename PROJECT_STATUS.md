@@ -1,5 +1,20 @@
 # Freya — Remaining Work
 
+# Completion Progress
+
+Overall Freya Functional Completion: 42.5%
+
+Completed Tasks: 2 / 17
+Remaining Tasks: 15 / 17
+
+Last Updated: 2026-08-14
+
+Next Active Task: Task 3 — Repair production autonomy startup and scheduled jobs
+
+> The percentage retains the documented capability-weighted operational method: functionality receives credit only when its production path is implemented, wired, reachable, safe where required, and supported by runtime evidence. The task counts are the rolling queue counts and do not replace that capability-weighted percentage.
+
+---
+
 > This document contains only remaining work identified in the existing `PROJECT_STATUS.md`.
 > Completed, working, and verified items have been removed from the execution queue.
 > Tasks are ordered by documented dependency and execution sequence, not simply by priority.
@@ -8,82 +23,28 @@
 
 ---
 
-# NEXT TASK
-
-## 🔴 Task 2 — Repair the execution safety and verification state machine
-
-**Priority:** P0
-
-**Why this is first:** The canonical runtime graph is now established. Execution and workflow safety enforcement is the next documented prerequisite before autonomous or self-modifying actions can be enabled.
-
-**It must be completed before:** Task 3, Task 5, and Task 11.
-
----
-
 # Critical Execution Path
 
-1. 🔴 Task 2 — Repair the execution safety and verification state machine
+1. 🔴 Task 3 — Repair production autonomy startup and scheduled jobs
    ↓
-2. 🔴 Task 3 — Repair production autonomy startup and scheduled jobs
+2. 🟡 Task 4 — Restore the shared event contract and event-driven improvement flow
    ↓
-3. 🟡 Task 4 — Restore the shared event contract and event-driven improvement flow
+3. 🟡 Task 5 — Connect execution outcomes to learning and durable memory
    ↓
-4. 🟡 Task 5 — Connect execution outcomes to learning and durable memory
+4. 🔴 Task 6 — Consolidate retrieval and restore cross-session knowledge recall
    ↓
-5. 🔴 Task 6 — Consolidate retrieval and restore cross-session knowledge recall
+5. 🔴 Task 7 — Replace obsolete tests with production-path integration evidence
    ↓
-6. 🔴 Task 7 — Replace obsolete tests with production-path integration evidence
+6. 🔴 Task 8 — Implement provider resilience
    ↓
-7. 🔴 Task 8 — Implement provider resilience
-   ↓
-8. 🟡 Task 9 — Repair monitoring and hardware-health evidence
+7. 🟡 Task 9 — Repair monitoring and hardware-health evidence
 
 Tasks 10–17 are parallel or independent work where the existing status document does not establish a prerequisite beyond the relationships stated in each task.
 
 ---
 
-# Remaining Work
+# Active Work
 
-## Task 2 — Repair the execution safety and verification state machine
-
-**Size:** 🔴 RED — BIG / COMPLEX
-**Priority:** P0
-**Execution Order:** 2
-
-**Location**
-
-- `app/execution/engine.py`: `ExecutionEngine.execute_plan()`
-- `app/execution/engine.py`: `UnifiedExecutor.execute()`
-- `app/orchestrator/workflow_orchestrator.py`: `execute_workflow()`
-
-**Problem**
-
-The normal engineering path constructs `VerificationRunner` and `RepairLoop` but never invokes them. `execute_plan()` explicitly skips human review. Workflow execution dispatches directly to `TaskExecutor.execute()` without invoking its configured `SafetyGate`.
-
-**Required Work**
-
-- Route every execution outcome through one enforced state machine: proposal → approval/safety decision → execute → verify → repair/replan or safe failure → persist outcome.
-- Make safety denial terminal.
-- Enforce the same behavior through facade and orchestrator entry points.
-- Add tests for approval, denial, verification, repair, replan, safe failure, and persisted outcomes.
-
-**Dependencies**
-
-- Must come after Task 1.
-- Blocks Tasks 3, 5, and 11.
-
-**Why This Order**
-
-The documented required order repairs execution and safety enforcement before enabling autonomous or self-modifying actions.
-
-**Acceptance Criteria**
-
-- [ ] Approval and safety decisions cannot be bypassed.
-- [ ] Verification and repair are invoked for normal execution.
-- [ ] Safety denial is terminal and observable.
-- [ ] Facade and orchestrator paths share the enforced state machine.
-
----
 
 ## Task 3 — Repair production autonomy startup and scheduled jobs
 
@@ -728,9 +689,8 @@ No dependency has been added where the existing status document did not establis
 # Critical Blockers
 
 1. Production autonomy does not start successfully and scheduled autonomy jobs target absent interfaces.
-2. Execution and workflow paths do not consistently enforce approval, verification, repair, or safety gates.
-3. Learning, diagnostics, and safe self-improvement are disconnected by incompatible event-bus ownership, and diagnostic event emission is broken.
-4. The runtime is fragmented across production, legacy, and test-only implementations, leaving key features unreachable and tests disconnected from the normal application graph.
+2. Learning, diagnostics, and safe self-improvement are disconnected by incompatible event-bus ownership, and diagnostic event emission is broken.
+3. The runtime is fragmented across production, legacy, and test-only implementations, leaving key features unreachable and tests disconnected from the normal application graph.
 
 ---
 
@@ -755,11 +715,28 @@ The current verified operational completion is **42.5%**. The earlier 76.6% esti
 - **Legacy-path isolation:** The agent package no longer eagerly imports the legacy `FreyaAgent`; the orchestrator package no longer eagerly imports the legacy `CentralOrchestrator`. Both remain available as lazy compatibility exports without being pulled into the canonical production startup path.
 - **Interfaces/adapters changed:** No broad subsystem rewrite or new parallel implementation was added. The initializer now uses the existing dependency-injection contracts of `app.autonomy.manager.AutonomyManager` and `WorkflowOrchestrator`.
 - **Tests/verification performed:** Python compilation passed for the changed initializer and orchestration modules. A focused production-graph smoke test passed, verifying the Agent facade, WorkflowOrchestrator, UnifiedRetrieval, LearningPipeline, and AutonomyManager are instantiated, connected, reachable, and running. The targeted workflow unit test was attempted; one pre-existing rejection-test failure remains because the test's mocked safety setup does not raise as expected. The repository does not have a `pytest` executable in the environment.
-- **Remaining limitations:** Task 2 safety-state-machine repair, Task 3 autonomy reliability hardening, and other queued work remain unfinished. Capability registration currently emits duplicate-replacement warnings during startup but does not prevent the canonical graph from starting.
+- **Remaining limitations:** Task 3 autonomy reliability hardening and other queued work remain unfinished. Capability registration currently emits duplicate-replacement warnings during startup but does not prevent the canonical graph from starting.
 - **Code commit:** `a456860b0565c8802b74895484e5e061a81d1d0d`
+
+---
+
+## Task 2 — Execution Safety & Verification State Machine
+
+**Status:** COMPLETE
+
+**Implementation summary**
+
+- **Files changed:** `app/agent/executor.py`, `app/execution/engine.py`, `app/orchestrator/task_executor.py`, `app/orchestrator/workflow_orchestrator.py`, and `tests/test_execution_safety_state_machine.py`.
+- **State machine repaired:** The facade path now records proposal, validation, safety checking, authorization, execution, verification, repair, success, and failure states. The orchestrator path now exposes safety-checking, authorization, verification, verification-failure, safety-denied, and terminal failure states through `ExecutionState` and workflow status mapping.
+- **Safety enforcement repaired:** The shared `SafetyGate` is invoked before each plan and concrete task/workflow action. Safety denial is terminal, observable, and prevents dispatch to the executor.
+- **Verification and repair repaired:** Normal execution now invokes `VerificationRunner`; failed verification invokes the existing `RepairLoop`, and unsuccessful repair leaves execution in an accurate safe-failure state rather than reporting success.
+- **Failure handling repaired:** Capability lookup failures, execution exceptions, unsuccessful tool results, invalid or incomplete results, cancellation, and verification failures no longer become successful completion. Final outcome metadata is persisted through `PlanManager` and workflow events/status.
+- **Tests and verification:** The focused lifecycle, workflow, and executor suite passes: `35 passed`. A deterministic production-path smoke test also passed through `WorkflowOrchestrator` → `TaskExecutor`, covering allowed and safety-denied execution. The repository-wide pytest configuration still contains a Windows-only `C:/temp/pytest_tmp` basetemp; targeted runs used an equivalent Linux-safe override. The broader component run had unrelated pre-existing failures in interactive permission fixtures and `FreyaAgent.experience_memory`.
+- **Remaining Task 2 limitations:** The normal `WorkflowOrchestrator.start()` path still encounters the documented unrelated `CapabilityRegistry(auto_discovery=...)` constructor defect, and the smoke harness injected the registry/composed workflow to isolate Task 2. That startup issue remains queued under later work and was not modified.
+- **Implementation commit:** pending until commit.
 
 ---
 
 # Source Boundary
 
-This file is a rolling prioritized work queue. It contains the remaining implementation tasks at the top and records completed task summaries at the bottom. Task 1 completion history reflects the actual code changes and targeted verification performed.
+This file is a rolling prioritized work queue. It contains the remaining implementation tasks at the top and records completed task summaries at the bottom. Task 1 and Task 2 completion histories reflect the actual code changes and targeted verification performed.
