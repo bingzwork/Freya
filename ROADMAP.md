@@ -46,7 +46,7 @@ The codebase already contains mature foundation modules across planning, memory,
 | Multi Agent Coordination        | Not Implemented                                |
 | Self Evaluation                 | ✅ COMPLETE | 100%                            |
 | Performance Optimization        | Partial                                        |
-| **Central Autonomous Orchestrator** | ✅ **COMPLETE (100%)**                     |
+| **Workflow Orchestration** | ✅ **COMPLETE (100%)**                     |
 | **Infrastructure Wiring**       | ✅ **COMPLETE (100%) - All 18 subsystems integrated** |
 
 ---
@@ -122,7 +122,7 @@ All 18 subsystems now fully integrated with EventBus, BackgroundJobService, and 
 | EngineeringKnowledgeStorage (`app/software_engineering_knowledge/storage.py`) | ✅ | — | ✅ |
 | EngineeringKnowledgeAdapter (`app/software_engineering_knowledge/sources.py`) | ✅ | — | ✅ |
 | WorldModel (`app/world_model/model.py`) | ✅ | ✅ | ✅ |
-| CentralOrchestrator (`app/orchestrator/`) | ✅ | ✅ | ✅ |
+| WorkflowOrchestrator (`app/orchestrator/`) | ✅ | ✅ | ✅ |
 
 **Consolidated Removed Components:**
 - ❌ `MaintenanceScheduler` (asyncio-based) → BackgroundJobService recurring jobs
@@ -150,7 +150,7 @@ All 233+ existing tests passing (`tests/test_events.py`, `tests/test_pipeline.py
 
 ---
 
-# Central Autonomous Orchestrator
+# Workflow Orchestration
 
 ## Goal
 
@@ -179,7 +179,7 @@ Freya gains a unified orchestration layer that coordinates all subsystems throug
 
 | Module | Description |
 |--------|-------------|
-| `orchestrator.py` | CentralOrchestrator — main coordination class, 11-stage execution pipeline |
+| `workflow_orchestrator.py` | WorkflowOrchestrator — canonical production orchestration class |
 | `capability_registry.py` | CapabilityRegistry with CapabilityMetadata (default_action, supported_actions) |
 | `workflow_composer.py` | WorkflowComposer with 5 strategies (SEQUENTIAL, PARALLEL, PIPELINE, FAN_OUT_FAN_IN, ADAPTIVE) |
 | `task_executor.py` | TaskExecutor with pause/resume/retry/checkpointing |
@@ -204,7 +204,7 @@ Freya gains a unified orchestration layer that coordinates all subsystems throug
 * 18-subsystem EventBus integration ✅ **COMPLETE (2026-08-03)**
 * Integration verified: start/stop, capability registration, workflow execution, health checks ✅ **COMPLETE (2026-08-03)**
 
-**Central Autonomous Orchestrator: ✅ COMPLETE (100%)**
+**Workflow Orchestration: ✅ COMPLETE (100%)**
 
 ---
 
@@ -598,20 +598,20 @@ Implement Freya's ability to observe, analyze, and improve her own runtime behav
 | 6 | **Project Metrics** | ✅ Complete | Codebase stats, repo analysis |
 | 7 | **Audit Logging** | ✅ Complete | Action logging, operation history, audit records |
 | 8 | **Risk Analysis** | ✅ Complete | Risk evaluation, safety assessment, approval support |
-| 9 | **Unified Runtime Decision Pipeline** | ✅ Complete | 9-stage pipeline (OBSERVE→GATHER_CONTEXT→IDENTIFY_ACTIONS→EVALUATE_OPTIONS→ESTIMATE_RISK_BENEFIT→CHOOSE_BEST→EXECUTE→OBSERVE_OUTCOME→LEARN) with 11 context sources; integrates CentralOrchestrator, DecisionManager, WorldModel, UnifiedRetrieval, RecoveryOrchestrator, SafetyGate, AutonomyManager, ObservabilityHub, EventBus; `app/self_observation/decision_pipeline.py`, `app/self_observation/models.py` |
-| 10 | **Centralized Self-Analysis** | ✅ Complete | 11-category analysis (capabilities, limitations, resource_utilization, goal_progress, task_execution_quality, failure_patterns, learning_progress, knowledge_gaps, decision_quality, system_confidence, operational_effectiveness); trend tracking, historical comparison, LLM summaries, improvement prioritization; integrates CentralOrchestrator, DecisionManager, WorldModel, UnifiedRetrieval, RecoveryOrchestrator, SafetyGate, AutonomyManager, ObservabilityHub; `app/self_observation/self_analysis.py`, `app/self_observation/models.py` |
+| 9 | **Unified Runtime Decision Pipeline** | ✅ Complete | 9-stage pipeline (OBSERVE→GATHER_CONTEXT→IDENTIFY_ACTIONS→EVALUATE_OPTIONS→ESTIMATE_RISK_BENEFIT→CHOOSE_BEST→EXECUTE→OBSERVE_OUTCOME→LEARN) with 11 context sources; integrates WorkflowOrchestrator, DecisionManager, WorldModel, UnifiedRetrieval, RecoveryOrchestrator, SafetyGate, AutonomyManager, ObservabilityHub, EventBus; `app/self_observation/decision_pipeline.py`, `app/self_observation/models.py` |
+| 10 | **Centralized Self-Analysis** | ✅ Complete | 11-category analysis (capabilities, limitations, resource_utilization, goal_progress, task_execution_quality, failure_patterns, learning_progress, knowledge_gaps, decision_quality, system_confidence, operational_effectiveness); trend tracking, historical comparison, LLM summaries, improvement prioritization; integrates WorkflowOrchestrator, DecisionManager, WorldModel, UnifiedRetrieval, RecoveryOrchestrator, SafetyGate, AutonomyManager, ObservabilityHub; `app/self_observation/self_analysis.py`, `app/self_observation/models.py` |
 | 11 | **Runtime Awareness** | ✅ Complete | Continuous operational view with 11 awareness components (current activity, running tasks, active goals, reasoning state, tool usage, resource consumption, system health, memory state, pending work, autonomous background activities, overall execution context); 10-second update interval; trend tracking; reuses existing monitoring data; integrates all subsystems via EventBus; `app/self_observation/runtime_awareness.py`, `app/self_observation/models.py` |
 
 ## Implementation Details
 
 **Module:** `app/self_observation/`
 - `models.py` — Shared data models (DecisionPipelineContext, DecisionPipelineResult, PipelineStage, AnalysisResult, SelfAnalysisReport, AnalysisConfig, AnalysisCategory, SelfObservationCapability, SelfObservationLimitation, TrendPoint, ImprovementPriority, AwarenessComponent, RuntimeAwarenessState, AwarenessConfig)
-- `decision_pipeline.py` — UnifiedRuntimeDecisionPipeline class (799 lines); 9-stage execution with 11 context providers; global factory `get_unified_decision_pipeline()`; integrates with CentralOrchestrator, DecisionManager, WorldModel, UnifiedRetrieval, RecoveryOrchestrator, SafetyGate, AutonomyManager, ObservabilityHub, EventBus
+- `decision_pipeline.py` — UnifiedRuntimeDecisionPipeline class (799 lines); 9-stage execution with 11 context providers; global factory `get_unified_decision_pipeline()`; integrates with WorkflowOrchestrator, DecisionManager, WorldModel, UnifiedRetrieval, RecoveryOrchestrator, SafetyGate, AutonomyManager, ObservabilityHub, EventBus
 - `self_analysis.py` — CentralizedSelfAnalysis class (930+ lines); 11-category analysis with trend tracking; LLM-generated summaries; improvement prioritization; global factory `get_centralized_self_analysis()`; EventBus integration for `self_analysis.completed` events; BackgroundJobService for periodic analysis
 - `runtime_awareness.py` — RuntimeAwareness class (700+ lines); continuous 10-second awareness updates; 11 awareness components; trend tracking; global factory `get_runtime_awareness()`; EventBus integration for `runtime_awareness.updated` events; subscribes to 12 event types for real-time updates
 
 **Agent Integration:**
-- `CentralOrchestrator.SelfObserver` uses self-observation via ObservabilityHub
+- `WorkflowOrchestrator.SelfObserver` uses self-observation via ObservabilityHub
 - `FreyaAgent` can access all three services via global factories (`get_unified_decision_pipeline()`, `get_centralized_self_analysis()`, `get_runtime_awareness()`)
 - EventBus events: `self_analysis.completed`, `decision_pipeline.executed`, `runtime_awareness.updated` for downstream consumers
 - BackgroundJobService can schedule periodic self-analysis runs

@@ -43,7 +43,7 @@ from .models import (
 # Type checking imports to avoid circular dependency
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
-    from app.orchestrator.orchestrator import CentralOrchestrator
+    from app.orchestrator.workflow_orchestrator import WorkflowOrchestrator
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +78,7 @@ class CentralizedSelfAnalysis:
 
     def __init__(
         self,
-        orchestrator: "Optional[CentralOrchestrator]" = None,
+        orchestrator: "Optional[WorkflowOrchestrator]" = None,
         decision_manager: Optional[DecisionManager] = None,
         world_model: Optional[WorldModel] = None,
         memory_retrieval: Optional[UnifiedRetrieval] = None,
@@ -549,7 +549,7 @@ class CentralizedSelfAnalysis:
         weaknesses = []
         recommendations = []
 
-        if not self._orchestrator or not hasattr(self._orchestrator, '_memory_retrieval') or not self._orchestrator._memory_retrieval:
+        if not self._orchestrator:
             findings.append("Goal system not available")
             return AnalysisResult(
                 category=AnalysisCategory.GOAL_PROGRESS,
@@ -581,8 +581,8 @@ class CentralizedSelfAnalysis:
         weaknesses = []
         recommendations = []
 
-        if self._orchestrator and self._orchestrator._task_executor:
-            stats = self._orchestrator._task_executor.get_stats()
+        if self._orchestrator and self._orchestrator.task_executor:
+            stats = self._orchestrator.task_executor.get_stats()
             completed = stats.get("completed_workflows", 0)
             failed = stats.get("failed_workflows", 0)
             total = completed + failed
@@ -776,8 +776,8 @@ class CentralizedSelfAnalysis:
         # Aggregate confidence from multiple sources
         confidences = []
 
-        if self._orchestrator and self._orchestrator._self_observer:
-            perf = self._orchestrator._observer.get_performance_stats()
+        if self._orchestrator and self._orchestrator.self_observer:
+            perf = self._orchestrator.self_observer.get_performance_stats()
             confidences.append(perf.get("success_rate", 0.5))
 
         if self._decision_manager:
@@ -906,7 +906,7 @@ _analysis_lock = threading.Lock()
 
 
 def get_self_analysis(
-    orchestrator: "Optional[CentralOrchestrator]" = None,
+    orchestrator: "Optional[WorkflowOrchestrator]" = None,
     decision_manager: Optional[DecisionManager] = None,
     world_model: Optional[WorldModel] = None,
     memory_retrieval: Optional[UnifiedRetrieval] = None,

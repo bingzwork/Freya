@@ -44,7 +44,7 @@ from .models import (
 # Type checking imports to avoid circular dependency
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
-    from app.orchestrator.orchestrator import CentralOrchestrator
+    from app.orchestrator.workflow_orchestrator import WorkflowOrchestrator
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +79,7 @@ class RuntimeAwareness:
 
     def __init__(
         self,
-        orchestrator: "Optional[CentralOrchestrator]" = None,
+        orchestrator: "Optional[WorkflowOrchestrator]" = None,
         decision_manager: Optional[DecisionManager] = None,
         world_model: Optional[WorldModel] = None,
         memory_retrieval: Optional[UnifiedRetrieval] = None,
@@ -481,8 +481,8 @@ class RuntimeAwareness:
 
     def _gather_execution_context(self, state: RuntimeAwarenessState) -> None:
         """Gather overall execution context."""
-        if self._orchestrator and self._orchestrator._start_time:
-            state.session_duration_seconds = time.time() - self._orchestrator._start_time
+        if self._orchestrator:
+            state.session_duration_seconds = self._orchestrator.get_system_status().get("orchestrator", {}).get("uptime_seconds", 0)
 
         state.execution_mode = "autonomous" if (self._autonomy_manager and self._autonomy_manager.is_running) else "normal"
 
@@ -698,7 +698,7 @@ _awareness_lock = threading.Lock()
 
 
 def get_runtime_awareness(
-    orchestrator: "Optional[CentralOrchestrator]" = None,
+    orchestrator: "Optional[WorkflowOrchestrator]" = None,
     decision_manager: Optional[DecisionManager] = None,
     world_model: Optional[WorldModel] = None,
     memory_retrieval: Optional[UnifiedRetrieval] = None,

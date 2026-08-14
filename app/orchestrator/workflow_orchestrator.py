@@ -52,7 +52,6 @@ class OrchestratorState(Enum):
 @dataclass
 class WorkflowOrchestratorConfig:
     """Configuration for the Workflow Orchestrator."""
-    auto_discovery: bool = True
     health_check_interval: float = 30.0
     default_strategy: WorkflowStrategy = WorkflowStrategy.ADAPTIVE
     max_workflow_steps: int = 20

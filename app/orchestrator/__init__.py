@@ -1,4 +1,4 @@
-﻿"""Central Autonomous Orchestrator for Freya.
+﻿"""Canonical workflow orchestration components for Freya.
 
 This package provides the core orchestration components:
 - CapabilityRegistry: Runtime capability management with lifecycle, dependencies, health
@@ -6,8 +6,7 @@ This package provides the core orchestration components:
 - TaskExecutor: Long-running task execution with pause/resume/retry/checkpointing
 - SafetyGate: Risk analysis, decision integration, human oversight
 - SelfObserver: Self-observation via ObservabilityHub
-- CentralOrchestrator: Main coordination class integrating all components
-- WorkflowOrchestrator: Streamlined workflow orchestration using extracted components
+- WorkflowOrchestrator: Canonical production orchestration implementation
 - ActivityReporter: Plain English execution updates for GUI/conversational feedback
 - OrchestratorGUIInterface: Stable GUI-compatible interfaces
 - FailureRecoveryIntegration: Automatic failure detection and recovery
@@ -119,18 +118,6 @@ from app.orchestrator.workflow_orchestrator import (
     reset_workflow_orchestrator,
 )
 
-def __getattr__(name):
-    """Load the legacy central orchestrator only for explicit compatibility use."""
-    if name in {
-        "CentralOrchestrator",
-        "OrchestratorConfig",
-        "OrchestratorState",
-        "get_orchestrator",
-        "reset_orchestrator",
-    }:
-        from app.orchestrator import orchestrator as legacy_orchestrator
-        return getattr(legacy_orchestrator, name)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 __all__ = [
@@ -182,12 +169,6 @@ __all__ = [
     "AlertRule",
     "Alert",
 
-    # Main Orchestrator
-    "CentralOrchestrator",
-    "OrchestratorConfig",
-    "OrchestratorState",
-    "get_orchestrator",
-    "reset_orchestrator",
 
     # Actual Capability Implementations
     "create_all_capabilities",

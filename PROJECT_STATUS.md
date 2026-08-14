@@ -1,10 +1,10 @@
 # Completion Progress
 
-Overall Freya Functional Completion: 76.0%
-Completed Tasks: 11 / 17
-Remaining Tasks: 6 / 17
+Overall Freya Functional Completion: 80.0%
+Completed Tasks: 12 / 17
+Remaining Tasks: 5 / 17
 Last Updated: 2026-08-14
-Next Active Task: Task 12 — Remove or migrate the legacy orchestrator path
+Next Active Task: Task 13 — Repair conversation/vector persistence and recall
 
 > The percentage retains the documented capability-weighted operational method: functionality receives credit only when its production path is implemented, wired, reachable, safe where required, and supported by runtime evidence. The task counts are the rolling queue counts and do not replace that capability-weighted percentage.
 
@@ -14,57 +14,19 @@ Next Active Task: Task 12 — Remove or migrate the legacy orchestrator path
 > Completed, working, and verified items have been removed from the execution queue.
 > Tasks are ordered by documented dependency and execution sequence, not simply by priority.
 >
-> **Verified operational completion:** 76.0% (the capability-weighted estimate reflects eleven completed and verified tasks after Task 11; it supersedes the earlier 69.0% estimate).
+> **Verified operational completion:** 80.0% (the capability-weighted estimate reflects twelve completed and verified tasks after Task 12; it supersedes the earlier 76.0% estimate).
 
 ---
 
 # Critical Execution Path
-1. 🟡 Task 12 — Remove or migrate the legacy orchestrator path
+1. 🟡 Task 13 — Repair conversation/vector persistence and recall
 
-Tasks 12–17 are parallel or independent work where the existing status document does not establish a prerequisite beyond the relationships stated in each task.
+Tasks 13–17 are parallel or independent work where the existing status document does not establish a prerequisite beyond the relationships stated in each task.
 
 
 ---
 
 # Active Work
-
-## Task 12 — Remove or migrate the legacy orchestrator path
-
-**Size:** 🟡 YELLOW — MEDIUM
-**Priority:** P2
-**Execution Order:** 12
-
-**Location**
-
-- `app/orchestrator/orchestrator.py`
-- `tests/test_integration_autonomous.py`
-- `app/orchestrator/capability_registry.py`
-
-**Problem**
-
-The legacy orchestrator passes unsupported `auto_discovery` to `CapabilityRegistry`, producing start failures. Integration tests exercise this obsolete path while production initializes `workflow_orchestrator.py`.
-
-**Required Work**
-
-- Remove or migrate the legacy orchestrator.
-- Repoint integration tests to the actual production orchestrator.
-- Preserve one supported orchestration contract.
-
-**Dependencies**
-
-- Must follow Task 1's runtime-architecture decision.
-
-**Why This Order**
-
-The status document identifies this as stale migration work caused by duplicate runtime paths.
-
-**Acceptance Criteria**
-
-- [ ] The unsupported `auto_discovery` path is removed or migrated.
-- [ ] Integration tests target the production orchestrator.
-- [ ] Duplicate orchestration claims are eliminated.
-
----
 
 ## Task 13 — Repair conversation/vector persistence and recall
 
@@ -277,25 +239,25 @@ No dependency has been added where the existing status document did not establis
 
 | Size | Remaining tasks |
 |---|---:|
-| 🔴 RED — Big / Complex | 1 |
-| 🟡 YELLOW — Medium | 4 |
+| 🔴 RED — Big / Complex | 0 |
+| 🟡 YELLOW — Medium | 2 |
 | 🔵 BLUE — Easy / Small | 3 |
-| **Total** | **8** |
+| **Total** | **5** |
 
 | Priority | Remaining work |
 |---|---|
 | **P0 — Critical** | No remaining P0 task on the active queue; the Task 3 autonomy blocker is complete. |
-| **P1 — High** | Tasks 11, 14: autonomous learning, readiness surface |
-| **P2 — Medium** | Tasks 12–13, 16: legacy migration, vector recall, memory quality |
+| **P1 — High** | Task 14: production readiness surface |
+| **P2 — Medium** | Tasks 13 and 16: vector recall and memory quality |
 | **P3 — Low** | Tasks 14–17: readiness completion, configurable policy, memory-quality tail work, stale contracts |
 
-**Current verified completion:** 72.0%. Tasks 1–10 are recorded as complete and verified. The remaining active queue begins with Task 11’s autonomy-learning and verified-execution work.
+**Current verified completion:** 80.0%. Tasks 1–12 are recorded as complete and verified. The remaining active queue begins with Task 13’s conversation/vector persistence and recall work.
 
 ---
 
 # Critical Blockers
 
-1. The runtime still contains legacy and test-only paths outside the canonical graph, leaving broader features unreachable and tests disconnected from the normal application graph.
+1. Cross-session conversation/vector recall remains non-deterministic in the current integration suite; Task 13 must repair the persistence and retrieval contract.
 2. The now-quarantined advanced retrieval experiments retain separate calibration, learned-ranking, analytics, and decision contracts; Task 16 must decide whether to integrate them behind `UnifiedRetrieval` or retire them permanently.
 
 ---
@@ -304,7 +266,7 @@ No dependency has been added where the existing status document did not establis
 
 Freya reaches 100% only when a normal `FreyaApp` startup reliably composes one supported architecture; safely accepts or rejects actions; plans, executes, verifies, repairs, and persists outcomes; learns from those outcomes; uses persistent and retrievable knowledge across sessions; runs healthy autonomous background work; routes diagnostics and learning through controlled improvement safeguards; survives configured provider and tool failures; and demonstrates these chains through a clean, production-path test suite.
 
-The current verified operational completion is **72.0%**. The earlier 76.6% estimate is superseded by the current verified assessment and is not used as the completion baseline.
+The current verified operational completion is **80.0%**. The earlier 76.0% estimate is superseded by the current verified assessment and is not used as the completion baseline.
 
 ---
 
@@ -318,7 +280,7 @@ The current verified operational completion is **72.0%**. The earlier 76.6% esti
 
 - **Canonical implementations selected:** `AgentFacadeImpl` remains the production Agent boundary; `WorkflowOrchestrator` is the canonical orchestrator; `MemoryCoordinator.unified_retrieval` / `UnifiedRetrieval` remains the production Retrieval contract; `LearningPipeline` plus `app.autonomy.manager.AutonomyManager` are the canonical learning/autonomy components.
 - **Runtime wiring established:** `SystemInitializer` now constructs the canonical WorkflowOrchestrator before AutonomyManager and injects the shared router, execution engine, safety gate, event bus, job service, learning pipeline, goal storage, and workflow orchestrator.
-- **Legacy-path isolation:** The agent package no longer eagerly imports the legacy `FreyaAgent`; the orchestrator package no longer eagerly imports the legacy `CentralOrchestrator`. Both remain available as lazy compatibility exports without being pulled into the canonical production startup path.
+- **Legacy-path removal:** Task 12 completed the migration by removing the obsolete central orchestrator implementation and its compatibility exports; no second supported orchestration path remains.
 - **Interfaces/adapters changed:** No broad subsystem rewrite or new parallel implementation was added. The initializer now uses the existing dependency-injection contracts of `app.autonomy.manager.AutonomyManager` and `WorkflowOrchestrator`.
 - **Tests/verification performed:** Python compilation passed for the changed initializer and orchestration modules. A focused production-graph smoke test passed, verifying the Agent facade, WorkflowOrchestrator, UnifiedRetrieval, LearningPipeline, and AutonomyManager are instantiated, connected, reachable, and running. The targeted workflow unit test was attempted; one pre-existing rejection-test failure remains because the test's mocked safety setup does not raise as expected. The repository does not have a `pytest` executable in the environment.
 - **Remaining limitations:** Task 3 autonomy reliability hardening and other queued work remain unfinished. Capability registration currently emits duplicate-replacement warnings during startup but does not prevent the canonical graph from starting.
@@ -338,7 +300,7 @@ The current verified operational completion is **72.0%**. The earlier 76.6% esti
 - **Verification and repair repaired:** Normal execution now invokes `VerificationRunner`; failed verification invokes the existing `RepairLoop`, and unsuccessful repair leaves execution in an accurate safe-failure state rather than reporting success.
 - **Failure handling repaired:** Capability lookup failures, execution exceptions, unsuccessful tool results, invalid or incomplete results, cancellation, and verification failures no longer become successful completion. Final outcome metadata is persisted through `PlanManager` and workflow events/status.
 - **Tests and verification:** The focused lifecycle, workflow, and executor suite passes: `35 passed`. A deterministic production-path smoke test also passed through `WorkflowOrchestrator` → `TaskExecutor`, covering allowed and safety-denied execution. The repository-wide pytest configuration still contains a Windows-only `C:/temp/pytest_tmp` basetemp; targeted runs used an equivalent Linux-safe override. The broader component run had unrelated pre-existing failures in interactive permission fixtures and `FreyaAgent.experience_memory`.
-- **Remaining Task 2 limitations:** The normal `WorkflowOrchestrator.start()` path still encounters the documented unrelated `CapabilityRegistry(auto_discovery=...)` constructor defect, and the smoke harness injected the registry/composed workflow to isolate Task 2. That startup issue remains queued under later work and was not modified.
+- **Resolved later:** Task 12 removed the obsolete registry-configuration caller and verified normal `WorkflowOrchestrator.start()` through the production initializer.
 - **Implementation commit:** `44f078eca47a149b97bb2a0eb656d8067acb0d72`
 
 ---
@@ -730,6 +692,43 @@ Task 10 removes the obsolete `WorkflowOrchestrator._start_background_jobs()` no-
 Task 12 — Remove or migrate the legacy orchestrator path.
 
 **Implementation Commit Hash:** Recorded in Git history.
+
+---
+
+## Task 12 — Remove or migrate the legacy orchestrator path
+
+**Status:** COMPLETE
+
+**Implementation Summary**
+
+Task 12 removes the obsolete `CentralOrchestrator` implementation and its unsupported `auto_discovery` constructor path. `WorkflowOrchestrator` is now the single supported production orchestration implementation: `FreyaApp` delegates to `SystemInitializer`, which constructs and starts it with the existing `CapabilityRegistry` contract. The package no longer exports legacy compatibility symbols, and the canonical workflow configuration no longer retains an unused `auto_discovery` option.
+
+Self-observation services now annotate and access the canonical workflow interface. `ROADMAP.md`, package documentation, and integration evidence describe `WorkflowOrchestrator` as the production orchestrator; no compatibility adapter or second orchestration implementation was retained.
+
+**Tests and Verification Results**
+
+- `PYTHONPATH=/home/ubuntu/Freya python3 -m pytest -q tests/test_workflow_capability_safety.py`: **9 passed**. This includes package import, absence of legacy exports, and the `CapabilityRegistry`/workflow contract without `auto_discovery`.
+- `PYTHONPATH=/home/ubuntu/Freya python3 -m pytest -q tests/test_workflow_orchestrator.py`: **2 passed**.
+- `PYTHONPATH=/home/ubuntu/Freya python3 -m pytest -q tests/test_integration_autonomous.py -k 'not retrieval_and_persistence_survive_a_real_app_restart'`: **9 passed**. These production-path tests enter through `FreyaApp → SystemInitializer → WorkflowOrchestrator`.
+- The unfiltered autonomy integration command ran **9 passed, 1 failed**. The lone failure is the pre-existing `test_retrieval_and_persistence_survive_a_real_app_restart` assertion that a newly recorded conversation is immediately retrievable; the failure is in Task 13’s remaining retrieval work, while startup logs confirm `WorkflowOrchestrator` starts and shuts down normally.
+- `PYTHONPATH=/home/ubuntu/Freya python3 -m pytest -q tests/test_shared_event_improvement_flow.py tests/test_task11_autonomous_learning.py tests/test_task3_autonomy.py`: **17 passed**.
+- The final full-suite command, `timeout 600 env PYTHONPATH=/home/ubuntu/Freya python3 -m pytest -q`, was stopped at the required ten-minute limit. It reached **91%** without a terminal count; the partial output already contained pre-existing failures and errors, so the full suite is not claimed as passing. The focused Task 12 results above remain the verification evidence.
+
+**Files Changed**
+
+- `app/orchestrator/orchestrator.py` (removed)
+- `app/orchestrator/__init__.py`
+- `app/orchestrator/workflow_orchestrator.py`
+- `app/self_observation/decision_pipeline.py`
+- `app/self_observation/runtime_awareness.py`
+- `app/self_observation/self_analysis.py`
+- `tests/test_workflow_capability_safety.py`
+- `ROADMAP.md`
+- `PROJECT_STATUS.md`
+
+**Next Active Task**
+
+Task 13 — Repair conversation/vector persistence and recall.
 
 ---
 

@@ -1,3 +1,4 @@
+import importlib
 from pathlib import Path
 
 import pytest
@@ -198,6 +199,21 @@ def test_safety_evaluation_failure_is_fail_closed_and_observable(tmp_path: Path,
     assert capability.calls == 0
     assert failures[-1]["capability"] == "counting"
     assert failures[-1]["execution_blocked"] is True
+
+
+def test_orchestrator_package_exposes_only_the_canonical_workflow_api():
+    package = importlib.import_module("app.orchestrator")
+
+    assert package.WorkflowOrchestrator is WorkflowOrchestrator
+    assert "auto_discovery" not in WorkflowOrchestratorConfig.__dataclass_fields__
+    for legacy_symbol in (
+        "CentralOrchestrator",
+        "OrchestratorConfig",
+        "OrchestratorState",
+        "get_orchestrator",
+        "reset_orchestrator",
+    ):
+        assert not hasattr(package, legacy_symbol)
 
 
 def test_workflow_orchestrator_does_not_own_background_job_lifecycle():

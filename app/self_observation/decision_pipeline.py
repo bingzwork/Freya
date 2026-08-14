@@ -1,7 +1,7 @@
 """Unified Runtime Decision Pipeline for Self Observation.
 
 Consolidates runtime information from all subsystems before major autonomous decisions.
-Integrates with existing: Orchestrator, Decision Manager, World Model, Memory, Monitoring, etc.
+Integrates with the canonical WorkflowOrchestrator, Decision Manager, World Model, Memory, Monitoring, and related services.
 """
 
 import logging
@@ -14,8 +14,6 @@ from uuid import uuid4
 
 from app.core.events import get_event_bus, Event
 from app.core.observability import get_observability_hub
-# Lazy imports to avoid circular dependency
-# from app.orchestrator.orchestrator import get_orchestrator, CentralOrchestrator
 from app.decision.manager import DecisionManager, get_default_manager
 from app.world_model.model import WorldModel, create_world_model
 from app.memory.unified_retrieval import UnifiedRetrieval
@@ -31,7 +29,7 @@ from .models import (
 # Type checking imports to avoid circular dependency
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
-    from app.orchestrator.orchestrator import CentralOrchestrator
+    from app.orchestrator.workflow_orchestrator import WorkflowOrchestrator
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +67,7 @@ class UnifiedRuntimeDecisionPipeline:
 
     def __init__(
         self,
-        orchestrator: "Optional[CentralOrchestrator]" = None,
+        orchestrator: "Optional[WorkflowOrchestrator]" = None,
         decision_manager: Optional[DecisionManager] = None,
         world_model: Optional[WorldModel] = None,
         memory_retrieval: Optional[UnifiedRetrieval] = None,
@@ -80,7 +78,7 @@ class UnifiedRuntimeDecisionPipeline:
         Initialize the pipeline with subsystem integrations.
 
         Args:
-            orchestrator: Central orchestrator instance
+            orchestrator: Canonical workflow orchestrator instance
             decision_manager: Decision manager instance
             world_model: World model instance
             memory_retrieval: Unified memory retrieval instance
@@ -345,15 +343,15 @@ class UnifiedRuntimeDecisionPipeline:
         result = {}
 
         # Current goals from orchestrator/memory
-        if self._orchestrator and self._orchestrator._memory_retrieval:
+        if self._orchestrator:
             # Goals would come from goal management system
             # For now, use what's in orchestrator config or context
             context.active_goals = context.metadata.get("active_goals", [])
             result["active_goals"] = context.active_goals
 
         # Active plans from workflow composer
-        if self._orchestrator and self._orchestrator._workflow_composer:
-            wf_stats = self._orchestrator._workflow_composer.get_stats()
+        if self._orchestrator and self._orchestrator.workflow_composer:
+            wf_stats = self._orchestrator.workflow_composer.get_stats()
             context.current_plans = []  # Would need plan details
             context.plan_status = wf_stats.get("by_status", {})
             result["workflow_stats"] = wf_stats
@@ -379,8 +377,8 @@ class UnifiedRuntimeDecisionPipeline:
         result["system_metrics"] = system_metrics
 
         # Available tools
-        if self._orchestrator and self._orchestrator._capability_registry:
-            caps = self._orchestrator._capability_registry.list_capabilities(active_only=True)
+        if self._orchestrator and self._orchestrator.capability_registry:
+            caps = self._orchestrator.capability_registry.list_capabilities(active_only=True)
             context.available_tools = [c.name for c in caps]
             result["available_capabilities"] = [c.name for c in caps]
 
@@ -401,8 +399,8 @@ class UnifiedRuntimeDecisionPipeline:
             })
 
         # From active workflows: what next steps?
-        if self._orchestrator and self._orchestrator._task_executor:
-            active_wfs = self._orchestrator._task_executor.list_active_workflows()
+        if self._orchestrator and self._orchestrator.task_executor:
+            active_wfs = self._orchestrator.task_executor.list_active_workflows()
             for wf_id in active_wfs:
                 actions.append({
                     "type": "workflow_continuation",
@@ -813,7 +811,7 @@ _pipeline_lock = threading.Lock()
 
 
 def get_unified_pipeline(
-    orchestrator: "Optional[CentralOrchestrator]" = None,
+    orchestrator: "Optional[WorkflowOrchestrator]" = None,
     decision_manager: Optional[DecisionManager] = None,
     world_model: Optional[WorldModel] = None,
     memory_retrieval: Optional[UnifiedRetrieval] = None,
