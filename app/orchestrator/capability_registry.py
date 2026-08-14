@@ -98,11 +98,36 @@ class Capability:
     def category(self) -> CapabilityCategory:
         return self.metadata.category
 
+    def supports_action(self, action: str) -> bool:
+        """Return whether *action* is declared and has a callable implementation."""
+        if not isinstance(action, str) or not action:
+            return False
+
+        declared_actions = self.metadata.supported_actions or [self.metadata.default_action]
+        if action not in declared_actions:
+            return False
+
+        return callable(self._handler) or callable(getattr(self, f"action_{action}", None))
+
+    def is_executable(self) -> bool:
+        """Return whether every exposed action maps to a real callable."""
+        declared_actions = self.metadata.supported_actions or [self.metadata.default_action]
+        return bool(
+            self.metadata.name
+            and self.metadata.default_action in declared_actions
+            and all(self.supports_action(action) for action in declared_actions)
+        )
+
     def execute(self, action: str, inputs: Dict[str, Any]) -> Any:
-        """Execute a capability action."""
-        if self._handler:
-            return self._handler(inputs)
-        raise NotImplementedError(f"Action '{action}' not implemented")
+        """Execute a registered generic or action-specific capability action."""
+        if not self.supports_action(action):
+            raise NotImplementedError(
+                f"Capability '{self.name}' does not support executable action '{action}'"
+            )
+        method = getattr(self, f"action_{action}", None)
+        if callable(method):
+            return method(inputs)
+        return self._handler(inputs)
 
     def _initialize(self) -> bool:
         return True
@@ -136,12 +161,30 @@ class CapabilityRegistry:
         self._running = False
         self._initialized = True
 
-    def register(self, capability: Capability) -> bool:
-        """Register a capability."""
-        if capability.name in self._capabilities:
-            logger.warning(f"[CapabilityRegistry] Capability '{capability.name}' already exists, replacing")
-        self._capabilities[capability.name] = capability
-        logger.info(f"[CapabilityRegistry] Registered capability: {capability.name}")
+    def register(self, capability: Capability, registered_by: str = "user") -> bool:
+        """Register an executable capability without replacing an existing one."""
+        if not isinstance(capability, Capability):
+            logger.error("[CapabilityRegistry] Rejected non-capability registration")
+            return False
+        if not capability.name or not capability.is_executable():
+            logger.error(
+                f"[CapabilityRegistry] Rejected capability '{capability.name or '<unnamed>'}': "
+                "every exposed action must resolve to a callable implementation"
+            )
+            return False
+
+        with self._lock:
+            if capability.name in self._capabilities:
+                logger.warning(
+                    f"[CapabilityRegistry] Capability '{capability.name}' is already registered; "
+                    "refusing duplicate"
+                )
+                return False
+            self._capabilities[capability.name] = capability
+
+        logger.info(
+            f"[CapabilityRegistry] Registered capability '{capability.name}' from {registered_by}"
+        )
         return True
 
     def unregister(self, name: str) -> bool:

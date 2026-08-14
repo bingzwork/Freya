@@ -22,11 +22,12 @@ class BaseCapability(Capability):
         self._event_bus = get_event_bus()
 
     def execute(self, action: str, inputs: Dict[str, Any]) -> Any:
-        """Execute a specific action with inputs."""
-        method = getattr(self, f"action_{action}", None)
-        if method:
-            return method(inputs)
-        raise NotImplementedError(f"Action '{action}' not implemented")
+        """Execute a declared, callable action only."""
+        if not self.supports_action(action):
+            raise NotImplementedError(
+                f"Capability '{self.name}' does not support executable action '{action}'"
+            )
+        return getattr(self, f"action_{action}")(inputs)
 
     def _get_event_bus(self):
         """Get event bus, lazy-initializing if needed."""
@@ -573,7 +574,7 @@ class CommunicationHubCapability(BaseCapability):
             is_singleton=True,
             auto_discoverable=True,
             default_action="publish",
-            supported_actions=["publish", "subscribe", "get_history"],
+            supported_actions=["publish", "get_history"],
         ))
 
     def _initialize(self) -> bool:
@@ -731,14 +732,15 @@ class SafetyGuardCapability(BaseCapability):
 
         try:
             result = self._safety_gate.check_and_enforce(operation, operation_type, context)
+            allowed = result.allowed
             self._publish_event("safety.checked", {
-                "operation": operation,
-                "allowed": result.allowed,
+                "operation_type": operation_type,
+                "allowed": allowed,
                 "risk_level": result.risk_level.value if hasattr(result.risk_level, 'value') else str(result.risk_level),
             })
             return {
                 "success": True,
-                "allowed": result.allowed,
+                "allowed": allowed,
                 "risk_level": result.risk_level.value if hasattr(result.risk_level, 'value') else str(result.risk_level),
                 "requires_approval": result.requires_approval,
                 "reason": result.reason,
@@ -1050,7 +1052,6 @@ def create_all_capabilities(agent=None) -> List[BaseCapability]:
         KnowledgeBaseCapability(),
         ReasoningEngineCapability(),
         OrchestrationCoreCapability(),
-        FailureRecoveryCapability(),
     ]
 
     if agent:

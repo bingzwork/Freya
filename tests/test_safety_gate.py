@@ -25,11 +25,10 @@ def setup_services():
     set_job_service(None)
     set_observability_hub(None)
 
-def test_safety_gate_creates_default_decision_manager():
-    """Test that SafetyGate creates a default DecisionManager when none is provided."""
+def test_safety_gate_allows_policy_only_operation_without_decision_manager():
+    """A missing optional decision collaborator leaves policy enforcement authoritative."""
     gate = SafetyGate()
-    assert gate.decision_manager is not None
-    assert isinstance(gate.decision_manager, DecisionManager)
+    assert gate.decision_manager is None
 
 def test_safety_gate_assess_safe_operation():
     """Test that assessing a safe operation returns an approved assessment."""

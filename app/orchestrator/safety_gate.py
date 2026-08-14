@@ -137,6 +137,11 @@ class SafetyAssessment:
     # Metadata
     metadata: Dict[str, Any] = field(default_factory=dict)
 
+    @property
+    def allowed(self) -> bool:
+        """Whether this assessment authorizes execution right now."""
+        return self.action in (SafetyAction.ALLOW, SafetyAction.ALLOW_WITH_MONITORING, SafetyAction.MODIFY_AND_ALLOW)
+
 
 class HumanOversightInterface(ABC):
     """Interface for human oversight/approval."""
@@ -388,6 +393,7 @@ class SafetyGate:
             assessment.risk_level = RiskLevel.CRITICAL
             assessment.reason = f"Operation type '{operation_type}' is always blocked"
             self._record_assessment(assessment)
+            self._publish_assessment(assessment)
             return assessment
 
         # Step 2: Risk analysis
@@ -466,10 +472,16 @@ class SafetyGate:
             assessment.action = SafetyAction.BLOCK
             assessment.reason = "Rate limit exceeded for this operation type"
             self._record_assessment(assessment)
+            self._publish_assessment(assessment)
             return assessment
 
         # Step 5: Determine action based on policy
         assessment.action = self._determine_action(assessment)
+        if not assessment.reason:
+            assessment.reason = (
+                f"Policy decision '{assessment.action.value}' for "
+                f"{assessment.risk_level.value} risk"
+            )
 
         # Step 6: Handle approval requirement
         if assessment.action == SafetyAction.REQUIRE_APPROVAL:
@@ -480,16 +492,7 @@ class SafetyGate:
         self._record_assessment(assessment)
         self._update_rate_limits(operation_type, assessment.risk_level)
 
-        # Publish event
-        self._publish_event("safety.assessment", {
-            "assessment_id": assessment.assessment_id,
-            "operation": operation,
-            "operation_type": operation_type,
-            "risk_level": assessment.risk_level.value,
-            "action": assessment.action.value,
-            "requires_approval": assessment.requires_approval,
-        })
-
+        self._publish_assessment(assessment)
         return assessment
 
     def wait_for_approval(self, assessment: SafetyAssessment, timeout: Optional[float] = None) -> SafetyAssessment:
@@ -515,6 +518,7 @@ class SafetyGate:
 
         assessment.approved_at = datetime.now(timezone.utc).isoformat()
         self._record_assessment(assessment)
+        self._publish_assessment(assessment)
         return assessment
 
     def check_and_enforce(self, operation: str, operation_type: str, context: Dict[str, Any] = None) -> SafetyAssessment:
@@ -523,15 +527,49 @@ class SafetyGate:
 
         This is the main entry point for capabilities to check safety.
         """
-        assessment = self.assess(operation, operation_type, context)
+        context = context or {}
+        try:
+            assessment = self.assess(operation, operation_type, context)
+        except Exception as error:
+            self._publish_event("safety.evaluation_failed", {
+                "operation_type": operation_type,
+                "capability": context.get("capability"),
+                "reason": str(error),
+                "execution_blocked": True,
+            })
+            raise SafetyViolationError(
+                f"Safety evaluation failed; operation was blocked: {error}"
+            ) from error
 
         if assessment.action == SafetyAction.REQUIRE_APPROVAL:
-            assessment = self.wait_for_approval(assessment)
+            # A workflow must not wait indefinitely for an external approval
+            # channel.  The pending decision is observable, while execution is
+            # denied until an approved assessment is submitted explicitly.
+            assessment.action = SafetyAction.BLOCK
+            assessment.approved = False
+            assessment.reason = assessment.reason or "Human approval is required before execution"
+            self._record_assessment(assessment)
+            self._publish_assessment(assessment)
 
-        # Final enforcement
         if assessment.action == SafetyAction.BLOCK:
+            self._publish_event("safety.execution_blocked", {
+                "assessment_id": assessment.assessment_id,
+                "operation_type": assessment.operation_type,
+                "capability": context.get("capability"),
+                "decision": assessment.action.value,
+                "reason": assessment.reason,
+                "execution_blocked": True,
+            })
             raise SafetyViolationError(f"Operation blocked by safety gate: {assessment.reason}")
 
+        self._publish_event("safety.execution_authorized", {
+            "assessment_id": assessment.assessment_id,
+            "operation_type": assessment.operation_type,
+            "capability": context.get("capability"),
+            "decision": assessment.action.value,
+            "reason": assessment.reason,
+            "execution_blocked": False,
+        })
         return assessment
 
     def _is_always_blocked(self, operation_type: str) -> bool:
@@ -624,6 +662,19 @@ class SafetyGate:
             self._assessment_history.append(assessment)
             if len(self._assessment_history) > self._max_history:
                 self._assessment_history.pop(0)
+
+    def _publish_assessment(self, assessment: SafetyAssessment):
+        """Publish a minimal, non-sensitive record of a safety decision."""
+        self._publish_event("safety.assessment", {
+            "assessment_id": assessment.assessment_id,
+            "operation_type": assessment.operation_type,
+            "capability": assessment.metadata.get("capability"),
+            "risk_level": assessment.risk_level.value,
+            "decision": assessment.action.value,
+            "reason": assessment.reason,
+            "requires_approval": assessment.requires_approval,
+            "execution_blocked": not assessment.allowed,
+        })
 
     def _publish_event(self, event_type: str, payload: Dict[str, Any]):
         """Publish an event to the event bus."""

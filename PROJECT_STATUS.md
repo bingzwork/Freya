@@ -1,10 +1,10 @@
 # Completion Progress
 
-Overall Freya Functional Completion: 69.0%
-Completed Tasks: 9 / 17
-Remaining Tasks: 8 / 17
+Overall Freya Functional Completion: 72.0%
+Completed Tasks: 10 / 17
+Remaining Tasks: 7 / 17
 Last Updated: 2026-08-14
-Next Active Task: Task 10 — Enforce workflow capability and safety behavior
+Next Active Task: Task 11 — Complete autonomy learning and verified task execution
 
 > The percentage retains the documented capability-weighted operational method: functionality receives credit only when its production path is implemented, wired, reachable, safe where required, and supported by runtime evidence. The task counts are the rolling queue counts and do not replace that capability-weighted percentage.
 
@@ -20,53 +20,14 @@ Next Active Task: Task 10 — Enforce workflow capability and safety behavior
 
 # Critical Execution Path
 
-1. 🟡 Task 10 — Enforce workflow capability and safety behavior
+1. 🔴 Task 11 — Complete autonomy learning and verified task execution
 
-Tasks 11–17 are parallel or independent work where the existing status document does not establish a prerequisite beyond the relationships stated in each task.
+Tasks 12–17 are parallel or independent work where the existing status document does not establish a prerequisite beyond the relationships stated in each task.
 
 ---
 
 # Active Work
 
-
-
-## Task 10 — Enforce workflow capability and safety behavior
-
-**Size:** 🟡 YELLOW — MEDIUM
-**Priority:** P2
-**Execution Order:** 10
-
-**Location**
-
-- `app/orchestrator/workflow_orchestrator.py`: `_start_background_jobs()`
-- `app/orchestrator/capabilities.py`
-- `app/orchestrator/safety_gate.py`
-
-**Problem**
-
-Workflow background-job startup is empty, selected capabilities include placeholder or unsupported actions, and safety-gate behavior has failing tests.
-
-**Required Work**
-
-- Implement or remove nonfunctional execution paths.
-- Validate capability registration against callable actions.
-- Make safety outcomes observable and enforced.
-
-**Dependencies**
-
-- Must come after Task 2's execution and safety repair.
-
-**Why This Order**
-
-The existing issue explicitly depends on the P0 execution/safety repair.
-
-**Acceptance Criteria**
-
-- [ ] Background workflow jobs perform supported work or are removed.
-- [ ] Every registered capability maps to a callable action.
-- [ ] Safety outcomes are enforced and testable.
-
----
 
 ## Task 11 — Complete autonomy learning and verified task execution
 
@@ -368,10 +329,10 @@ No dependency has been added where the existing status document did not establis
 |---|---|
 | **P0 — Critical** | No remaining P0 task on the active queue; the Task 3 autonomy blocker is complete. |
 | **P1 — High** | Tasks 11, 14: autonomous learning, readiness surface |
-| **P2 — Medium** | Tasks 10, 12–13, 16: workflow capability/safety, legacy migration, vector recall, memory quality |
+| **P2 — Medium** | Tasks 12–13, 16: legacy migration, vector recall, memory quality |
 | **P3 — Low** | Tasks 14–17: readiness completion, configurable policy, memory-quality tail work, stale contracts |
 
-**Current verified completion:** 69.0%. Tasks 1–9 are recorded as complete and verified. The remaining active queue begins with Task 10’s workflow capability and safety work.
+**Current verified completion:** 72.0%. Tasks 1–10 are recorded as complete and verified. The remaining active queue begins with Task 11’s autonomy-learning and verified-execution work.
 
 ---
 
@@ -386,7 +347,7 @@ No dependency has been added where the existing status document did not establis
 
 Freya reaches 100% only when a normal `FreyaApp` startup reliably composes one supported architecture; safely accepts or rejects actions; plans, executes, verifies, repairs, and persists outcomes; learns from those outcomes; uses persistent and retrievable knowledge across sessions; runs healthy autonomous background work; routes diagnostics and learning through controlled improvement safeguards; survives configured provider and tool failures; and demonstrates these chains through a clean, production-path test suite.
 
-The current verified operational completion is **69.0%**. The earlier 76.6% estimate is superseded by the current verified assessment and is not used as the completion baseline.
+The current verified operational completion is **72.0%**. The earlier 76.6% estimate is superseded by the current verified assessment and is not used as the completion baseline.
 
 ---
 
@@ -767,3 +728,50 @@ Task 9 repairs the production monitoring path from network and GPU probes throug
 - `tests/test_gpu_monitor.py`
 - `tests/test_system_monitor_health_integration.py`
 - `PROJECT_STATUS.md`
+
+
+---
+
+## Task 10 — Enforce Workflow Capability and Safety Behavior
+
+**Status:** COMPLETE
+
+**Implementation Summary**
+
+Task 10 removes the obsolete `WorkflowOrchestrator._start_background_jobs()` no-op and its inactive configuration flag. The canonical `SystemInitializer` remains the sole lifecycle owner of the shared `BackgroundJobService`; the orchestrator retains only the injected shared-service reference required by the established production graph.
+
+**Capability Registration and Dispatch**
+
+`CapabilityRegistry` now accepts only named capabilities whose declared default and supported actions resolve to real callables, and it rejects duplicate, placeholder, and non-callable registrations without replacing an existing capability. `TaskExecutor` validates the selected action before safety authorization and invocation, so unknown or unsupported actions fail before a capability side effect. The built-in factory no longer exposes the placeholder `communication_hub.subscribe` action or the placeholder `failure_recovery` capability. Existing capability instances dispatch only declared executable actions.
+
+**Safety Enforcement and Observability**
+
+`SafetyAssessment.allowed` now expresses whether execution is currently authorized. `SafetyGate` fails closed when assessment itself errors, does not wait indefinitely for unfulfilled human approval, and emits non-sensitive `safety.assessment`, `safety.execution_authorized`, `safety.execution_blocked`, and `safety.evaluation_failed` records. These records include the evaluated operation type/capability, decision, reason, and whether execution was blocked. Denied workflow steps transition to the existing safety-denied execution state and never invoke the protected callable.
+
+**Tests and Verification Results**
+
+- `PYTHONPATH=/home/ubuntu/Freya pytest -q tests/test_safety_gate.py tests/test_workflow_capability_safety.py`: **16 passed**. This covers policy-only safety operation, registry duplicate/non-callable rejection, placeholder exclusion, safe unknown-action failure, approval dispatch, denial without capability invocation, and fail-closed safety-evaluation errors.
+- `PYTHONPATH=/home/ubuntu/Freya pytest -q tests/test_workflow_capability_safety.py::test_registry_accepts_only_callable_declared_actions_and_rejects_duplicates tests/test_workflow_capability_safety.py::test_builtin_factory_does_not_expose_placeholder_actions_or_capabilities tests/test_workflow_capability_safety.py::test_unknown_action_fails_before_safety_or_capability_dispatch`: **3 passed**.
+- `PYTHONPATH=/home/ubuntu/Freya pytest -q tests/test_workflow_orchestrator.py tests/test_workflow_capability_safety.py::test_workflow_orchestrator_does_not_own_background_job_lifecycle`: **3 passed**.
+- `PYTHONPATH=/home/ubuntu/Freya pytest -q tests/test_execution_safety_state_machine.py`: **8 passed**.
+- `PYTHONPATH=/home/ubuntu/Freya pytest -q tests/test_integration_autonomous.py`: **10 passed**, including the canonical shared-background-service graph and public safety denial before a protected side effect.
+- A repository-wide `timeout 600 env PYTHONPATH=/home/ubuntu/Freya pytest -q` run was intentionally stopped at user direction before completion and is **not** recorded as passing. Its first collection attempt exposed a missing declared `aiohttp` dependency; that dependency was installed for the rerun before the user-directed stop.
+
+**Files Changed**
+
+- `app/orchestrator/capabilities.py`
+- `app/orchestrator/capability_registry.py`
+- `app/orchestrator/safety_gate.py`
+- `app/orchestrator/task_executor.py`
+- `app/orchestrator/workflow_orchestrator.py`
+- `tests/test_safety_gate.py`
+- `tests/test_workflow_capability_safety.py`
+- `PROJECT_STATUS.md`
+
+**Next Active Task**
+
+Task 11 — Complete autonomy learning and verified task execution.
+
+**Implementation Commit Hash:** Recorded in Git history.
+
+---

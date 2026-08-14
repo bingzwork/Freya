@@ -369,6 +369,21 @@ class TaskExecutor:
             task.error = f"Capability {capability_name} not active (state: {capability.state})"
             raise RuntimeError(task.error)
 
+        action = task.metadata.get("action") or capability.metadata.default_action
+        if not capability.supports_action(action):
+            task.status = TaskStatus.FAILED
+            task.error = (
+                f"Capability {capability_name} does not expose callable action '{action}'"
+            )
+            self._publish_event("task.failed", {
+                "workflow_id": workflow_id,
+                "task_id": task_id,
+                "capability": capability_name,
+                "action": action,
+                "error": task.error,
+            })
+            raise RuntimeError(task.error)
+
         if self._safety_gate:
             self._set_state(workflow_id, ExecutionState.SAFETY_CHECKING)
             try:
@@ -530,9 +545,9 @@ class TaskExecutor:
 
     def _invoke_capability(self, capability: Capability, task: Task, inputs: Dict[str, Any]) -> Any:
         """Invoke a capability's execute method."""
-        action = task.metadata.get("action", "execute")
+        action = task.metadata.get("action") or capability.metadata.default_action
 
-        # Try to call the capability's execute method
+        # The action was validated before safety authorization and dispatch.
         if hasattr(capability, 'execute'):
             return capability.execute(action, inputs)
         elif hasattr(capability, 'run'):

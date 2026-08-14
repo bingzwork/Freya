@@ -17,7 +17,7 @@ from uuid import uuid4
 
 from app.core.events import get_event_bus, Event, EventPriority
 from app.core.observability import get_observability_hub, ComponentInfo, ComponentType
-from app.core.background_jobs import get_job_service, JobTriggerConfig, JobTriggerType, JobPriority
+from app.core.background_jobs import get_job_service
 
 from app.orchestrator.capability_registry import (
     Capability, CapabilityCategory, CapabilityMetadata, CapabilityRegistry, CapabilityState,
@@ -67,7 +67,6 @@ class WorkflowOrchestratorConfig:
     snapshot_interval: float = 60.0
     enable_intent_classification: bool = True
     intent_confidence_threshold: float = 0.7
-    enable_background_jobs: bool = True
 class WorkflowOrchestrator:
     """
     Workflow Orchestrator - Streamlined coordination for workflow execution.
@@ -92,6 +91,8 @@ class WorkflowOrchestrator:
         self._executor = executor
         self._chat_activity = chat_activity
         self._event_bus = event_bus or get_event_bus()
+        # The initializer owns this shared service's lifecycle.  The
+        # orchestrator retains the injected reference for compatibility only.
         self._job_service = job_service or get_job_service()
         self._observability = get_observability_hub()
         self._workflow_composer: Optional[WorkflowComposer] = None
@@ -170,8 +171,6 @@ class WorkflowOrchestrator:
             self._initialize_components()
             self._start_components()
             self._register_builtin_capabilities()
-            if self.config.enable_background_jobs:
-                self._start_background_jobs()
             self._state = OrchestratorState.RUNNING
             self._start_time = time.time()
             self._shutdown_event.clear()
@@ -301,16 +300,15 @@ class WorkflowOrchestrator:
         capabilities = create_all_capabilities()
         registered_count = 0
         for cap in capabilities:
+            if self._capability_registry.get_capability(cap.name) is not None:
+                continue
             if self._capability_registry.register(cap):
                 registered_count += 1
         if self._capability_registry.is_running():
-            # Re-registration replaces instances; reactivate the shared registry
-            # so autonomy-created workflows can resolve reachable capabilities.
+            # Reactivate the shared registry so capability instances registered
+            # during startup remain reachable to autonomy-created workflows.
             self._capability_registry.start()
         logger.info(f"Registered {registered_count} built-in capabilities")
-
-    def _start_background_jobs(self):
-        pass
 
     def _coordination_loop(self):
         logger.debug("Coordination loop started")
