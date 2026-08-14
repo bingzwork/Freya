@@ -56,6 +56,7 @@ class AutonomyManager:
         self._watchdog: Optional[Watchdog] = None
         self._self_initiated: Optional[SelfInitiatedWorkManager] = None
         self._maintenance: Optional[MaintenanceManager] = None
+        self._learning_started = False
         
         self._lock = threading.RLock()
         self._running = False
@@ -147,6 +148,10 @@ class AutonomyManager:
 
             self._validate_startup_dependencies()
             try:
+                if self._learning_pipeline is not None and hasattr(self._learning_pipeline, "start"):
+                    if not self._learning_pipeline.start(self._job_service, interval_seconds=60.0):
+                        raise AutonomyStartupError("Canonical learning pipeline failed to start")
+                    self._learning_started = True
                 if self._watchdog:
                     self._watchdog.start()
                 if self._self_initiated:
@@ -166,6 +171,12 @@ class AutonomyManager:
                 return True
             except Exception as exc:
                 self._stop_started_components()
+                if self._learning_started and self._learning_pipeline is not None:
+                    try:
+                        self._learning_pipeline.stop()
+                    except Exception:
+                        pass
+                    self._learning_started = False
                 self._running = False
                 if isinstance(exc, AutonomyStartupError):
                     raise
@@ -183,6 +194,9 @@ class AutonomyManager:
             self._self_initiated.stop()
         if self._watchdog:
             self._watchdog.stop()
+        if self._learning_started and self._learning_pipeline is not None:
+            self._learning_pipeline.stop()
+            self._learning_started = False
             
         self._running = False
 
@@ -195,6 +209,10 @@ class AutonomyManager:
         return {
             "running": self._running,
             "enabled": self.config.enabled,
+            "learning_pipeline": {
+                "running": bool(self._learning_pipeline and getattr(self._learning_pipeline, "is_running", lambda: False)()),
+                "started_by_autonomy": self._learning_started,
+            },
             "watchdog": {
                 "running": self._watchdog.is_running() if self._watchdog else False,
                 "enabled": self.config.watchdog_enabled,

@@ -13,6 +13,8 @@ No LLM calls. Deterministic local processing only.
 
 import time
 import hashlib
+import threading
+from collections import deque
 from typing import Any, Dict, List
 
 from app.core.logger import logger
@@ -43,6 +45,70 @@ class LearningPipeline:
         self._min_actionability = min_actionability
         self._min_confidence = min_confidence
         self._event_bus = event_bus
+        self._lock = threading.RLock()
+        self._pending_candidates = deque()
+        self._running = False
+        self._job_service = None
+        self._job_id = None
+
+    def start(self, job_service=None, interval_seconds: float = 60.0) -> bool:
+        """Start queue processing using the shared background-job service.
+
+        Direct ``run`` calls remain supported for synchronous callers and tests;
+        production autonomy submits candidates here so learning is observable,
+        serialized, and managed by the existing scheduler.
+        """
+        with self._lock:
+            if self._running:
+                return True
+            self._job_service = job_service
+            self._running = True
+            if job_service is not None:
+                from app.core.background_jobs import JobPriority, JobTriggerConfig, JobTriggerType
+                self._job_id = job_service.schedule(
+                    job_id="autonomy_learning_pipeline",
+                    func=self._drain_pending,
+                    trigger=JobTriggerConfig(
+                        type=JobTriggerType.RECURRING,
+                        interval_seconds=max(1.0, interval_seconds),
+                    ),
+                    priority=JobPriority.NORMAL,
+                    max_retries=1,
+                    replace_existing=True,
+                )
+            return True
+
+    def stop(self) -> None:
+        """Stop scheduled queue processing without discarding direct-call support."""
+        with self._lock:
+            if self._job_service is not None and self._job_id:
+                try:
+                    self._job_service.remove_job(self._job_id)
+                except Exception:
+                    logger.exception("Failed to stop autonomous learning job")
+            self._job_id = None
+            self._job_service = None
+            self._running = False
+
+    def is_running(self) -> bool:
+        return self._running
+
+    def submit(self, candidate) -> None:
+        """Submit a candidate for scheduled processing."""
+        with self._lock:
+            self._pending_candidates.append(candidate)
+
+    def _drain_pending(self):
+        """Process queued candidates and surface persistence failures to the scheduler."""
+        processed = 0
+        while True:
+            with self._lock:
+                if not self._pending_candidates:
+                    break
+                candidate = self._pending_candidates.popleft()
+            self.run(candidate)
+            processed += 1
+        return processed
 
     def run(self, candidate):
         start = time.time()

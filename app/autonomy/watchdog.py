@@ -295,12 +295,18 @@ class Watchdog:
                     context=candidate_data["context"],
                     tags=candidate_data["tags"],
                 )
-                # Run pipeline asynchronously to avoid blocking
-                threading.Thread(
-                    target=lambda: self._learning_pipeline.run(candidate),
-                    daemon=True,
-                    name=f"Watchdog-LearningPipeline-{observation.id[:8]}"
-                ).start()
+                # Queue through the canonical pipeline when available. The
+                # pipeline drains this queue on the shared BackgroundJobService;
+                # retain direct asynchronous execution only for legacy injected
+                # test doubles that do not expose the queue contract.
+                if hasattr(self._learning_pipeline, "submit"):
+                    self._learning_pipeline.submit(candidate)
+                else:
+                    threading.Thread(
+                        target=lambda: self._learning_pipeline.run(candidate),
+                        daemon=True,
+                        name=f"Watchdog-LearningPipeline-{observation.id[:8]}"
+                    ).start()
             except Exception:
                 pass
                 
