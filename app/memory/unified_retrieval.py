@@ -106,7 +106,10 @@ class ConversationMemoryRetriever(MemoryRetriever):
         return "conversation"
 
     def is_available(self) -> bool:
-        return self.memory is not None and not self.memory.is_empty()
+        # A fresh session can have no local turns while the shared persistent
+        # vector store contains earlier conversations. Availability therefore
+        # follows the configured memory backend, not this instance's history.
+        return self.memory is not None
 
     def retrieve(self, query: RetrievalQuery) -> List[RetrievalResult]:
         """Retrieve persisted semantic conversation matches through the canonical contract."""

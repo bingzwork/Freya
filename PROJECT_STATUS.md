@@ -1,10 +1,10 @@
 # Completion Progress
 
-Overall Freya Functional Completion: 80.0%
-Completed Tasks: 12 / 17
-Remaining Tasks: 5 / 17
+Overall Freya Functional Completion: 84.0%
+Completed Tasks: 13 / 17
+Remaining Tasks: 4 / 17
 Last Updated: 2026-08-14
-Next Active Task: Task 13 — Repair conversation/vector persistence and recall
+Next Active Task: Task 14 — Add production health/readiness surface
 
 > The percentage retains the documented capability-weighted operational method: functionality receives credit only when its production path is implemented, wired, reachable, safe where required, and supported by runtime evidence. The task counts are the rolling queue counts and do not replace that capability-weighted percentage.
 
@@ -14,56 +14,19 @@ Next Active Task: Task 13 — Repair conversation/vector persistence and recall
 > Completed, working, and verified items have been removed from the execution queue.
 > Tasks are ordered by documented dependency and execution sequence, not simply by priority.
 >
-> **Verified operational completion:** 80.0% (the capability-weighted estimate reflects twelve completed and verified tasks after Task 12; it supersedes the earlier 76.0% estimate).
+> **Verified operational completion:** 84.0% (the capability-weighted estimate reflects thirteen completed and verified tasks after Task 13; it supersedes the earlier 80.0% estimate).
 
 ---
 
 # Critical Execution Path
-1. 🟡 Task 13 — Repair conversation/vector persistence and recall
+1. 🔵 Task 14 — Add production health/readiness surface
 
-Tasks 13–17 are parallel or independent work where the existing status document does not establish a prerequisite beyond the relationships stated in each task.
+Tasks 14–17 are parallel or independent work where the existing status document does not establish a prerequisite beyond the relationships stated in each task.
 
 
 ---
 
 # Active Work
-
-## Task 13 — Repair conversation/vector persistence and recall
-
-**Size:** 🟡 YELLOW — MEDIUM
-**Priority:** P2
-**Execution Order:** 13
-
-**Location**
-
-- `app/memory/conversation_memory.py`
-- Vector-memory integration tests
-
-**Problem**
-
-All three conversation/vector integration tests fail, so cross-session semantic recall is not established.
-
-**Required Work**
-
-- Diagnose the vector persistence/retrieval mismatch.
-- Define restart semantics.
-- Add deterministic persistence-and-retrieval integration tests.
-
-**Dependencies**
-
-- Independent after Task 1 selects the supported retrieval stack.
-
-**Why This Order**
-
-The status document explicitly permits this work independently after the retrieval-stack decision.
-
-**Acceptance Criteria**
-
-- [ ] Conversation data survives the documented restart boundary.
-- [ ] Cross-session semantic retrieval is deterministic.
-- [ ] The three failing integration scenarios pass.
-
----
 
 ## Task 14 — Add production health/readiness surface
 
@@ -221,7 +184,6 @@ The source document explicitly places this hygiene work after runtime consolidat
 
 These tasks do not have a documented prerequisite on the critical execution chain, or the source document explicitly allows them to proceed independently:
 
-- 🟡 **Task 13 — Repair conversation/vector persistence and recall**. It can proceed after the supported retrieval stack is selected.
 - 🔵 **Task 15 — Add configurable learning and repair policy**. It can proceed after the execution-learning contract is fixed.
 - 🟡 **Task 16 — Resolve remaining memory and retrieval quality gaps**. Its cross-memory and coverage portions can proceed after the supported memory contract is established.
 
@@ -240,25 +202,24 @@ No dependency has been added where the existing status document did not establis
 | Size | Remaining tasks |
 |---|---:|
 | 🔴 RED — Big / Complex | 0 |
-| 🟡 YELLOW — Medium | 2 |
+| 🟡 YELLOW — Medium | 1 |
 | 🔵 BLUE — Easy / Small | 3 |
-| **Total** | **5** |
+| **Total** | **4** |
 
 | Priority | Remaining work |
 |---|---|
 | **P0 — Critical** | No remaining P0 task on the active queue; the Task 3 autonomy blocker is complete. |
 | **P1 — High** | Task 14: production readiness surface |
-| **P2 — Medium** | Tasks 13 and 16: vector recall and memory quality |
+| **P2 — Medium** | Task 16: memory quality |
 | **P3 — Low** | Tasks 14–17: readiness completion, configurable policy, memory-quality tail work, stale contracts |
 
-**Current verified completion:** 80.0%. Tasks 1–12 are recorded as complete and verified. The remaining active queue begins with Task 13’s conversation/vector persistence and recall work.
+**Current verified completion:** 84.0%. Tasks 1–13 are recorded as complete and verified. The remaining active queue begins with Task 14’s production health/readiness surface.
 
 ---
 
 # Critical Blockers
 
-1. Cross-session conversation/vector recall remains non-deterministic in the current integration suite; Task 13 must repair the persistence and retrieval contract.
-2. The now-quarantined advanced retrieval experiments retain separate calibration, learned-ranking, analytics, and decision contracts; Task 16 must decide whether to integrate them behind `UnifiedRetrieval` or retire them permanently.
+1. The now-quarantined advanced retrieval experiments retain separate calibration, learned-ranking, analytics, and decision contracts; Task 16 must decide whether to integrate them behind `UnifiedRetrieval` or retire them permanently.
 
 ---
 
@@ -266,7 +227,7 @@ No dependency has been added where the existing status document did not establis
 
 Freya reaches 100% only when a normal `FreyaApp` startup reliably composes one supported architecture; safely accepts or rejects actions; plans, executes, verifies, repairs, and persists outcomes; learns from those outcomes; uses persistent and retrievable knowledge across sessions; runs healthy autonomous background work; routes diagnostics and learning through controlled improvement safeguards; survives configured provider and tool failures; and demonstrates these chains through a clean, production-path test suite.
 
-The current verified operational completion is **80.0%**. The earlier 76.0% estimate is superseded by the current verified assessment and is not used as the completion baseline.
+The current verified operational completion is **84.0%**. The earlier 80.0% estimate is superseded by the current verified assessment and is not used as the completion baseline.
 
 ---
 
@@ -729,6 +690,39 @@ Self-observation services now annotate and access the canonical workflow interfa
 **Next Active Task**
 
 Task 13 — Repair conversation/vector persistence and recall.
+
+---
+
+## Task 13 — Repair conversation/vector persistence and recall
+
+**Status:** COMPLETE
+
+**Implementation Summary**
+
+Task 13 repairs the remaining production retrieval boundary for durable conversation vectors. `ConversationMemory` persists each turn synchronously as both JSON conversation history and FAISS index/metadata under the configured workspace. `ConversationMemoryRetriever` no longer treats a newly created, locally empty conversation object as unavailable: it now queries the configured persistent backend, allowing a fresh session to recall turns written by earlier sessions through the canonical `UnifiedRetrieval` contract.
+
+**Restart and Cross-Session Contract**
+
+The supported restart boundary is `instance A → add_message() → new instance B`, using the same workspace and vector collection name. `add_message()` completes the JSON and vector-store writes before returning; no process-local object reuse or artificial in-memory cache is required. Instance B reloads its configured JSON history and independently reopens the persisted FAISS index and metadata. A distinct, empty Session C can also query that shared vector collection and retrieve relevant records from prior sessions.
+
+**Tests and Verification Results**
+
+- `PYTHONPATH=. pytest tests/test_integration_conversation_search.py`: **4 passed**.
+- `PYTHONPATH=. pytest tests/test_vector_db.py`: **41 passed**.
+- `PYTHONPATH=. pytest tests/test_conversation_vector_persistence_integration.py`: **3 passed**, covering durable history after a new instance, semantic recall after restart, and empty-session recall across two prior sessions.
+- `PYTHONPATH=. pytest tests/test_production_retrieval_integration.py`: **3 passed**, including the canonical coordinator/retriever path and a cross-process restart.
+- `timeout 600s pytest` was run once after installing the declared `aiohttp` collection dependency and was stopped at the required ten-minute limit at **90%** progress. The partial output already contained unrelated failures and errors, so the full suite is not claimed as passing. The focused Task 13 results above are the verification evidence.
+- `git diff --check` passed before documentation updates.
+
+**Files Changed**
+
+- `app/memory/unified_retrieval.py`
+- `tests/test_conversation_vector_persistence_integration.py`
+- `PROJECT_STATUS.md`
+
+**Next Active Task**
+
+Task 14 — Add production health/readiness surface.
 
 ---
 
