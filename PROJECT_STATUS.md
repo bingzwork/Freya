@@ -2,7 +2,7 @@
 
 ## Current position
 
-**Freya is MVP Ready.** The canonical local-first runtime now starts from one initializer-owned graph and supports grounded local-memory answers, registered local capabilities, safe local file intake and export, verified local-model fallback disclosure, safety-gated execution, execution-result verification, terminal-failure reporting, and validated learning promotion through `MemoryCoordinator`.
+**Freya is MVP Ready.** The canonical local-first runtime now starts from one initializer-owned graph and supports grounded local-memory answers, first-class public-web research with preserved provenance, registered capabilities, safe local file intake and export, verified local-model fallback disclosure, safety-gated execution, execution-result verification, terminal-failure reporting, and validated learning promotion through `MemoryCoordinator`.
 
 > **MVP decision:** There are **no remaining MVP blockers** in the current canonical runtime. The completed P1/P2 work below is intentionally narrow hardening; it preserves the established architecture and compatibility boundaries rather than introducing a replacement subsystem.
 
@@ -22,6 +22,7 @@
 | Extension | Completed implementation | Definition of done | Result |
 |---|---|---|---|
 | **CE.1** | Added canonical `FileInputCapability` and `FileOutputCapability` implementations. File Input validates permitted local paths, normalizes path/URI references, detects type and MIME metadata, and returns a downstream file reference without processing contents. File Output writes supplied text, bytes, or existing artifacts to allowlisted destinations, creates directories when permitted, generates collision-resistant names, and refuses overwrite unless explicitly requested. Both capabilities are registered by `create_all_capabilities()` and discoverable through the existing registry-to-router-to-ToolManager bridge. The centralized allowlist now recognizes common passive document, image, audio, video, and spreadsheet artifact extensions while continuing to block executable binary types. | File-based workflows can safely intake or export approved local artifacts through existing Freya extension ports without adding a second routing or execution architecture. | Complete. |
+| **CE.2** | Added canonical `ResearchCapability` with `search_web`, `read_page`, `research_topic`, `compare_sources`, and `verify_claim` actions. Its named `WebSearchTool`, `WebPageReader`, `SourceEvaluator`, `FactExtractor`, `CrossReference`, and `CitationManager` stages run through the existing `ToolManager`; public routing is projected through the existing registry-to-router bridge. `WebSearchTool` reuses the structured DuckDuckGo parsing exposed by `InternetResearchImporter`, and `WebPageReader` reuses its existing HTTP client, page import, parsing, retrieval metadata, retry, redirect, and rate-limit behavior. Research results retain URL, title, timestamp, evidence, citations, conflicts, uncertainty, and partial-failure information. Research does not write durable memory automatically; an explicit request submits a provenance-preserving candidate only through the normal `LearningPipeline` → Worth Remembering → distillation → `MemoryCoordinator` route. | External public-web research is discoverable, routed, ToolManager-mediated, source-aware, citation-grounded, and safely bounded without adding a competing web-search capability, HTTP stack, memory store, learning pipeline, or observability subsystem. | Complete. |
 
 ## Architecture and validation surface
 
@@ -37,6 +38,10 @@ The reproducible canonical command now includes the priority-hardening and produ
 |---|---|
 | `git diff --check` | Passed before final test run. |
 | `python3 -m compileall -q app main.py tests` | Passed before final test run. |
+| `tests/test_research_capability.py` | Passed: **13 tests** covering registry/factory presence, capability routing, ToolManager stage execution, importer and HTTP reuse, URL safety, source quality, fact provenance, cross-reference conflicts, citations, full research, verification, and gated learning. |
+| Directly affected routing, safety, file-capability, architecture, and importer compatibility contracts | Passed: **85 tests** in 19.55 seconds across `tests/test_research_capability.py`, `tests/test_capability_routing.py`, `tests/test_workflow_capability_safety.py`, `tests/test_file_capabilities.py`, `tests/test_target_architecture_contracts.py`, and the stable `InternetResearchImporter` / `UnifiedExternalImporter` compatibility cases. |
+| Directly affected live-network compatibility case | The existing `TestExternalImport.test_external_import_stubs` expectation that `https://example.com` is unreachable failed because live retrieval now succeeds in the test environment; this is an environment-sensitive pre-existing expectation, not a ResearchCapability regression. |
+| Current full-suite attempt | `PYTHONPATH=. pytest` was stopped by sandbox OOM pressure after 8.31 seconds of initial dependency collection and a subsequent run was OOM-killed after starting tests; orphaned test subprocesses were terminated. This was a resource-limit stop, not a 10-minute timeout. The 85 focused/directly affected tests completed successfully. |
 | Focused priority, readiness, capability, and architecture contracts | Passed: **26 tests**. |
 | File Input/File Output and directly affected canonical capability contracts | Passed: **25 tests** (`tests/test_file_capabilities.py`, `tests/test_target_architecture_contracts.py`, and `tests/test_workflow_capability_safety.py`). |
 | Full reproducible canonical suite | Passed: **111 tests** across clean-process lifecycle, architecture, routing, execution, learning, capability safety, provider resilience, priority hardening, and readiness contracts. |
@@ -68,7 +73,7 @@ The current production graph was checked against [`CURRENT_ARCHITECTURE.md`](CUR
 
 ## Remaining tasks
 
-There are **no remaining MVP tasks**. The six dependency-first P1/P2 hardening tasks and the foundational File Input/File Output extension are complete. The next promoted non-blocking growth task is **G1**, the operator-facing local control surface; the following entries remain deliberately future growth work rather than MVP blockers.
+There are **no remaining MVP tasks**. The six dependency-first P1/P2 hardening tasks and the foundational File Input/File Output and ResearchCapability extensions are complete. The next promoted non-blocking growth task is **G1**, the operator-facing local control surface; the following entries remain deliberately future growth work rather than MVP blockers.
 
 ## Future implementation for Freya to grow
 

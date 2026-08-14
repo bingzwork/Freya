@@ -201,6 +201,9 @@ class SystemInitializer:
         from app.orchestrator.capabilities import create_all_capabilities
         for cap in create_all_capabilities():
             capability_registry.register(cap)
+        research_capability = capability_registry.get_capability("research_capability")
+        if research_capability is not None and hasattr(research_capability, "set_tool_manager"):
+            research_capability.set_tool_manager(tool_manager)
         capability_registry.start()
 
         # The execution path uses this non-discoverable capability after the
@@ -356,6 +359,8 @@ class SystemInitializer:
             memory_coordinator=memory_coordinator,
             event_bus=event_bus,
         )
+        if research_capability is not None and hasattr(research_capability, "set_learning_pipeline"):
+            research_capability.set_learning_pipeline(learning_pipeline)
         execution_engine.set_learning_pipeline(learning_pipeline)
         answer_verifier.set_learning_pipeline(learning_pipeline)
         if autonomy is not None:

@@ -1423,8 +1423,12 @@ class FileOutputCapability(_FileCapabilityBase):
 # Factory function to create all capabilities
 # =============================================================================
 
-def create_all_capabilities(agent=None) -> List[BaseCapability]:
+def create_all_capabilities(agent=None) -> List[Capability]:
     """Create all built-in capabilities and wire them to the agent."""
+    # Imported lazily because ResearchCapability is a registry-facing adapter
+    # that is intentionally kept in its own research domain module.
+    from app.research.capability import ResearchCapability
+
     capabilities = [
         MemoryManagementCapability(),
         PlanningEngineCapability(),
@@ -1436,6 +1440,7 @@ def create_all_capabilities(agent=None) -> List[BaseCapability]:
         ToolRegistryCapability(),
         SafetyGuardCapability(),
         KnowledgeBaseCapability(),
+        ResearchCapability(),
         ReasoningEngineCapability(),
         OrchestrationCoreCapability(),
         FileInputCapability(),

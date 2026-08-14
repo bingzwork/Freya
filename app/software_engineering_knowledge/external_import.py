@@ -768,73 +768,100 @@ class InternetResearchImporter:
         self.http_client = HTTPClient()
         self.parser = HTMLParser()
 
-    async def search_and_import(self, query: str, max_results: int = 5) -> ExtractionResult:
-        """Search the web and import top results as knowledge."""
-        # Use DuckDuckGo HTML scraping for search (no API key required)
-        search_url = f"https://html.duckduckgo.com/html/?q={quote_plus(query)}"
+    async def search(self, query: str, max_results: int = 5) -> List[Dict[str, Any]]:
+        """Search DuckDuckGo HTML and return structured links without fetching pages."""
+        if not isinstance(query, str) or not query.strip():
+            return []
+        search_url = f"https://html.duckduckgo.com/html/?q={quote_plus(query.strip())}"
+        html = await self.http_client.get(search_url, rate_limit=0.5)
+        if not html:
+            return []
 
-        try:
-            html = await self.http_client.get(search_url, rate_limit=0.5)
-            if not html:
-                return ExtractionResult(
-                    success=False,
-                    items=[],
-                    errors=[f"Failed to fetch search results for: {query}"],
-                    source=f"search:{query}",
-                    source_type=KnowledgeSource.INTERNET_RESEARCH,
-                )
+        soup = BeautifulSoup(html, "lxml")
+        skip_domains = {"youtube.com", "twitter.com", "x.com", "linkedin.com", "facebook.com", "instagram.com"}
+        results: List[Dict[str, Any]] = []
+        seen: set[str] = set()
+        for result in soup.select(".result"):
+            link = result.select_one(".result__title a, a.result__url")
+            if link is None:
+                continue
+            href = link.get("href", "")
+            if not href.startswith("http"):
+                continue
+            parsed = urlparse(href)
+            domain = (parsed.netloc or "").lower()
+            if domain in skip_domains or href in seen:
+                continue
+            seen.add(href)
+            title = link.get_text(" ", strip=True)
+            snippet_element = result.select_one(".result__snippet")
+            snippet = snippet_element.get_text(" ", strip=True) if snippet_element else ""
+            results.append({
+                "title": title,
+                "url": href,
+                "snippet": snippet,
+                "source": domain,
+                "rank": len(results) + 1,
+                "relevance": round(1.0 / (len(results) + 1), 4),
+            })
+            if len(results) >= max_results:
+                break
 
-            # Parse search results
-            soup = BeautifulSoup(html, "lxml")
-            result_links = []
-
-            # DuckDuckGo result selectors
+        # Some DuckDuckGo response variants omit the .result wrapper.  Retain
+        # the old link-selector fallback for compatibility with those pages.
+        if not results:
             for link in soup.select("a.result__url, a.result__snippet, .result__title a, .links_main a"):
                 href = link.get("href", "")
-                if href and href.startswith("http"):
-                    # Skip known non-content domains
-                    parsed = urlparse(href)
-                    skip_domains = ["youtube.com", "twitter.com", "x.com", "linkedin.com", "facebook.com", "instagram.com"]
-                    if parsed.netloc not in skip_domains:
-                        result_links.append(href)
+                if not href.startswith("http"):
+                    continue
+                parsed = urlparse(href)
+                domain = (parsed.netloc or "").lower()
+                if domain in skip_domains or href in seen:
+                    continue
+                seen.add(href)
+                results.append({
+                    "title": link.get_text(" ", strip=True),
+                    "url": href,
+                    "snippet": "",
+                    "source": domain,
+                    "rank": len(results) + 1,
+                    "relevance": round(1.0 / (len(results) + 1), 4),
+                })
+                if len(results) >= max_results:
+                    break
+        return results
 
-            # Deduplicate
-            seen = set()
-            unique_links = []
-            for link in result_links:
-                if link not in seen:
-                    seen.add(link)
-                    unique_links.append(link)
-
-            unique_links = unique_links[:max_results]
-
-            # Fetch and import each result
+    async def search_and_import(self, query: str, max_results: int = 5) -> ExtractionResult:
+        """Search the web and import top results as knowledge."""
+        try:
+            search_results = await self.search(query, max_results=max_results)
             items = []
             errors = []
-            for url in unique_links:
+            for result_item in search_results:
+                url = result_item["url"]
                 try:
                     result = await self.import_from_url(url)
                     if result.success:
                         items.extend(result.items)
                     else:
                         errors.extend(result.errors)
-                except Exception as e:
-                    errors.append(f"Error importing {url}: {str(e)}")
-
+                except Exception as error:
+                    errors.append(f"Error importing {url}: {error}")
+            if not search_results and not errors:
+                errors.append(f"No search results for: {query}")
             return ExtractionResult(
                 success=len(items) > 0,
                 items=items,
                 errors=errors,
                 source=f"search:{query}",
                 source_type=KnowledgeSource.INTERNET_RESEARCH,
-                metadata={"query": query, "results_found": len(unique_links)},
+                metadata={"query": query, "results_found": len(search_results)},
             )
-
-        except Exception as e:
+        except Exception as error:
             return ExtractionResult(
                 success=False,
                 items=[],
-                errors=[f"Search failed: {str(e)}"],
+                errors=[f"Search failed: {error}"],
                 source=f"search:{query}",
                 source_type=KnowledgeSource.INTERNET_RESEARCH,
             )
