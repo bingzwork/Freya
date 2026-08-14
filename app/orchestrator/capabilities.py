@@ -5,8 +5,13 @@ that integrate with FreyaAgent's subsystems.
 """
 
 import logging
+import mimetypes
+import os
+import shutil
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import unquote, urlparse
 
 from app.orchestrator.capability_registry import Capability, CapabilityMetadata, CapabilityCategory, CapabilityState
 from app.core.events import get_event_bus, Event
@@ -1034,6 +1039,387 @@ class FailureRecoveryCapability(BaseCapability):
 
 
 # =============================================================================
+# File Input and Output Capabilities
+# =============================================================================
+
+class _FileCapabilityBase(BaseCapability):
+    """Shared policy and metadata helpers for file intake and export."""
+
+    def __init__(self, metadata: CapabilityMetadata, file_allowlist=None, output_root=None):
+        super().__init__(metadata)
+        from app.core.file_allowlist import get_file_allowlist, normalize_path
+
+        self._file_allowlist = file_allowlist or get_file_allowlist()
+        self._normalize_path = normalize_path
+        self._output_root = self._normalize_path(output_root or Path.cwd())
+
+    @staticmethod
+    def _error(message: str) -> Dict[str, Any]:
+        return {"success": False, "error": message, "message": message}
+
+    @staticmethod
+    def _coerce_path(value: Any, *, base: Optional[Path] = None) -> Path:
+        if isinstance(value, Path):
+            path = value
+        elif isinstance(value, str) and value.strip():
+            path = Path(value.strip()).expanduser()
+        else:
+            raise ValueError("A non-empty local file path is required")
+
+        if base is not None and not path.is_absolute():
+            path = base / path
+        return path
+
+    def _validate_access(self, path: Path, operation, source: str) -> Tuple[Optional[Path], Optional[str]]:
+        """Validate one file operation through Freya's centralized allowlist."""
+        from app.core.file_allowlist import AccessDecision, PathType
+
+        try:
+            result = self._file_allowlist.validate_path(
+                path,
+                operation,
+                source=source,
+                path_type=PathType.FILE,
+            )
+        except (OSError, ValueError, TypeError) as error:
+            return None, f"Invalid file path: {error}"
+
+        if result.decision != AccessDecision.ALLOWED:
+            return None, f"File access denied: {result.reason}"
+
+        try:
+            return self._normalize_path(path), None
+        except (OSError, ValueError, TypeError) as error:
+            return None, f"Unable to normalize file path: {error}"
+
+    @staticmethod
+    def _metadata(path: Path) -> Dict[str, Any]:
+        from app.core.file_allowlist import FileTypeDetector
+
+        stat = path.stat()
+        mime_type, _ = mimetypes.guess_type(path.name)
+        return {
+            "uri": path.as_uri(),
+            "path": str(path),
+            "filename": path.name,
+            "extension": path.suffix.lower(),
+            "mime_type": mime_type or "application/octet-stream",
+            "file_type": FileTypeDetector.detect_type(path),
+            "size_bytes": stat.st_size,
+            "modified_at": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
+        }
+
+    @staticmethod
+    def _path_from_reference(reference: Any) -> Optional[str]:
+        """Extract a local path from current or future UI file-reference shapes."""
+        if isinstance(reference, str):
+            if reference.startswith("file://"):
+                parsed = urlparse(reference)
+                return unquote(parsed.path)
+            return reference
+        if isinstance(reference, dict):
+            for key in ("path", "local_path", "file_path", "uri"):
+                value = reference.get(key)
+                if isinstance(value, str) and value.strip():
+                    return _FileCapabilityBase._path_from_reference(value)
+        return None
+
+
+class FileInputCapability(_FileCapabilityBase):
+    """Validate and normalize local file references without processing contents."""
+
+    def __init__(self, file_allowlist=None):
+        super().__init__(
+            CapabilityMetadata(
+                name="file_input",
+                version="1.0.0",
+                description="Validate and normalize a local file reference for downstream capabilities",
+                category=CapabilityCategory.TOOL,
+                is_singleton=True,
+                auto_discoverable=True,
+                safe_query=True,
+                default_action="intake",
+                supported_actions=["intake"],
+                tags=["file", "input", "upload", "import", "attachment"],
+                provides=["normalized_file_reference"],
+            ),
+            file_allowlist=file_allowlist,
+        )
+
+    def action_intake(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        """Return a validated file reference and basic metadata for a local file."""
+        from app.core.file_allowlist import FileOperation
+
+        reference = inputs.get("file_reference")
+        path_value = (
+            inputs.get("file_path")
+            or inputs.get("path")
+            or self._path_from_reference(reference)
+        )
+        if not path_value:
+            return self._error(
+                "File input requires 'file_path', 'path', or a local 'file_reference'."
+            )
+
+        try:
+            requested_path = self._coerce_path(path_value)
+        except ValueError as error:
+            return self._error(str(error))
+
+        normalized_path, access_error = self._validate_access(
+            requested_path,
+            FileOperation.READ,
+            "FileInputCapability",
+        )
+        if access_error:
+            return self._error(access_error)
+        if normalized_path is None:
+            return self._error("Unable to normalize the input file path")
+        if not normalized_path.exists():
+            return self._error(f"Input file does not exist: {normalized_path}")
+
+        if not normalized_path.is_file():
+            return self._error(f"Input path is not a regular file: {normalized_path}")
+        if not os.access(normalized_path, os.R_OK):
+            return self._error(f"Input file is not readable: {normalized_path}")
+
+        try:
+            file_reference = self._metadata(normalized_path)
+        except OSError as error:
+            return self._error(f"Unable to inspect input file: {error}")
+
+        if isinstance(reference, dict) and reference.get("id"):
+            file_reference["source_reference_id"] = reference["id"]
+
+        self._publish_event(
+            "file.input.accepted",
+            {"path": str(normalized_path), "size_bytes": file_reference["size_bytes"]},
+        )
+        return {
+            "success": True,
+            "file_reference": file_reference,
+            "message": f"File input accepted: {file_reference['filename']}",
+        }
+
+
+class FileOutputCapability(_FileCapabilityBase):
+    """Safely persist artifacts supplied by other capabilities without generating content."""
+
+    def __init__(self, file_allowlist=None, output_root=None):
+        super().__init__(
+            CapabilityMetadata(
+                name="file_output",
+                version="1.0.0",
+                description="Safely save an existing artifact and return its normalized file reference",
+                category=CapabilityCategory.TOOL,
+                is_singleton=True,
+                auto_discoverable=True,
+                safe_query=True,
+                default_action="write",
+                supported_actions=["write"],
+                tags=["file", "output", "save", "export", "download"],
+                provides=["saved_file_reference"],
+            ),
+            file_allowlist=file_allowlist,
+            output_root=output_root,
+        )
+
+    @staticmethod
+    def _clean_filename(filename: Any) -> str:
+        if not isinstance(filename, str) or not filename.strip():
+            raise ValueError("Output filename must be a non-empty string")
+        name = filename.strip()
+        if "\x00" in name or "/" in name or "\\" in name:
+            raise ValueError("Output filename must not contain path separators")
+        if name in {".", ".."} or Path(name).name != name:
+            raise ValueError("Output filename is invalid")
+        return name
+
+    @staticmethod
+    def _normalize_extension(value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("Output extension must be a non-empty string")
+        extension = value.strip().lower()
+        if not extension.startswith("."):
+            extension = f".{extension}"
+        if len(extension) == 1 or any(char in extension for char in "/\\\x00"):
+            raise ValueError("Output extension is invalid")
+        return extension
+
+    def _artifact_extension(self, inputs: Dict[str, Any], source_path: Optional[Path], content: Optional[bytes]) -> str:
+        requested = self._normalize_extension(inputs.get("extension") or inputs.get("file_extension"))
+        if requested:
+            return requested
+        if source_path and source_path.suffix:
+            return source_path.suffix.lower()
+        mime_type = inputs.get("mime_type")
+        if isinstance(mime_type, str):
+            guessed = mimetypes.guess_extension(mime_type, strict=False)
+            if guessed:
+                return guessed
+        # Text is the safe default for inline artifacts. Binary producers should
+        # provide a source artifact, MIME type, or explicit extension.
+        return ".txt" if content is not None else ".txt"
+
+    def _resolve_target(
+        self,
+        inputs: Dict[str, Any],
+        extension: str,
+    ) -> Tuple[Optional[Path], Optional[str]]:
+        destination = inputs.get("destination_path") or inputs.get("destination")
+        output_dir = inputs.get("output_dir")
+        filename = inputs.get("filename") or inputs.get("output_filename")
+
+        try:
+            if destination:
+                destination_value = str(destination)
+                target_or_directory = self._coerce_path(destination_value, base=self._output_root)
+                destination_is_directory = bool(inputs.get("destination_is_directory")) or (
+                    target_or_directory.exists() and target_or_directory.is_dir()
+                ) or destination_value.endswith(("/", "\\"))
+                if destination_is_directory:
+                    filename = self._clean_filename(filename) if filename else self._generated_filename(extension)
+                    target = target_or_directory / filename
+                else:
+                    if filename:
+                        return None, "Specify either a destination file path or a destination directory with filename."
+                    target = target_or_directory
+            else:
+                directory = self._coerce_path(
+                    output_dir,
+                    base=self._output_root,
+                ) if output_dir else self._output_root / "outputs"
+                safe_filename = self._clean_filename(filename) if filename else self._generated_filename(extension)
+                target = directory / safe_filename
+        except ValueError as error:
+            return None, str(error)
+
+        if not target.name or target.name in {".", ".."}:
+            return None, "Output path must include a file name"
+        if not target.suffix:
+            target = target.with_name(f"{target.name}{extension}")
+        return target, None
+
+    @staticmethod
+    def _generated_filename(extension: str) -> str:
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        return f"artifact-{timestamp}{extension}"
+
+    def _source_path(self, inputs: Dict[str, Any]) -> Optional[str]:
+        source = inputs.get("artifact_path") or inputs.get("source_path")
+        if source:
+            return str(source)
+        artifact = inputs.get("artifact") or inputs.get("file_reference")
+        return self._path_from_reference(artifact)
+
+    def action_write(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        """Save inline bytes/text or an existing artifact to an approved destination."""
+        from app.core.file_allowlist import FileOperation
+
+        has_content = "content" in inputs
+        source_value = self._source_path(inputs)
+        if has_content and source_value:
+            return self._error("Provide either inline content or one source artifact, not both.")
+        if not has_content and not source_value:
+            return self._error(
+                "File output requires inline 'content' or an existing 'artifact_path' or 'file_reference'."
+            )
+
+        content: Optional[bytes] = None
+        source_path: Optional[Path] = None
+        if has_content:
+            raw_content = inputs["content"]
+            if isinstance(raw_content, str):
+                content = raw_content.encode(inputs.get("encoding", "utf-8"))
+            elif isinstance(raw_content, (bytes, bytearray, memoryview)):
+                content = bytes(raw_content)
+            else:
+                return self._error("Inline output content must be text or bytes.")
+        else:
+            try:
+                requested_source = self._coerce_path(source_value)
+            except ValueError as error:
+                return self._error(str(error))
+            source_path, source_error = self._validate_access(
+                requested_source,
+                FileOperation.READ,
+                "FileOutputCapability.source",
+            )
+            if source_error:
+                return self._error(source_error)
+            if source_path is None:
+                return self._error("Unable to normalize the source artifact path")
+            if not source_path.exists() or not source_path.is_file():
+                return self._error(f"Source artifact does not exist or is not a file: {source_path}")
+
+        try:
+            extension = self._artifact_extension(inputs, source_path, content)
+        except ValueError as error:
+            return self._error(str(error))
+        target, target_error = self._resolve_target(inputs, extension)
+        if target_error:
+            return self._error(target_error)
+        if target is None:
+            return self._error("Unable to resolve output path")
+
+        overwrite = bool(inputs.get("overwrite", False))
+        normalized_target, access_error = self._validate_access(
+            target,
+            FileOperation.WRITE if overwrite else FileOperation.CREATE,
+            "FileOutputCapability",
+        )
+        if access_error:
+            return self._error(access_error)
+        if normalized_target is None:
+            return self._error("Unable to normalize the output path")
+
+        if source_path and source_path == normalized_target:
+            return self._error("Source artifact and output path must be different.")
+        if normalized_target.exists() and not overwrite:
+            return self._error(
+                f"Refusing to overwrite existing file without overwrite=True: {normalized_target}"
+            )
+        if not normalized_target.parent.exists() and not bool(inputs.get("create_directories", True)):
+            return self._error(f"Output directory does not exist: {normalized_target.parent}")
+
+        try:
+            normalized_target.parent.mkdir(parents=True, exist_ok=True)
+            mode = "wb" if overwrite else "xb"
+            with normalized_target.open(mode) as destination_file:
+                if source_path:
+                    with source_path.open("rb") as source_file:
+                        shutil.copyfileobj(source_file, destination_file)
+                else:
+                    destination_file.write(content or b"")
+            file_reference = self._metadata(normalized_target)
+        except FileExistsError:
+            return self._error(
+                f"Refusing to overwrite existing file without overwrite=True: {normalized_target}"
+            )
+        except (OSError, ValueError) as error:
+            return self._error(f"Unable to save output file: {error}")
+
+        self._publish_event(
+            "file.output.saved",
+            {
+                "path": str(normalized_target),
+                "size_bytes": file_reference["size_bytes"],
+                "overwritten": overwrite,
+            },
+        )
+        return {
+            "success": True,
+            "path": str(normalized_target),
+            "saved_path": str(normalized_target),
+            "file_reference": file_reference,
+            "overwritten": overwrite,
+            "message": f"Saved output file: {file_reference['filename']}",
+        }
+
+
+# =============================================================================
 # Factory function to create all capabilities
 # =============================================================================
 
@@ -1052,6 +1438,8 @@ def create_all_capabilities(agent=None) -> List[BaseCapability]:
         KnowledgeBaseCapability(),
         ReasoningEngineCapability(),
         OrchestrationCoreCapability(),
+        FileInputCapability(),
+        FileOutputCapability(),
     ]
 
     if agent:

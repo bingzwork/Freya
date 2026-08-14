@@ -118,6 +118,13 @@ class FileAllowlistConfig:
         ".dockerfile", ".dockerignore", ".gitignore",
         ".cfg", ".conf", ".ini", ".env",
         ".csv", ".tsv", ".xml", ".yml",
+        # Passive document, image, audio, and video artifacts. Execution-capable
+        # binaries remain blocked below; specialized capabilities own processing.
+        ".pdf", ".doc", ".docx", ".odt", ".rtf",
+        ".xls", ".xlsx", ".ods", ".ppt", ".pptx", ".odp",
+        ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".tif", ".tiff",
+        ".mp3", ".wav", ".m4a", ".ogg", ".flac", ".aac",
+        ".mp4", ".mov", ".mkv", ".avi", ".webm",
     })
     blocked_extensions: Set[str] = field(default_factory=lambda: {
         ".exe", ".dll", ".so", ".dylib", ".bin",

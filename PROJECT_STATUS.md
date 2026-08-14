@@ -2,7 +2,7 @@
 
 ## Current position
 
-**Freya is MVP Ready.** The canonical local-first runtime now starts from one initializer-owned graph and supports grounded local-memory answers, registered local capabilities, verified local-model fallback disclosure, safety-gated execution, execution-result verification, terminal-failure reporting, and validated learning promotion through `MemoryCoordinator`.
+**Freya is MVP Ready.** The canonical local-first runtime now starts from one initializer-owned graph and supports grounded local-memory answers, registered local capabilities, safe local file intake and export, verified local-model fallback disclosure, safety-gated execution, execution-result verification, terminal-failure reporting, and validated learning promotion through `MemoryCoordinator`.
 
 > **MVP decision:** There are **no remaining MVP blockers** in the current canonical runtime. The completed P1/P2 work below is intentionally narrow hardening; it preserves the established architecture and compatibility boundaries rather than introducing a replacement subsystem.
 
@@ -16,6 +16,12 @@
 | **P2.1** | Added concise priority-hardening contracts covering capability registration, EventBus observer delivery, BackgroundJobService scheduling, correlation metadata, and the existing `MemoryCoordinator` durable-learning boundary. | A representative extension uses the canonical registration, event, scheduler, and memory ports rather than bypassing shared infrastructure. | Complete. |
 | **P2.2** | Extended readiness with health checks for `MemoryCoordinator`, `CapabilityRegistry`, `UnifiedRouter`, `ExecutionEngine`, `LearningPipeline`, `ToolManager`, and a bounded shutdown budget. Provider readiness now surfaces `healthy`, `degraded`, or `unavailable_but_safe` local-model state while identifying local memory and registered capabilities as safe paths. | Readiness distinguishes healthy, degraded, and unavailable-but-safe local-model states without breaking local memory or capability behavior. | Complete. |
 | **P2.3** | Removed seven confirmed unreferenced `.bak`, `.orig`, and `.full` duplicate source artifacts. The canonical package/import path retains one active runtime implementation. | Documentation and default imports identify one canonical runtime path, with compatibility retained only through declared code paths. | Complete. |
+
+## Completed capability extension work
+
+| Extension | Completed implementation | Definition of done | Result |
+|---|---|---|---|
+| **CE.1** | Added canonical `FileInputCapability` and `FileOutputCapability` implementations. File Input validates permitted local paths, normalizes path/URI references, detects type and MIME metadata, and returns a downstream file reference without processing contents. File Output writes supplied text, bytes, or existing artifacts to allowlisted destinations, creates directories when permitted, generates collision-resistant names, and refuses overwrite unless explicitly requested. Both capabilities are registered by `create_all_capabilities()` and discoverable through the existing registry-to-router-to-ToolManager bridge. The centralized allowlist now recognizes common passive document, image, audio, video, and spreadsheet artifact extensions while continuing to block executable binary types. | File-based workflows can safely intake or export approved local artifacts through existing Freya extension ports without adding a second routing or execution architecture. | Complete. |
 
 ## Architecture and validation surface
 
@@ -32,6 +38,7 @@ The reproducible canonical command now includes the priority-hardening and produ
 | `git diff --check` | Passed before final test run. |
 | `python3 -m compileall -q app main.py tests` | Passed before final test run. |
 | Focused priority, readiness, capability, and architecture contracts | Passed: **26 tests**. |
+| File Input/File Output and directly affected canonical capability contracts | Passed: **25 tests** (`tests/test_file_capabilities.py`, `tests/test_target_architecture_contracts.py`, and `tests/test_workflow_capability_safety.py`). |
 | Full reproducible canonical suite | Passed: **111 tests** across clean-process lifecycle, architecture, routing, execution, learning, capability safety, provider resilience, priority hardening, and readiness contracts. |
 
 ## Freya Core Architecture v1 freeze
@@ -57,11 +64,11 @@ The current production graph was checked against [`CURRENT_ARCHITECTURE.md`](CUR
 | Autonomy and diagnostics | `AutonomyManager`, `DiagnosticEngine`, `SafeSelfImprovement` |
 | Shared runtime services | `EventBus`, `BackgroundJobService`, `ObservabilityHub` |
 
-**Verification result:** the frozen document matches the current implemented production graph for these boundaries. No real implementation discrepancy requiring a code change was discovered. No production implementation files were changed; documentation validation was therefore sufficient. Remaining future-growth items and any future bugs must be addressed through the existing Freya Core Architecture v1 extension points and must preserve the frozen architecture.
+**Verification result:** the frozen document matches the current implemented production graph for these boundaries. The File Input/File Output extension was added through the approved capability, router, ToolManager, and centralized file-policy ports; it introduces no new architectural owner or execution graph. Remaining future-growth items and any future bugs must be addressed through the existing Freya Core Architecture v1 extension points and must preserve the frozen architecture.
 
 ## Remaining tasks
 
-There are **no remaining MVP tasks**. The six dependency-first P1/P2 hardening tasks are complete. The following entries are deliberately future growth work, not blockers for the MVP boundary.
+There are **no remaining MVP tasks**. The six dependency-first P1/P2 hardening tasks and the foundational File Input/File Output extension are complete. The next promoted non-blocking growth task is **G1**, the operator-facing local control surface; the following entries remain deliberately future growth work rather than MVP blockers.
 
 ## Future implementation for Freya to grow
 
