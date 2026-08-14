@@ -158,6 +158,7 @@ class HealthCheckResult:
     latency_ms: float = 0.0
     status_code: Optional[int] = None
     error_message: str = ""
+    error_category: Optional[str] = None
     response_content: str = ""
     # Additional metadata
     resolved_ip: Optional[str] = None
@@ -176,6 +177,7 @@ class HealthCheckResult:
             "latency_ms": self.latency_ms,
             "status_code": self.status_code,
             "error_message": self.error_message,
+            "error_category": self.error_category,
             "response_content": self.response_content[:500] if self.response_content else "",
             "resolved_ip": self.resolved_ip,
             "ssl_cert_expiry": self.ssl_cert_expiry,
@@ -214,77 +216,133 @@ class ServiceHealth:
 
 
 class NetworkHealthChecker:
-    """Performs network health checks for various protocols."""
+    """Performs bounded network health checks with an owned reusable session."""
 
     def __init__(self, default_timeout: float = 10.0):
         self.default_timeout = default_timeout
         self._session: Optional[aiohttp.ClientSession] = None
 
     async def _get_session(self) -> aiohttp.ClientSession:
-        """Get or create aiohttp session."""
+        """Get or create the checker-owned aiohttp session."""
         if self._session is None or self._session.closed:
             timeout = aiohttp.ClientTimeout(total=self.default_timeout)
             self._session = aiohttp.ClientSession(timeout=timeout)
         return self._session
 
     async def close(self) -> None:
-        """Close the aiohttp session."""
-        if self._session and not self._session.closed:
-            await self._session.close()
+        """Close the owned session exactly once and discard the closed reference."""
+        session, self._session = self._session, None
+        if session is not None and not session.closed:
+            await session.close()
+
+    @staticmethod
+    def _safe_resolve(hostname: Optional[str]) -> Optional[str]:
+        """Resolve a hostname for diagnostics without changing probe success."""
+        if not hostname:
+            return None
+        try:
+            return socket.gethostbyname(hostname)
+        except (socket.gaierror, OSError):
+            return None
+
+    @staticmethod
+    def _valid_timeout(timeout: Optional[float], default_timeout: float) -> float:
+        """Normalize timeout input while guaranteeing a bounded positive probe."""
+        candidate = default_timeout if timeout is None else timeout
+        try:
+            candidate = float(candidate)
+        except (TypeError, ValueError):
+            return default_timeout
+        return candidate if candidate > 0 else default_timeout
+
+    @staticmethod
+    def _http_check_type(scheme: str) -> CheckType:
+        return CheckType.HTTPS if scheme == "https" else CheckType.HTTP
 
     async def check_tcp(self, host: str, port: int, timeout: float = None) -> HealthCheckResult:
-        """Check TCP connectivity to a host:port."""
-        start_time = time.time()
-        timeout = timeout or self.default_timeout
-
-        try:
-            # Resolve hostname
-            resolved_ip = None
-            try:
-                resolved_ip = socket.gethostbyname(host)
-            except socket.gaierror:
-                pass
-
-            # Attempt connection
-            _, writer = await asyncio.wait_for(
-                asyncio.open_connection(host, port),
-                timeout=timeout
-            )
-            writer.close()
-            await writer.wait_closed()
-
-            latency_ms = (time.time() - start_time) * 1000
+        """Check TCP connectivity and always return a structured result."""
+        start_time = time.monotonic()
+        timeout = self._valid_timeout(timeout, self.default_timeout)
+        endpoint_name = f"{host}:{port}"
+        if not isinstance(host, str) or not host.strip() or not isinstance(port, int) or not 1 <= port <= 65535:
             return HealthCheckResult(
-                endpoint_name=f"{host}:{port}",
+                endpoint_name=endpoint_name,
+                service_name="",
+                check_type=CheckType.TCP,
+                status=ServiceStatus.UNHEALTHY,
+                success=False,
+                error_message="Invalid TCP endpoint",
+                error_category="invalid_endpoint",
+            )
+
+        resolved_ip = self._safe_resolve(host)
+        writer = None
+        try:
+            _, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=timeout)
+            return HealthCheckResult(
+                endpoint_name=endpoint_name,
                 service_name="",
                 check_type=CheckType.TCP,
                 status=ServiceStatus.HEALTHY,
                 success=True,
-                latency_ms=latency_ms,
+                latency_ms=(time.monotonic() - start_time) * 1000,
                 resolved_ip=resolved_ip,
             )
         except asyncio.TimeoutError:
             return HealthCheckResult(
-                endpoint_name=f"{host}:{port}",
+                endpoint_name=endpoint_name,
                 service_name="",
                 check_type=CheckType.TCP,
                 status=ServiceStatus.UNHEALTHY,
                 success=False,
-                latency_ms=(time.time() - start_time) * 1000,
+                latency_ms=(time.monotonic() - start_time) * 1000,
                 error_message=f"Connection timeout after {timeout}s",
-                resolved_ip=resolved_ip if 'resolved_ip' in locals() else None,
+                error_category="timeout",
+                resolved_ip=resolved_ip,
             )
-        except Exception as e:
+        except socket.gaierror as error:
             return HealthCheckResult(
-                endpoint_name=f"{host}:{port}",
+                endpoint_name=endpoint_name,
                 service_name="",
                 check_type=CheckType.TCP,
                 status=ServiceStatus.UNHEALTHY,
                 success=False,
-                latency_ms=(time.time() - start_time) * 1000,
-                error_message=str(e),
-                resolved_ip=resolved_ip if 'resolved_ip' in locals() else None,
+                latency_ms=(time.monotonic() - start_time) * 1000,
+                error_message=str(error),
+                error_category="dns_failure",
+                resolved_ip=resolved_ip,
             )
+        except (ConnectionError, OSError) as error:
+            return HealthCheckResult(
+                endpoint_name=endpoint_name,
+                service_name="",
+                check_type=CheckType.TCP,
+                status=ServiceStatus.UNHEALTHY,
+                success=False,
+                latency_ms=(time.monotonic() - start_time) * 1000,
+                error_message=str(error),
+                error_category="connection_failure",
+                resolved_ip=resolved_ip,
+            )
+        except Exception as error:
+            return HealthCheckResult(
+                endpoint_name=endpoint_name,
+                service_name="",
+                check_type=CheckType.TCP,
+                status=ServiceStatus.UNHEALTHY,
+                success=False,
+                latency_ms=(time.monotonic() - start_time) * 1000,
+                error_message=str(error),
+                error_category="check_failure",
+                resolved_ip=resolved_ip,
+            )
+        finally:
+            if writer is not None:
+                writer.close()
+                try:
+                    await writer.wait_closed()
+                except (ConnectionError, OSError):
+                    pass
 
     async def check_http(
         self,
@@ -296,130 +354,174 @@ class NetworkHealthChecker:
         auth_token: str = None,
         auth_type: str = "bearer",
     ) -> HealthCheckResult:
-        """Check HTTP/HTTPS endpoint health."""
-        start_time = time.time()
-        timeout = timeout or self.default_timeout
+        """Check an HTTP(S) endpoint with validation, bounded execution, and error classification."""
+        start_time = time.monotonic()
+        timeout = self._valid_timeout(timeout, self.default_timeout)
         expected_status_codes = expected_status_codes or [200]
-        headers = headers or {}
+        request_headers = dict(headers or {})
 
         if auth_token:
             if auth_type == "bearer":
-                headers["Authorization"] = f"Bearer {auth_token}"
+                request_headers["Authorization"] = f"Bearer {auth_token}"
             elif auth_type == "api_key":
-                headers["X-API-Key"] = auth_token
-
-        parsed = urlparse(url)
-        endpoint_name = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+                request_headers["X-API-Key"] = auth_token
 
         try:
+            parsed = urlparse(url) if isinstance(url, str) else None
+            if not parsed or parsed.scheme not in {"http", "https"} or not parsed.hostname:
+                raise ValueError("URL must include an HTTP(S) scheme and hostname")
+            # Accessing .port validates malformed port strings and IPv6 literals.
+            parsed.port
+        except (TypeError, ValueError) as error:
+            return HealthCheckResult(
+                endpoint_name="invalid_endpoint",
+                service_name="",
+                check_type=CheckType.HTTP,
+                status=ServiceStatus.UNHEALTHY,
+                success=False,
+                latency_ms=(time.monotonic() - start_time) * 1000,
+                error_message=f"Invalid HTTP endpoint: {error}",
+                error_category="invalid_endpoint",
+            )
+
+        endpoint_name = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+        check_type = self._http_check_type(parsed.scheme)
+        try:
             session = await self._get_session()
-            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=timeout)) as response:
-                latency_ms = (time.time() - start_time) * 1000
+            request_timeout = aiohttp.ClientTimeout(total=timeout)
+            async with session.get(
+                url,
+                headers=request_headers,
+                timeout=request_timeout,
+                allow_redirects=True,
+            ) as response:
+                latency_ms = (time.monotonic() - start_time) * 1000
                 status_code = response.status
                 content = await response.text()
-
-                success = status_code in expected_status_codes
-                if expected_content and success:
-                    success = expected_content in content
-
-                status = ServiceStatus.HEALTHY if success else ServiceStatus.DEGRADED
-                if not success and latency_ms > timeout * 1000:
-                    status = ServiceStatus.UNHEALTHY
-
-                # Check SSL cert for HTTPS
-                ssl_cert_expiry = None
-                if parsed.scheme == "https":
-                    try:
-                        # Note: aiohttp doesn't expose cert info easily
-                        # This would need a separate ssl check
-                        pass
-                    except Exception:
-                        pass
+                status_matches = status_code in expected_status_codes
+                content_matches = not expected_content or expected_content in content
+                success = status_matches and content_matches
+                error_category = None
+                error_message = ""
+                if not success:
+                    error_category = "http_error" if not status_matches else "content_mismatch"
+                    error_message = (
+                        f"Status {status_code} not in expected {expected_status_codes}"
+                        if not status_matches
+                        else "Expected response content was not present"
+                    )
 
                 return HealthCheckResult(
                     endpoint_name=endpoint_name,
                     service_name="",
-                    check_type=CheckType.HTTPS if parsed.scheme == "https" else CheckType.HTTP,
-                    status=status,
+                    check_type=check_type,
+                    status=ServiceStatus.HEALTHY if success else ServiceStatus.DEGRADED,
                     success=success,
                     latency_ms=latency_ms,
                     status_code=status_code,
-                    error_message="" if success else f"Status {status_code} not in expected {expected_status_codes}",
+                    error_message=error_message,
+                    error_category=error_category,
                     response_content=content[:1000],
-                    resolved_ip=socket.gethostbyname(parsed.hostname) if parsed.hostname else None,
-                    ssl_cert_expiry=ssl_cert_expiry,
+                    resolved_ip=self._safe_resolve(parsed.hostname),
                 )
         except asyncio.TimeoutError:
-            resolved_ip = None
-            try:
-                resolved_ip = socket.gethostbyname(parsed.hostname) if parsed.hostname else None
-            except Exception:
-                pass
             return HealthCheckResult(
                 endpoint_name=endpoint_name,
                 service_name="",
-                check_type=CheckType.HTTPS if parsed.scheme == "https" else CheckType.HTTP,
+                check_type=check_type,
                 status=ServiceStatus.UNHEALTHY,
                 success=False,
-                latency_ms=(time.time() - start_time) * 1000,
+                latency_ms=(time.monotonic() - start_time) * 1000,
                 error_message=f"Request timeout after {timeout}s",
-                resolved_ip=resolved_ip,
+                error_category="timeout",
+                resolved_ip=self._safe_resolve(parsed.hostname),
             )
-        except aiohttp.ClientError as e:
-            resolved_ip = None
-            try:
-                resolved_ip = socket.gethostbyname(parsed.hostname) if parsed.hostname else None
-            except Exception:
-                pass
+        except aiohttp.ClientConnectorDNSError as error:
             return HealthCheckResult(
                 endpoint_name=endpoint_name,
                 service_name="",
-                check_type=CheckType.HTTPS if parsed.scheme == "https" else CheckType.HTTP,
+                check_type=check_type,
                 status=ServiceStatus.UNHEALTHY,
                 success=False,
-                latency_ms=(time.time() - start_time) * 1000,
-                error_message=f"Client error: {str(e)}",
-                resolved_ip=resolved_ip,
+                latency_ms=(time.monotonic() - start_time) * 1000,
+                error_message=f"DNS resolution failed: {error}",
+                error_category="dns_failure",
+                resolved_ip=None,
             )
-        except Exception as e:
-            resolved_ip = None
-            try:
-                resolved_ip = socket.gethostbyname(parsed.hostname) if parsed.hostname else None
-            except Exception:
-                pass
+        except aiohttp.ClientConnectionError as error:
             return HealthCheckResult(
                 endpoint_name=endpoint_name,
                 service_name="",
-                check_type=CheckType.HTTPS if parsed.scheme == "https" else CheckType.HTTP,
+                check_type=check_type,
                 status=ServiceStatus.UNHEALTHY,
                 success=False,
-                latency_ms=(time.time() - start_time) * 1000,
-                error_message=str(e),
-                resolved_ip=resolved_ip,
+                latency_ms=(time.monotonic() - start_time) * 1000,
+                error_message=f"Connection failed: {error}",
+                error_category="connection_failure",
+                resolved_ip=self._safe_resolve(parsed.hostname),
+            )
+        except aiohttp.ClientError as error:
+            return HealthCheckResult(
+                endpoint_name=endpoint_name,
+                service_name="",
+                check_type=check_type,
+                status=ServiceStatus.UNHEALTHY,
+                success=False,
+                latency_ms=(time.monotonic() - start_time) * 1000,
+                error_message=f"Client error: {error}",
+                error_category="client_error",
+                resolved_ip=self._safe_resolve(parsed.hostname),
+            )
+        except (ConnectionError, OSError) as error:
+            return HealthCheckResult(
+                endpoint_name=endpoint_name,
+                service_name="",
+                check_type=check_type,
+                status=ServiceStatus.UNHEALTHY,
+                success=False,
+                latency_ms=(time.monotonic() - start_time) * 1000,
+                error_message=f"Connection failed: {error}",
+                error_category="connection_failure",
+                resolved_ip=self._safe_resolve(parsed.hostname),
+            )
+        except Exception as error:
+            return HealthCheckResult(
+                endpoint_name=endpoint_name,
+                service_name="",
+                check_type=check_type,
+                status=ServiceStatus.UNHEALTHY,
+                success=False,
+                latency_ms=(time.monotonic() - start_time) * 1000,
+                error_message=str(error),
+                error_category="check_failure",
+                resolved_ip=self._safe_resolve(parsed.hostname),
             )
 
     async def check_dns(self, hostname: str, timeout: float = None) -> HealthCheckResult:
-        """Check DNS resolution for a hostname."""
-        start_time = time.time()
-        timeout = timeout or self.default_timeout
-
+        """Check DNS resolution without allowing an invalid host to escape as an exception."""
+        start_time = time.monotonic()
+        timeout = self._valid_timeout(timeout, self.default_timeout)
+        if not isinstance(hostname, str) or not hostname.strip():
+            return HealthCheckResult(
+                endpoint_name="invalid_endpoint",
+                service_name="",
+                check_type=CheckType.DNS,
+                status=ServiceStatus.UNHEALTHY,
+                success=False,
+                error_message="Invalid DNS hostname",
+                error_category="invalid_endpoint",
+            )
         try:
             loop = asyncio.get_event_loop()
-            # Use getaddrinfo for async DNS resolution
-            addrinfo = await asyncio.wait_for(
-                loop.getaddrinfo(hostname, None),
-                timeout=timeout
-            )
-            ips = [ai[4][0] for ai in addrinfo]
-            latency_ms = (time.time() - start_time) * 1000
-
+            addrinfo = await asyncio.wait_for(loop.getaddrinfo(hostname, None), timeout=timeout)
+            ips = [entry[4][0] for entry in addrinfo]
             return HealthCheckResult(
                 endpoint_name=hostname,
                 service_name="",
                 check_type=CheckType.DNS,
                 status=ServiceStatus.HEALTHY,
                 success=True,
-                latency_ms=latency_ms,
+                latency_ms=(time.monotonic() - start_time) * 1000,
                 resolved_ip=ips[0] if ips else None,
                 metadata={"resolved_ips": ips},
             )
@@ -430,18 +532,31 @@ class NetworkHealthChecker:
                 check_type=CheckType.DNS,
                 status=ServiceStatus.UNHEALTHY,
                 success=False,
-                latency_ms=(time.time() - start_time) * 1000,
+                latency_ms=(time.monotonic() - start_time) * 1000,
                 error_message=f"DNS resolution timeout after {timeout}s",
+                error_category="timeout",
             )
-        except Exception as e:
+        except socket.gaierror as error:
             return HealthCheckResult(
                 endpoint_name=hostname,
                 service_name="",
                 check_type=CheckType.DNS,
                 status=ServiceStatus.UNHEALTHY,
                 success=False,
-                latency_ms=(time.time() - start_time) * 1000,
-                error_message=str(e),
+                latency_ms=(time.monotonic() - start_time) * 1000,
+                error_message=str(error),
+                error_category="dns_failure",
+            )
+        except Exception as error:
+            return HealthCheckResult(
+                endpoint_name=hostname,
+                service_name="",
+                check_type=CheckType.DNS,
+                status=ServiceStatus.UNHEALTHY,
+                success=False,
+                latency_ms=(time.monotonic() - start_time) * 1000,
+                error_message=str(error),
+                error_category="check_failure",
             )
 
 
@@ -681,10 +796,14 @@ class NetworkMonitor:
         return results
 
     async def _check_endpoint(self, service_name: str, endpoint: EndpointConfig) -> HealthCheckResult:
-        """Check a single endpoint with retries."""
-        last_result = None
+        """Check a single endpoint with at least one bounded attempt."""
+        try:
+            attempts = max(1, int(endpoint.max_retries))
+        except (TypeError, ValueError):
+            attempts = 1
+        last_result: Optional[HealthCheckResult] = None
 
-        for attempt in range(endpoint.max_retries):
+        for attempt in range(attempts):
             if endpoint.check_type in (CheckType.HTTP, CheckType.HTTPS):
                 result = await self._checker.check_http(
                     endpoint.url,
@@ -696,11 +815,13 @@ class NetworkMonitor:
                     auth_type=endpoint.auth_type,
                 )
             elif endpoint.check_type == CheckType.TCP:
-                # Parse host:port from URL
-                parsed = urlparse(endpoint.url)
-                host = parsed.hostname
-                port = parsed.port or (443 if parsed.scheme == "https" else 80)
-                if not host:
+                try:
+                    parsed = urlparse(endpoint.url)
+                    host = parsed.hostname
+                    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+                except (TypeError, ValueError):
+                    host, port = None, None
+                if not host or port is None:
                     result = HealthCheckResult(
                         endpoint_name=endpoint.name,
                         service_name=service_name,
@@ -708,12 +829,13 @@ class NetworkMonitor:
                         status=ServiceStatus.UNHEALTHY,
                         success=False,
                         error_message="Invalid URL for TCP check",
+                        error_category="invalid_endpoint",
                     )
                 else:
                     result = await self._checker.check_tcp(host, port, endpoint.timeout_seconds)
             elif endpoint.check_type == CheckType.DNS:
-                parsed = urlparse(endpoint.url)
-                host = parsed.hostname or endpoint.url
+                parsed = urlparse(endpoint.url) if isinstance(endpoint.url, str) else None
+                host = parsed.hostname if parsed and parsed.hostname else endpoint.url
                 result = await self._checker.check_dns(host, endpoint.timeout_seconds)
             else:
                 result = HealthCheckResult(
@@ -723,41 +845,35 @@ class NetworkMonitor:
                     status=ServiceStatus.UNHEALTHY,
                     success=False,
                     error_message=f"Unsupported check type: {endpoint.check_type}",
+                    error_category="unsupported_check",
                 )
 
             result.service_name = service_name
             result.endpoint_name = endpoint.name
             last_result = result
 
-            # Update stats and history (thread-safe)
             with self._lock:
                 self._stats["total_checks"] += 1
-                if result.success:
-                    self._stats["successful_checks"] += 1
-                else:
-                    self._stats["failed_checks"] += 1
-
-                # Add to history
+                self._stats["successful_checks" if result.success else "failed_checks"] += 1
                 self._check_history.append(result)
                 if len(self._check_history) > self._max_history:
                     self._check_history = self._check_history[-self._max_history:]
 
-            # Emit events for specific failure types
             if not result.success:
                 self._emit_failure_event(service_name, endpoint, result, attempt)
-
-            # If successful, break retry loop
             if result.success:
                 break
+            if attempt < attempts - 1:
+                try:
+                    retry_delay = max(0.0, float(endpoint.retry_delay_seconds))
+                except (TypeError, ValueError):
+                    retry_delay = 0.0
+                if retry_delay:
+                    await asyncio.sleep(retry_delay)
 
-            # Wait before retry
-            if attempt < endpoint.max_retries - 1:
-                await asyncio.sleep(endpoint.retry_delay_seconds)
-
-        # Check latency threshold and trigger alert if needed
-        if last_result and last_result.latency_ms > endpoint.max_latency_ms:
+        assert last_result is not None
+        if last_result.latency_ms > endpoint.max_latency_ms:
             await self._trigger_latency_alert(service_name, endpoint, last_result)
-
         return last_result
 
     def _emit_failure_event(self, service_name: str, endpoint: EndpointConfig, result: HealthCheckResult, attempt: int) -> None:
@@ -772,6 +888,7 @@ class NetworkMonitor:
                     "endpoint_name": endpoint.name,
                     "url": endpoint.url,
                     "error": result.error_message,
+                    "error_category": result.error_category,
                     "attempt": attempt + 1,
                     "max_retries": endpoint.max_retries,
                 },
@@ -787,6 +904,7 @@ class NetworkMonitor:
                     "endpoint_name": endpoint.name,
                     "url": endpoint.url,
                     "error": result.error_message,
+                    "error_category": result.error_category,
                     "attempt": attempt + 1,
                     "max_retries": endpoint.max_retries,
                     "timeout_seconds": endpoint.timeout_seconds,
@@ -803,6 +921,7 @@ class NetworkMonitor:
                     "endpoint_name": endpoint.name,
                     "url": endpoint.url,
                     "error": result.error_message,
+                    "error_category": result.error_category,
                     "attempt": attempt + 1,
                     "max_retries": endpoint.max_retries,
                 },
@@ -819,6 +938,7 @@ class NetworkMonitor:
                     "url": endpoint.url,
                     "check_type": endpoint.check_type.value,
                     "error": result.error_message,
+                    "error_category": result.error_category,
                     "attempt": attempt + 1,
                     "max_retries": endpoint.max_retries,
                     "latency_ms": result.latency_ms,
@@ -870,34 +990,47 @@ class NetworkMonitor:
         )
 
     def _update_service_health(self, service_name: str, results: List[HealthCheckResult]) -> None:
-        """Update aggregated service health from check results."""
+        """Update aggregated health only from completed, structured endpoint results."""
         with self._lock:
             health = self._service_health[service_name]
             health.last_check = datetime.now(timezone.utc).isoformat()
             health.last_results = results
             health.total_endpoints = len(results)
 
-            healthy_count = sum(1 for r in results if r.success)
-            health.healthy_endpoints = healthy_count
+            if not results:
+                health.status = ServiceStatus.UNKNOWN
+                health.healthy_endpoints = 0
+                health.consecutive_failures = 0
+                health.consecutive_successes = 0
+                health.metadata.update({
+                    "verified": False,
+                    "reason": "No enabled endpoints were checked",
+                    "error_categories": [],
+                })
+                return
 
-            if healthy_count == 0:
-                health.status = ServiceStatus.UNHEALTHY
-            elif healthy_count == len(results):
+            healthy_count = sum(1 for result in results if result.success)
+            health.healthy_endpoints = healthy_count
+            if healthy_count == len(results):
                 health.status = ServiceStatus.HEALTHY
+            elif healthy_count == 0:
+                health.status = ServiceStatus.UNHEALTHY
             else:
                 health.status = ServiceStatus.DEGRADED
 
-            # Update consecutive counts
-            if health.healthy_endpoints == health.total_endpoints:
+            health.metadata.update({
+                "verified": True,
+                "error_categories": sorted({result.error_category for result in results if result.error_category}),
+            })
+            if health.status == ServiceStatus.HEALTHY:
                 health.consecutive_successes += 1
                 health.consecutive_failures = 0
             else:
                 health.consecutive_failures += 1
                 health.consecutive_successes = 0
 
-            # Calculate uptime percentage (simplified)
             total_checks = health.consecutive_successes + health.consecutive_failures
-            if total_checks > 0:
+            if total_checks:
                 health.uptime_percentage = (health.consecutive_successes / total_checks) * 100
 
     async def check_all_services(self) -> Dict[str, List[HealthCheckResult]]:

@@ -120,6 +120,28 @@ class GPUMetrics:
         }
 
 
+@dataclass
+class GPUHealthResult:
+    """Verified, structured GPU capability health for operational consumers."""
+    status: str = "unknown"
+    availability: str = "unknown"
+    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    reason: str = ""
+    error_category: Optional[str] = None
+    fallback_active: bool = False
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "component": "gpu",
+            "status": self.status,
+            "availability": self.availability,
+            "timestamp": self.timestamp,
+            "reason": self.reason,
+            "error_category": self.error_category,
+            "fallback_active": self.fallback_active,
+        }
+
+
 class GPUDetector:
     """Cross-vendor GPU hardware detection."""
 
@@ -128,9 +150,21 @@ class GPUDetector:
         self._amd_available = False
         self._intel_available = False
         self._vendor_detectors = {}
+        self._probe_errors: List[Dict[str, str]] = []
+
+    @property
+    def probe_errors(self) -> List[Dict[str, str]]:
+        return list(self._probe_errors)
+
+    def _record_probe_error(self, source: str, error: Exception) -> None:
+        category = "tooling_unavailable" if isinstance(error, (ImportError, FileNotFoundError)) else "probe_failure"
+        entry = {"source": source, "category": category, "message": str(error)}
+        if not any(item["source"] == source and item["category"] == category for item in self._probe_errors):
+            self._probe_errors.append(entry)
 
     def detect_all(self) -> List[GPUInfo]:
         """Detect all GPUs across all vendors."""
+        self._probe_errors.clear()
         all_gpus = []
 
         # Try NVIDIA via pynvml
@@ -223,12 +257,14 @@ class GPUDetector:
                         device_id=device_id,
                     )
                     gpus.append(gpu)
-                except Exception as e:
+                except Exception as error:
+                    self._record_probe_error("nvidia_device", error)
                     continue
 
             pynvml.nvmlShutdown()
-        except Exception:
+        except Exception as error:
             self._nvidia_available = False
+            self._record_probe_error("nvidia", error)
 
         return gpus
 
@@ -278,8 +314,8 @@ class GPUDetector:
                         )
                         gpus.append(gpu)
                 self._amd_available = True
-        except Exception:
-            pass
+        except Exception as error:
+            self._record_probe_error("amd", error)
 
         # Fallback to lspci for AMD
         if not gpus:
@@ -316,8 +352,8 @@ class GPUDetector:
                         device_id=device_id,
                     )
                     gpus.append(gpu)
-        except Exception:
-            pass
+        except Exception as error:
+            self._record_probe_error("amd_lspci", error)
 
         return gpus
 
@@ -386,8 +422,8 @@ class GPUDetector:
                         device_id=device_id,
                     )
                     gpus.append(gpu)
-        except Exception:
-            pass
+        except Exception as error:
+            self._record_probe_error("intel_lspci", error)
 
         return gpus
 
@@ -433,8 +469,8 @@ class GPUDetector:
                         device_id=device_id,
                     )
                     gpus.append(gpu)
-        except Exception:
-            pass
+        except Exception as error:
+            self._record_probe_error("lspci", error)
 
         return gpus
 
@@ -444,9 +480,21 @@ class GPUMetricsCollector:
 
     def __init__(self):
         self._nvidia_available = False
+        self._probe_errors: List[Dict[str, str]] = []
+
+    @property
+    def probe_errors(self) -> List[Dict[str, str]]:
+        return list(self._probe_errors)
+
+    def _record_probe_error(self, source: str, error: Exception) -> None:
+        category = "tooling_unavailable" if isinstance(error, (ImportError, FileNotFoundError)) else "probe_failure"
+        entry = {"source": source, "category": category, "message": str(error)}
+        if not any(item["source"] == source and item["category"] == category for item in self._probe_errors):
+            self._probe_errors.append(entry)
 
     def collect_all(self) -> List[GPUMetrics]:
         """Collect metrics from all detected GPUs."""
+        self._probe_errors.clear()
         all_metrics = []
 
         # NVIDIA via pynvml
@@ -565,8 +613,9 @@ class GPUMetricsCollector:
                     continue
 
             pynvml.nvmlShutdown()
-        except Exception:
+        except Exception as error:
             self._nvidia_available = False
+            self._record_probe_error("nvidia_metrics", error)
 
         return metrics
 
@@ -597,8 +646,8 @@ class GPUMetricsCollector:
                             fan_speed_percent=self._parse_float(val.get("Fan Speed (%)")) if val.get("Fan Speed (%)") else None,
                         )
                         metrics.append(m)
-        except Exception:
-            pass
+        except Exception as error:
+            self._record_probe_error("amd_metrics", error)
 
         return metrics
 
@@ -619,7 +668,7 @@ class GPUMetricsCollector:
 
 
 class GPUMonitor:
-    """Main GPU monitoring class integrating with EventBus."""
+    """Cross-vendor GPU monitor with explicit optional-capability health reporting."""
 
     def __init__(
         self,
@@ -628,34 +677,95 @@ class GPUMonitor:
         poll_interval_seconds: float = 5.0,
         enabled: bool = True,
     ):
-        """Initialize GPU monitor.
-
-        Args:
-            workspace: Project workspace directory
-            event_bus: EventBus instance for publishing events
-            poll_interval_seconds: Polling interval for metrics collection
-            enabled: Whether monitoring is enabled
-        """
         self.workspace = Path(workspace).resolve()
         self.event_bus = event_bus or get_event_bus()
         self.poll_interval = poll_interval_seconds
         self.enabled = enabled
-
         self._detector = GPUDetector()
         self._collector = GPUMetricsCollector()
-
         self._gpu_info: List[GPUInfo] = []
         self._current_metrics: List[GPUMetrics] = []
         self._running = False
         self._lock = threading.RLock()
+        self._gpu_health = GPUHealthResult()
+        self._initialize_hardware_state()
 
-        # Initial detection
-        self._gpu_info = self._detector.detect_all()
+    def _set_gpu_health(
+        self,
+        *,
+        status: str,
+        availability: str,
+        reason: str = "",
+        error_category: Optional[str] = None,
+        fallback_active: bool = False,
+    ) -> None:
+        self._gpu_health = GPUHealthResult(
+            status=status,
+            availability=availability,
+            reason=reason,
+            error_category=error_category,
+            fallback_active=fallback_active,
+        )
+
+    def _initialize_hardware_state(self) -> None:
+        if not self.enabled:
+            self._set_gpu_health(
+                status="disabled",
+                availability="unknown",
+                reason="GPU monitoring is disabled",
+            )
+            return
+        try:
+            self._gpu_info = self._detector.detect_all()
+        except Exception as error:
+            self._gpu_info = []
+            self._set_gpu_health(
+                status="degraded",
+                availability="unknown",
+                reason=f"GPU detection failed: {error}",
+                error_category="probe_failure",
+                fallback_active=True,
+            )
+            self._emit_gpu_probe_failure()
+            self._emit_fallback_activated()
+            return
+
+        probe_errors = getattr(self._detector, "probe_errors", [])
+        probe_failure = next((entry for entry in probe_errors if entry.get("category") == "probe_failure"), None)
         if self._gpu_info:
+            self._set_gpu_health(
+                status="degraded" if probe_failure else "healthy",
+                availability="available",
+                reason=(probe_failure or {}).get("message", "GPU devices detected"),
+                error_category=(probe_failure or {}).get("category"),
+            )
             self._emit_gpu_detected_events()
+            if probe_failure:
+                self._emit_gpu_probe_failure()
+            return
+
+        if probe_failure:
+            self._set_gpu_health(
+                status="degraded",
+                availability="unknown",
+                reason=probe_failure.get("message", "GPU detection probe failed"),
+                error_category="probe_failure",
+                fallback_active=True,
+            )
+            self._emit_gpu_probe_failure()
+        else:
+            tooling_error = next((entry for entry in probe_errors if entry.get("category") == "tooling_unavailable"), None)
+            self._set_gpu_health(
+                status="unavailable",
+                availability="unavailable",
+                reason=(tooling_error or {}).get("message", "No supported GPU detected"),
+                error_category=(tooling_error or {}).get("category", "no_supported_gpu"),
+                fallback_active=True,
+            )
+            self._emit_gpu_unavailable()
+        self._emit_fallback_activated()
 
     def _emit_gpu_detected_events(self) -> None:
-        """Emit GPU detected events."""
         for gpu in self._gpu_info:
             self.event_bus.emit(
                 name="gpu.detected",
@@ -665,186 +775,185 @@ class GPUMonitor:
                 tags={"vendor": gpu.vendor.value},
             )
 
+    def _emit_gpu_unavailable(self) -> None:
+        self.event_bus.emit(
+            name="gpu.unavailable",
+            data=self._gpu_health.to_dict(),
+            source="gpu_monitor",
+            priority=EventPriority.NORMAL,
+            tags={"availability": "unavailable"},
+        )
+
+    def _emit_gpu_probe_failure(self) -> None:
+        self.event_bus.emit(
+            name="gpu.probe_failed",
+            data=self._gpu_health.to_dict(),
+            source="gpu_monitor",
+            priority=EventPriority.HIGH,
+            tags={"error_category": self._gpu_health.error_category or "probe_failure"},
+        )
+
+    def _emit_fallback_activated(self) -> None:
+        self.event_bus.emit(
+            name="gpu.fallback_activated",
+            data=self._gpu_health.to_dict(),
+            source="gpu_monitor",
+            priority=EventPriority.NORMAL,
+            tags={"fallback": "cpu_local"},
+        )
+
     def get_gpu_info(self) -> List[GPUInfo]:
-        """Get static GPU hardware information."""
         with self._lock:
             return list(self._gpu_info)
 
     def get_gpu_count(self) -> int:
-        """Get number of detected GPUs."""
         with self._lock:
             return len(self._gpu_info)
 
     def get_gpus_by_vendor(self, vendor: GPUVendor) -> List[GPUInfo]:
-        """Get GPUs filtered by vendor."""
         with self._lock:
-            return [g for g in self._gpu_info if g.vendor == vendor]
+            return [gpu for gpu in self._gpu_info if gpu.vendor == vendor]
+
+    def get_health(self) -> Dict[str, Any]:
+        """Return the latest verified GPU capability health result."""
+        with self._lock:
+            return self._gpu_health.to_dict()
+
+    def _record_metrics_failure(self, error: Exception) -> None:
+        with self._lock:
+            availability = self._gpu_health.availability
+            fallback_active = availability != "available"
+            self._set_gpu_health(
+                status="degraded",
+                availability=availability,
+                reason=f"GPU metrics probe failed: {error}",
+                error_category="metrics_failure",
+                fallback_active=fallback_active,
+            )
+        self._emit_gpu_probe_failure()
 
     def collect_metrics(self) -> List[GPUMetrics]:
-        """Collect current GPU metrics."""
-        metrics = self._collector.collect_all()
+        """Collect GPU metrics; report a failed probe without crashing consumers."""
+        if not self.enabled:
+            return []
+        try:
+            metrics = self._collector.collect_all()
+        except Exception as error:
+            self._record_metrics_failure(error)
+            return []
+
+        collector_errors = getattr(self._collector, "probe_errors", [])
+        probe_failure = next((entry for entry in collector_errors if entry.get("category") == "probe_failure"), None)
+        if probe_failure and self._gpu_health.availability == "available":
+            self._record_metrics_failure(RuntimeError(probe_failure.get("message", "GPU metrics probe failed")))
 
         with self._lock:
-            self._current_metrics = metrics
+            previous_metrics = {metric.index: metric for metric in self._current_metrics}
+            self._current_metrics = list(metrics)
+        for metric in metrics:
+            self._check_and_emit_change_events(metric, previous_metrics.get(metric.index))
+        return list(metrics)
 
-            # Update GPU info with dynamic data
-            for metric in self._current_metrics:
-                self._check_and_emit_change_events(metric)
-
-        return metrics
-
-    def _check_and_emit_change_events(self, metric: GPUMetrics) -> None:
-        """Check for significant changes and emit events."""
-        # Find matching previous metric
-        prev = next((m for m in self._current_metrics if m.index == metric.index), None)
-
-        if prev:
-            # Check utilization change
-            util_diff = abs(metric.gpu_utilization_percent - prev.gpu_utilization_percent)
-            if util_diff > 20:  # Significant change threshold
+    def _check_and_emit_change_events(self, metric: GPUMetrics, previous: Optional[GPUMetrics]) -> None:
+        if previous is None:
+            return
+        util_diff = abs(metric.gpu_utilization_percent - previous.gpu_utilization_percent)
+        if util_diff > 20:
+            self.event_bus.emit(
+                name="gpu.usage_changed",
+                data={
+                    "index": metric.index,
+                    "vendor": metric.vendor.value,
+                    "name": metric.name,
+                    "old_utilization": previous.gpu_utilization_percent,
+                    "new_utilization": metric.gpu_utilization_percent,
+                    "change": util_diff,
+                },
+                source="gpu_monitor",
+                priority=EventPriority.NORMAL,
+                tags={"vendor": metric.vendor.value, "gpu_index": str(metric.index)},
+            )
+        if metric.temperature_celsius and previous.temperature_celsius:
+            temp_diff = abs(metric.temperature_celsius - previous.temperature_celsius)
+            if temp_diff > 10:
                 self.event_bus.emit(
-                    name="gpu.usage_changed",
+                    name="gpu.temperature_changed",
                     data={
                         "index": metric.index,
                         "vendor": metric.vendor.value,
                         "name": metric.name,
-                        "old_utilization": prev.gpu_utilization_percent,
-                        "new_utilization": metric.gpu_utilization_percent,
-                        "change": util_diff,
+                        "old_temperature": previous.temperature_celsius,
+                        "new_temperature": metric.temperature_celsius,
+                        "change": temp_diff,
                     },
                     source="gpu_monitor",
-                    priority=EventPriority.NORMAL,
+                    priority=EventPriority.HIGH if metric.temperature_celsius > 85 else EventPriority.NORMAL,
                     tags={"vendor": metric.vendor.value, "gpu_index": str(metric.index)},
                 )
-
-            # Check temperature change
-            if metric.temperature_celsius and prev.temperature_celsius:
-                temp_diff = abs(metric.temperature_celsius - prev.temperature_celsius)
-                if temp_diff > 10:
-                    self.event_bus.emit(
-                        name="gpu.temperature_changed",
-                        data={
-                            "index": metric.index,
-                            "vendor": metric.vendor.value,
-                            "name": metric.name,
-                            "old_temperature": prev.temperature_celsius,
-                            "new_temperature": metric.temperature_celsius,
-                            "change": temp_diff,
-                        },
-                        source="gpu_monitor",
-                        priority=EventPriority.HIGH if metric.temperature_celsius > 85 else EventPriority.NORMAL,
-                        tags={"vendor": metric.vendor.value, "gpu_index": str(metric.index)},
-                    )
-
-            # Check health status
-            if metric.temperature_celsius and metric.temperature_celsius > 85:
-                self.event_bus.emit(
-                    name="gpu.health_changed",
-                    data={
-                        "index": metric.index,
-                        "vendor": metric.vendor.value,
-                        "name": metric.name,
-                        "status": "critical",
-                        "reason": f"Temperature {metric.temperature_celsius}C exceeds threshold",
-                    },
-                    source="gpu_monitor",
-                    priority=EventPriority.CRITICAL,
-                    tags={"vendor": metric.vendor.value, "gpu_index": str(metric.index)},
-                )
+        if metric.temperature_celsius and metric.temperature_celsius > 85:
+            self.event_bus.emit(
+                name="gpu.health_changed",
+                data={
+                    "index": metric.index,
+                    "vendor": metric.vendor.value,
+                    "name": metric.name,
+                    "status": "critical",
+                    "reason": f"Temperature {metric.temperature_celsius}C exceeds threshold",
+                },
+                source="gpu_monitor",
+                priority=EventPriority.CRITICAL,
+                tags={"vendor": metric.vendor.value, "gpu_index": str(metric.index)},
+            )
 
     def get_current_metrics(self) -> List[GPUMetrics]:
-        """Get current GPU metrics."""
         with self._lock:
-            if not self._current_metrics:
-                pass  # Will collect outside lock
-
-        if not self._current_metrics:
-            metrics = self._collector.collect_all()
-            with self._lock:
-                self._current_metrics = metrics
-                for metric in self._current_metrics:
-                    self._check_and_emit_change_events(metric)
-
-        with self._lock:
-            return list(self._current_metrics)
+            metrics_available = bool(self._current_metrics)
+        return list(self._current_metrics) if metrics_available else self.collect_metrics()
 
     def get_summary(self) -> Dict[str, Any]:
-        """Get GPU monitoring summary."""
+        metrics = self.get_current_metrics()
         with self._lock:
-            if not self._current_metrics:
-                pass  # Will collect outside lock
-            else:
-                metrics = list(self._current_metrics)
-                gpu_info = list(self._gpu_info)
-                enabled = self.enabled
-                poll_interval = self.poll_interval
-
-        if not self._current_metrics:
-            metrics_collected = self._collector.collect_all()
-            with self._lock:
-                self._current_metrics = metrics_collected
-                for metric in self._current_metrics:
-                    self._check_and_emit_change_events(metric)
-                metrics = list(self._current_metrics)
-                gpu_info = list(self._gpu_info)
-                enabled = self.enabled
-                poll_interval = self.poll_interval
-
-        by_vendor = {}
-        for vendor in GPUVendor:
-            count = sum(1 for g in gpu_info if g.vendor == vendor)
-            if count > 0:
-                by_vendor[vendor.value] = count
-
+            gpu_info = list(self._gpu_info)
+            health = self._gpu_health.to_dict()
+        by_vendor: Dict[str, int] = {}
+        for gpu in gpu_info:
+            by_vendor[gpu.vendor.value] = by_vendor.get(gpu.vendor.value, 0) + 1
         return {
-            "enabled": enabled,
+            "enabled": self.enabled,
             "total_gpus": len(gpu_info),
             "by_vendor": by_vendor,
-            "devices": [g.to_dict() for g in gpu_info],
-            "metrics": [m.to_dict() for m in metrics],
-            "poll_interval_seconds": poll_interval,
+            "devices": [gpu.to_dict() for gpu in gpu_info],
+            "metrics": [metric.to_dict() for metric in metrics],
+            "poll_interval_seconds": self.poll_interval,
+            "health": health,
         }
 
     def start_monitoring(self) -> None:
-        """Start continuous GPU monitoring in background thread."""
+        if not self.enabled:
+            return
         with self._lock:
             if self._running:
                 return
-
             self._running = True
             self._thread = threading.Thread(target=self._monitor_loop, daemon=True)
             self._thread.start()
 
     def stop_monitoring(self) -> None:
-        """Stop continuous GPU monitoring."""
-        thread = None
         with self._lock:
             self._running = False
-            thread = getattr(self, '_thread', None)
-
+            thread = getattr(self, "_thread", None)
         if thread:
             thread.join(timeout=self.poll_interval + 1)
 
     def _monitor_loop(self) -> None:
-        """Main monitoring loop."""
         import time
         while True:
             with self._lock:
                 if not self._running:
                     break
                 poll_interval = self.poll_interval
-
-            try:
-                self.collect_metrics()
-            except Exception as e:
-                self.event_bus.emit(
-                    name="gpu.monitor_error",
-                    data={"error": str(e)},
-                    source="gpu_monitor",
-                    priority=EventPriority.HIGH,
-                )
-
-            for _ in range(int(poll_interval * 10)):
+            self.collect_metrics()
+            for _ in range(max(1, int(poll_interval * 10))):
                 with self._lock:
                     if not self._running:
                         break

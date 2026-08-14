@@ -1093,75 +1093,47 @@ class SystemMonitor:
                         break
                 time.sleep(0.1)
 
+    def _apply_network_health_to_score(self, score: float) -> float:
+        """Apply only verified service-monitor signals to the operational health score."""
+        if not self._network_monitor:
+            return score
+        try:
+            all_health = self._network_monitor.get_all_health()
+        except Exception:
+            return min(score, 59.0)
+        if not all_health:
+            return score
+
+        statuses = [health.status for health in all_health.values()]
+        unhealthy_count = sum(status == ServiceStatus.UNHEALTHY for status in statuses)
+        degraded_count = sum(status == ServiceStatus.DEGRADED for status in statuses)
+        unverified = any(
+            status == ServiceStatus.UNKNOWN
+            or not health.last_check
+            or not health.metadata.get("verified", False)
+            for health, status in ((item, item.status) for item in all_health.values())
+        )
+        score -= min(30.0, unhealthy_count * 10.0 + degraded_count * 5.0)
+        # A registered service with no verified result, or a completed non-healthy
+        # result, must not be represented as an excellent/good readiness signal.
+        if unverified or unhealthy_count or degraded_count:
+            score = min(score, 59.0)
+        return score
+
     def _calculate_overall_health_status(self, metrics: "ResourceMetrics") -> SystemHealthStatus:
-        """Calculate overall health status including service health from NetworkMonitor."""
-        # Start with base resource health score
-        score = metrics.calculate_health_score()
-
-        # Factor in service health if NetworkMonitor is available
-        if self._network_monitor:
-            try:
-                all_health = self._network_monitor.get_all_health()
-                if all_health:
-                    # Count service statuses
-                    healthy_count = sum(1 for h in all_health.values() if h.status == ServiceStatus.HEALTHY)
-                    degraded_count = sum(1 for h in all_health.values() if h.status == ServiceStatus.DEGRADED)
-                    unhealthy_count = sum(1 for h in all_health.values() if h.status == ServiceStatus.UNHEALTHY)
-                    total_services = len(all_health)
-
-                    if total_services > 0:
-                        # Penalize based on service health:
-                        # - Each unhealthy service: -10 points
-                        # - Each degraded service: -5 points
-                        # Max penalty: 30 points (so services can't bring score below 0 alone)
-                        service_penalty = min(30.0, unhealthy_count * 10.0 + degraded_count * 5.0)
-                        score -= service_penalty
-            except Exception:
-                # If we can't get service health, ignore it
-                pass
-
-        # Clamp and return status
-        score = max(0, min(100, score))
+        """Calculate health using structured, verified service-monitor results."""
+        score = max(0.0, min(100.0, self._apply_network_health_to_score(metrics.calculate_health_score())))
         if score >= 80:
             return SystemHealthStatus.EXCELLENT
-        elif score >= 60:
+        if score >= 60:
             return SystemHealthStatus.GOOD
-        elif score >= 40:
+        if score >= 20:
             return SystemHealthStatus.WARNING
-        elif score >= 20:
-            return SystemHealthStatus.WARNING
-        else:
-            return SystemHealthStatus.CRITICAL
+        return SystemHealthStatus.CRITICAL
 
     def _calculate_overall_health_score(self, metrics: "ResourceMetrics") -> float:
-        """Calculate overall health score including service health from NetworkMonitor."""
-        # Start with base resource health score
-        score = metrics.calculate_health_score()
-
-        # Factor in service health if NetworkMonitor is available
-        if self._network_monitor:
-            try:
-                all_health = self._network_monitor.get_all_health()
-                if all_health:
-                    # Count service statuses
-                    healthy_count = sum(1 for h in all_health.values() if h.status == ServiceStatus.HEALTHY)
-                    degraded_count = sum(1 for h in all_health.values() if h.status == ServiceStatus.DEGRADED)
-                    unhealthy_count = sum(1 for h in all_health.values() if h.status == ServiceStatus.UNHEALTHY)
-                    total_services = len(all_health)
-
-                    if total_services > 0:
-                        # Penalize based on service health:
-                        # - Each unhealthy service: -10 points
-                        # - Each degraded service: -5 points
-                        # Max penalty: 30 points (so services can't bring score below 0 alone)
-                        service_penalty = min(30.0, unhealthy_count * 10.0 + degraded_count * 5.0)
-                        score -= service_penalty
-            except Exception:
-                # If we can't get service health, ignore it
-                pass
-
-        # Clamp and return score
-        return max(0.0, min(100.0, score))
+        """Return the numerical score corresponding to the verified health state."""
+        return max(0.0, min(100.0, self._apply_network_health_to_score(metrics.calculate_health_score())))
 
     def _get_service_summary(self) -> Optional[Dict[str, Any]]:
         """Get a summary of monitored services if NetworkMonitor is available."""
@@ -1248,6 +1220,11 @@ class SystemMonitor:
                         if gpu_summary is None:
                             gpu_summary = {}
                         gpu_summary["total_gpus"] = monitor_summary["total_gpus"]
+                    # Preserve the monitor's verified optional-capability health.
+                    if "health" in monitor_summary:
+                        if gpu_summary is None:
+                            gpu_summary = {}
+                        gpu_summary["health"] = monitor_summary["health"]
             except Exception:
                 pass
 
@@ -1274,6 +1251,9 @@ class SystemMonitor:
                                 "healthy_endpoints": health.healthy_endpoints,
                                 "total_endpoints": health.total_endpoints,
                                 "consecutive_failures": health.consecutive_failures,
+                                "last_check": health.last_check,
+                                "verified": bool(health.last_check and health.metadata.get("verified", False)),
+                                "error_categories": health.metadata.get("error_categories", []),
                             }
                             for name, health in all_health.items()
                         },

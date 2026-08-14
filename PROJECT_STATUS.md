@@ -1,10 +1,10 @@
 # Completion Progress
 
-Overall Freya Functional Completion: 65.0%
-Completed Tasks: 8 / 17
-Remaining Tasks: 9 / 17
+Overall Freya Functional Completion: 69.0%
+Completed Tasks: 9 / 17
+Remaining Tasks: 8 / 17
 Last Updated: 2026-08-14
-Next Active Task: Task 9 — Repair monitoring and hardware-health evidence
+Next Active Task: Task 10 — Enforce workflow capability and safety behavior
 
 > The percentage retains the documented capability-weighted operational method: functionality receives credit only when its production path is implemented, wired, reachable, safe where required, and supported by runtime evidence. The task counts are the rolling queue counts and do not replace that capability-weighted percentage.
 
@@ -14,62 +14,21 @@ Next Active Task: Task 9 — Repair monitoring and hardware-health evidence
 > Completed, working, and verified items have been removed from the execution queue.
 > Tasks are ordered by documented dependency and execution sequence, not simply by priority.
 >
-> **Verified operational completion:** 65.0% (the capability-weighted estimate reflects eight completed and verified critical-path tasks; it supersedes the earlier 76.6% estimate).
+> **Verified operational completion:** 69.0% (the capability-weighted estimate reflects nine completed and verified critical-path tasks; it supersedes the earlier 76.6% estimate).
 
 ---
 
 # Critical Execution Path
 
-1. 🟡 Task 9 — Repair monitoring and hardware-health evidence
-   ↓
-2. 🟡 Task 10 — Enforce workflow capability and safety behavior
+1. 🟡 Task 10 — Enforce workflow capability and safety behavior
 
-Tasks 10–17 are parallel or independent work where the existing status document does not establish a prerequisite beyond the relationships stated in each task.
+Tasks 11–17 are parallel or independent work where the existing status document does not establish a prerequisite beyond the relationships stated in each task.
 
 ---
 
 # Active Work
 
 
-
-## Task 9 — Repair monitoring and hardware-health evidence
-
-**Size:** 🟡 YELLOW — MEDIUM
-**Priority:** P2
-**Execution Order:** 9
-
-**Location**
-
-- `app/monitoring/*`
-- `tests/test_network_monitor.py`
-- `tests/test_gpu_monitor.py`
-
-**Problem**
-
-Fifteen network-monitoring tests and two GPU-monitoring tests fail. Endpoint/session/error handling and hardware fallback behavior are not dependable enough for operational feedback.
-
-**Required Work**
-
-- Repair endpoint, session, and error handling.
-- Repair hardware fallback behavior.
-- Add environment-independent tests.
-- Connect verified health results to production readiness decisions.
-
-**Dependencies**
-
-- Independent, but required before autonomy can act on health observations.
-
-**Why This Order**
-
-The status document places monitoring repair before dependable watchdog and operational decisions, while not documenting a prerequisite on the critical implementation chain.
-
-**Acceptance Criteria**
-
-- [ ] Network and GPU monitoring tests pass in environment-independent form.
-- [ ] Health results are reliable and observable.
-- [ ] Production readiness decisions consume verified health signals.
-
----
 
 ## Task 10 — Enforce workflow capability and safety behavior
 
@@ -382,7 +341,6 @@ The source document explicitly places this hygiene work after runtime consolidat
 
 These tasks do not have a documented prerequisite on the critical execution chain, or the source document explicitly allows them to proceed independently:
 
-- 🟡 **Task 9 — Repair monitoring and hardware-health evidence**. It can proceed independently, but autonomy should not act on health observations until it is complete.
 - 🟡 **Task 13 — Repair conversation/vector persistence and recall**. It can proceed after the supported retrieval stack is selected.
 - 🔵 **Task 15 — Add configurable learning and repair policy**. It can proceed after the execution-learning contract is fixed.
 - 🟡 **Task 16 — Resolve remaining memory and retrieval quality gaps**. Its cross-memory and coverage portions can proceed after the supported memory contract is established.
@@ -402,18 +360,18 @@ No dependency has been added where the existing status document did not establis
 | Size | Remaining tasks |
 |---|---:|
 | 🔴 RED — Big / Complex | 1 |
-| 🟡 YELLOW — Medium | 5 |
+| 🟡 YELLOW — Medium | 4 |
 | 🔵 BLUE — Easy / Small | 3 |
-| **Total** | **9** |
+| **Total** | **8** |
 
 | Priority | Remaining work |
 |---|---|
 | **P0 — Critical** | No remaining P0 task on the active queue; the Task 3 autonomy blocker is complete. |
 | **P1 — High** | Tasks 11, 14: autonomous learning, readiness surface |
-| **P2 — Medium** | Tasks 9–10, 12–13, 16: monitoring, workflow capability/safety, legacy migration, vector recall, memory quality |
+| **P2 — Medium** | Tasks 10, 12–13, 16: workflow capability/safety, legacy migration, vector recall, memory quality |
 | **P3 — Low** | Tasks 14–17: readiness completion, configurable policy, memory-quality tail work, stale contracts |
 
-**Current verified completion:** 65.0%. Tasks 1–8 are recorded as complete and verified. The remaining active queue begins with Task 9’s monitoring and hardware-health evidence work.
+**Current verified completion:** 69.0%. Tasks 1–9 are recorded as complete and verified. The remaining active queue begins with Task 10’s workflow capability and safety work.
 
 ---
 
@@ -428,7 +386,7 @@ No dependency has been added where the existing status document did not establis
 
 Freya reaches 100% only when a normal `FreyaApp` startup reliably composes one supported architecture; safely accepts or rejects actions; plans, executes, verifies, repairs, and persists outcomes; learns from those outcomes; uses persistent and retrievable knowledge across sessions; runs healthy autonomous background work; routes diagnostics and learning through controlled improvement safeguards; survives configured provider and tool failures; and demonstrates these chains through a clean, production-path test suite.
 
-The current verified operational completion is **65.0%**. The earlier 76.6% estimate is superseded by the current verified assessment and is not used as the completion baseline.
+The current verified operational completion is **69.0%**. The earlier 76.6% estimate is superseded by the current verified assessment and is not used as the completion baseline.
 
 ---
 
@@ -771,3 +729,41 @@ The resilience router records bounded health observations, skips unhealthy or fa
 - `tests/test_llm_stack.py`
 - `tests/test_provider_resilience.py`
 - `tests/test_providers.py`
+
+---
+
+## Task 9 — Repair Monitoring and Hardware-Health Evidence
+
+**Status:** COMPLETE
+
+**Implementation Summary**
+
+Task 9 repairs the production monitoring path from network and GPU probes through structured health aggregation and the existing `SystemMonitor` operational-health decision. The implementation retains the established monitoring components and event infrastructure; no second readiness or monitoring architecture was introduced.
+
+**Network Monitoring, Endpoint Handling, and Session Lifecycle**
+
+`NetworkHealthChecker` now validates HTTP(S), TCP, and DNS inputs before probing, guarantees a positive bounded timeout, and returns a structured `HealthCheckResult` for invalid endpoints, timeouts, DNS failures, connection failures, HTTP/content failures, client failures, and unexpected check failures. Results carry an actionable `error_category`; failed probes cannot be reported as healthy. The checker owns one reusable `aiohttp` session, closes it exactly once, clears its closed reference, and recreates it only when a later check requires a session. Retry handling now guarantees at least one bounded attempt even when malformed configuration supplies a non-positive retry count.
+
+**GPU / Hardware Health and Fallback**
+
+`GPUMonitor` now exposes a structured `GPUHealthResult` with status, availability, timestamp, reason, error category, and fallback state. GPU absence produces `gpu.unavailable` and `gpu.fallback_activated` events rather than requiring physical hardware or falsely reporting a healthy device. Missing vendor tooling, GPU detection failure, and metrics-probe failure are represented as unavailable or degraded states and remain observable through the existing EventBus. GPU monitoring is an optional capability in the verified system-health path: absence activates CPU/local fallback reporting and does not, by itself, mark the overall `SystemMonitor` health unready.
+
+**Verified Operational Health Consumption**
+
+`NetworkMonitor` now marks service health as verified only after enabled endpoints complete structured checks. Services with no enabled endpoint remain `UNKNOWN`, rather than becoming unhealthy or healthy by implication. `SystemMonitor` consumes this verified service status when calculating operational health: unverified, degraded, or unhealthy monitored services cannot present as an excellent/good health signal. A verified healthy service preserves normal health; an optional unavailable GPU does not globally disable it.
+
+**Tests and Verification Results**
+
+- `PYTHONPATH=/home/ubuntu/Freya pytest -q tests/test_network_monitor.py tests/test_gpu_monitor.py tests/test_system_monitor_health_integration.py tests/test_monitoring.py tests/test_health.py`: **212 passed, 0 failed, 0 errors, 0 skipped**. The deterministic suite covers endpoint validation, HTTP/TCP/DNS success and failure classification, timeout handling, session closure/recreation, verified service aggregation, GPU available/unavailable/probe-failure/metrics-failure behavior, fallback events, and SystemMonitor consumption of verified health.
+- `git diff --check`: passed before commit.
+- A repository-wide run was started for broad verification and was stopped at user direction after exceeding the practical verification window while it had progressed beyond 88%. It had already shown unrelated legacy/full-suite failures and errors. The stopped run did not identify a single attributable Task 9 stuck test, so no unrelated test was changed or masked; the focused Task 9 suite above is the completion evidence.
+
+**Files Changed**
+
+- `app/monitoring/network_monitor.py`
+- `app/monitoring/gpu_monitor.py`
+- `app/monitoring/system_monitor.py`
+- `tests/test_network_monitor.py`
+- `tests/test_gpu_monitor.py`
+- `tests/test_system_monitor_health_integration.py`
+- `PROJECT_STATUS.md`

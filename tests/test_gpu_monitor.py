@@ -287,3 +287,72 @@ class TestGPUIntegration:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestGPUHealthRegression:
+    """Task 9 regression tests that do not require physical GPU hardware."""
+
+    def test_detected_gpu_reports_healthy_capability(self):
+        detected = [GPUInfo(index=0, vendor=GPUVendor.NVIDIA, name="Test GPU")]
+        with patch("app.monitoring.gpu_monitor.GPUDetector.detect_all", return_value=detected):
+            monitor = GPUMonitor(workspace=".")
+
+        health = monitor.get_health()
+        assert health["status"] == "healthy"
+        assert health["availability"] == "available"
+        assert health["fallback_active"] is False
+
+    def test_no_gpu_reports_unavailable_and_cpu_fallback_event(self):
+        from app.core.events import EventBus
+
+        event_bus = EventBus()
+        events = []
+        subscription = event_bus.subscribe("gpu.*", lambda event, _data: events.append(event))
+        with patch("app.monitoring.gpu_monitor.GPUDetector.detect_all", return_value=[]):
+            monitor = GPUMonitor(workspace=".", event_bus=event_bus)
+        event_bus.unsubscribe(subscription)
+
+        health = monitor.get_health()
+        assert health["status"] == "unavailable"
+        assert health["availability"] == "unavailable"
+        assert health["fallback_active"] is True
+        assert {event.name for event in events} == {"gpu.unavailable", "gpu.fallback_activated"}
+
+    def test_detection_failure_is_observable_without_startup_crash(self):
+        from app.core.events import EventBus
+
+        event_bus = EventBus()
+        events = []
+        subscription = event_bus.subscribe("gpu.*", lambda event, _data: events.append(event))
+        with patch(
+            "app.monitoring.gpu_monitor.GPUDetector.detect_all",
+            side_effect=RuntimeError("vendor probe failed"),
+        ):
+            monitor = GPUMonitor(workspace=".", event_bus=event_bus)
+        event_bus.unsubscribe(subscription)
+
+        health = monitor.get_health()
+        assert health["status"] == "degraded"
+        assert health["error_category"] == "probe_failure"
+        assert health["fallback_active"] is True
+        assert {event.name for event in events} == {"gpu.probe_failed", "gpu.fallback_activated"}
+
+    def test_metrics_failure_never_masquerades_as_healthy(self):
+        detected = [GPUInfo(index=0, vendor=GPUVendor.NVIDIA, name="Test GPU")]
+        with patch("app.monitoring.gpu_monitor.GPUDetector.detect_all", return_value=detected):
+            monitor = GPUMonitor(workspace=".")
+        with patch.object(monitor._collector, "collect_all", side_effect=RuntimeError("metrics failed")):
+            assert monitor.collect_metrics() == []
+
+        health = monitor.get_health()
+        assert health["status"] == "degraded"
+        assert health["availability"] == "available"
+        assert health["error_category"] == "metrics_failure"
+
+    def test_disabled_monitor_does_not_start_background_polling(self):
+        monitor = GPUMonitor(workspace=".", enabled=False)
+
+        monitor.start_monitoring()
+
+        assert monitor._running is False
+        assert monitor.get_health()["status"] == "disabled"

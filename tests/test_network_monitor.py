@@ -698,3 +698,80 @@ class TestNetworkMonitorIntegration:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestNetworkMonitoringRegression:
+    """Deterministic coverage for Task 9 network-monitoring contracts."""
+
+    @pytest.mark.asyncio
+    async def test_invalid_http_endpoint_is_structured_failure(self):
+        checker = NetworkHealthChecker(default_timeout=0.1)
+
+        result = await checker.check_http("not-a-url")
+
+        assert result.success is False
+        assert result.status == ServiceStatus.UNHEALTHY
+        assert result.error_category == "invalid_endpoint"
+        assert result.to_dict()["error_category"] == "invalid_endpoint"
+
+    @pytest.mark.asyncio
+    async def test_checker_closes_and_recreates_its_owned_session(self):
+        checker = NetworkHealthChecker(default_timeout=0.1)
+        first_session = MagicMock()
+        first_session.closed = False
+        first_session.close = AsyncMock()
+        second_session = MagicMock()
+        second_session.closed = False
+
+        with patch(
+            "app.monitoring.network_monitor.aiohttp.ClientSession",
+            side_effect=[first_session, second_session],
+        ):
+            assert await checker._get_session() is first_session
+            await checker.close()
+            assert checker._session is None
+            first_session.close.assert_awaited_once()
+            assert await checker._get_session() is second_session
+
+    @pytest.mark.asyncio
+    async def test_no_enabled_endpoints_remain_unverified(self):
+        monitor = NetworkMonitor(workspace=".")
+        monitor.register_service(
+            ServiceConfig(
+                name="optional_api",
+                endpoints=[EndpointConfig(name="disabled", url="http://example.invalid", enabled=False)],
+            )
+        )
+
+        assert await monitor.check_service("optional_api") == []
+        health = monitor.get_service_health("optional_api")
+        assert health.status == ServiceStatus.UNKNOWN
+        assert health.metadata["verified"] is False
+        assert health.metadata["reason"] == "No enabled endpoints were checked"
+
+    @pytest.mark.asyncio
+    async def test_connection_error_has_actionable_error_category(self):
+        checker = NetworkHealthChecker(default_timeout=0.1)
+        session = MagicMock()
+        session.get = Mock(side_effect=ConnectionRefusedError("Connection refused"))
+
+        with patch.object(checker, "_get_session", return_value=session):
+            result = await checker.check_http("http://localhost:9999/health")
+
+        assert result.success is False
+        assert result.status == ServiceStatus.UNHEALTHY
+        assert result.error_category == "connection_failure"
+
+
+class TestNetworkHealthAggregationRegression:
+    """Ensure aggregator status is derived from verified probe outcomes."""
+
+    def test_empty_result_set_is_unknown_not_unhealthy(self):
+        monitor = NetworkMonitor(workspace=".")
+        monitor.register_service(ServiceConfig(name="api", endpoints=[]))
+
+        monitor._update_service_health("api", [])
+
+        health = monitor.get_service_health("api")
+        assert health.status == ServiceStatus.UNKNOWN
+        assert health.metadata["verified"] is False
