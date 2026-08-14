@@ -33,7 +33,7 @@ Freya’s canonical runtime now follows the component ownership and flow boundar
 | `git diff --check` | Passed before the final status replacement; it must be rerun before commit. |
 | Focused architecture and compatibility suite | Passed: `tests/test_target_architecture_contracts.py`, `test_target_architecture_behavior.py`, `test_workflow_capability_safety.py`, `test_shared_event_improvement_flow.py`, `test_task5_execution_learning.py`, `test_capability_routing.py`, `test_execution_safety_state_machine.py`, and `test_learning_repair_policy.py`. |
 | Focused test count | **90 passed** across the canonical routing, capability, execution, learning, safety, shared-event, and architecture contracts. |
-| Legacy conversation suite | Passed: `tests/test_agent_conversation.py` and `tests/test_agent_conversation_simple.py`. The repaired legacy `FreyaAgent` path initializes its required `ExperienceMemory` before dependent memory services are constructed. |
+| Legacy conversation suite | All 20 assertions reached `100%` in `tests/test_agent_conversation.py` and `tests/test_agent_conversation_simple.py`. The repaired legacy `FreyaAgent` path initializes `ExperienceMemory` before dependent memory services are constructed. The legacy test process still leaves background workers alive after assertions; clean-process shutdown validation is therefore the next P0 item. |
 
 ## Dependency-first plan to reach 100% MVP
 
