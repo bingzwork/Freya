@@ -5,6 +5,7 @@ MemoryCoordinator - Unified Memory Facade for Freya.
 Single write path; transactional; cache invalidation for UnifiedRetrieval.
 """
 
+import re
 import threading
 from pathlib import Path
 from typing import Optional, List, Dict, Any
@@ -214,6 +215,150 @@ class MemoryCoordinator:
                 f"{entry.category} {entry.key} {entry.value} {entry.description}",
             )
 
+    @staticmethod
+    def _normalize_learning_text(value: str) -> str:
+        return re.sub(r"[^a-z0-9]+", " ", str(value).lower()).strip()
+
+    @classmethod
+    def _equivalent_learning(
+        cls, existing_title: str, existing_content: str, title: str, content: str
+    ) -> bool:
+        """Use conservative deterministic equivalence; similarity alone never crosses titles."""
+        if cls._normalize_learning_text(existing_title) != cls._normalize_learning_text(title):
+            return False
+        existing_tokens = set(cls._normalize_learning_text(existing_content).split())
+        incoming_tokens = set(cls._normalize_learning_text(content).split())
+        if not existing_tokens or not incoming_tokens:
+            return existing_tokens == incoming_tokens
+        return len(existing_tokens & incoming_tokens) / len(existing_tokens | incoming_tokens) >= 0.88
+
+    @staticmethod
+    def _merge_learning_metadata(existing: Dict[str, Any], incoming: Dict[str, Any]) -> Dict[str, Any]:
+        merged = dict(existing or {})
+        merged.update(incoming or {})
+        evidence = list((existing or {}).get("evidence_ids", [])) + list(
+            (incoming or {}).get("evidence_ids", [])
+        )
+        merged["evidence_ids"] = list(dict.fromkeys(evidence))
+        merged["evidence_count"] = len(merged["evidence_ids"])
+        merged["reinforcement_count"] = int((existing or {}).get("reinforcement_count", 0)) + 1
+        return merged
+
+    def store_learned(self, learned: Any) -> str:
+        """Route one normalized Better Knowledge & Skills result through existing memory stores.
+
+        KNOWLEDGE is upserted into semantic memory, EXPERIENCE is appended or
+        reinforced in experience memory, and SKILL is appended or reinforced in
+        engineering lessons. All writes remain coordinated, indexed, and emitted
+        through this facade.
+        """
+        item = learned.to_memory_item() if hasattr(learned, "to_memory_item") else dict(learned)
+        learning_type = str(item.get("learning_type", "")).lower()
+        title = str(item.get("title", "")).strip()
+        content = str(item.get("content", "")).strip()
+        category = str(item.get("category", "general")).strip() or "general"
+        confidence = max(0.0, min(1.0, float(item.get("confidence", 0.0))))
+        metadata = dict(item.get("metadata") or {})
+        metadata["learning_type"] = learning_type
+        tags = list(dict.fromkeys(item.get("tags") or []))
+        source = str(item.get("source", "learning_pipeline"))
+        if not title or not content:
+            raise ValueError("Normalized learned items require title and content")
+
+        with self._lock:
+            if learning_type == "knowledge":
+                existing = self._semantic.get(category, title)
+                if existing is not None:
+                    metadata = self._merge_learning_metadata(existing.metadata, metadata)
+                    confidence = min(1.0, max(existing.confidence, confidence) + 0.05)
+                entry = self._semantic.set(
+                    category=category,
+                    title=title,
+                    content=content,
+                    language=metadata.get("language"),
+                    tags=tags,
+                    confidence=confidence,
+                    source=source,
+                    examples=metadata.get("examples"),
+                    related_concepts=metadata.get("related_concepts"),
+                    prerequisites=metadata.get("prerequisites"),
+                    metadata=metadata,
+                )
+                self._infer_cross_memory_references(
+                    "semantic", entry.entry_id, f"{entry.title} {entry.content} {' '.join(entry.tags)}"
+                )
+                return entry.entry_id
+
+            if learning_type == "experience":
+                duplicate = next(
+                    (
+                        entry for entry in self._experience.all()
+                        if entry.category == category and self._equivalent_learning(
+                            entry.title, entry.description, title, content
+                        )
+                    ),
+                    None,
+                )
+                if duplicate is not None:
+                    entry = self._experience.reinforce(
+                        duplicate.id, confidence=confidence, tags=tags, metadata=metadata
+                    )
+                    self._infer_cross_memory_references(
+                        "experience", entry.id, f"{entry.title} {entry.description} {' '.join(entry.tags)}"
+                    )
+                    return entry.id
+                from app.memory.experience_memory import ExperienceEntry
+                entry = self.add_experience(ExperienceEntry(
+                    id="",
+                    title=title,
+                    description=content,
+                    category=category,
+                    tags=tags,
+                    outcome=str(metadata.get("outcome", "neutral")),
+                    confidence=confidence,
+                    metadata=metadata,
+                    source=source,
+                ))
+                return entry.id
+
+            if learning_type == "skill":
+                duplicate = next(
+                    (
+                        lesson for lesson in self._lessons.all()
+                        if lesson.context.get("learning_type") == "skill"
+                        and self._equivalent_learning(lesson.title, lesson.description, title, content)
+                    ),
+                    None,
+                )
+                if duplicate is not None:
+                    lesson = self._lessons.reinforce(
+                        duplicate.id,
+                        confidence=confidence,
+                        tags=tags,
+                        context=metadata,
+                        rationale="Reinforced by additional validated learning evidence",
+                    )
+                    self._infer_cross_memory_references(
+                        "lessons", lesson.id, f"{lesson.title} {lesson.description} {' '.join(lesson.tags)}"
+                    )
+                    return lesson.id
+                from app.memory.engineering_lessons import EngineeringLesson, LessonSeverity, LessonType
+                lesson = self.add_lesson(EngineeringLesson(
+                    id="",
+                    title=title,
+                    description=content,
+                    lesson_type=LessonType.PATTERN.value,
+                    category=category,
+                    severity=LessonSeverity.RECOMMENDED.value,
+                    tags=tags,
+                    context=metadata,
+                    rationale="Reusable strategy distilled from validated learning evidence",
+                    confidence=confidence,
+                ))
+                return lesson.id
+
+        raise ValueError(f"Unsupported learned item type: {learning_type}")
+
     def add_task(self, task: Any) -> None:
         """Add a task to working memory."""
         with self._lock:
@@ -236,6 +381,7 @@ class MemoryCoordinator:
             self._infer_cross_memory_references(
                 "experience", entry.id, f"{entry.title} {entry.description} {' '.join(entry.tags)}"
             )
+            return entry
 
     def add_lesson(self, lesson: Any) -> None:
         """Add an engineering lesson through its durable storage contract."""
@@ -257,6 +403,7 @@ class MemoryCoordinator:
             self._infer_cross_memory_references(
                 "lessons", stored.id, f"{stored.title} {stored.description} {' '.join(stored.tags)}"
             )
+            return stored
 
     def add_goal(self, goal: Any) -> None:
         """Add a goal through the durable goal-storage contract."""

@@ -375,6 +375,40 @@ class ExperienceMemory:
 
             return entry
 
+    def reinforce(
+        self,
+        entry_id: str,
+        *,
+        confidence: float,
+        tags: Optional[List[str]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> ExperienceEntry:
+        """Reinforce an equivalent experience while preserving its identity and history."""
+        with self._lock:
+            entry = self._entries.get(entry_id)
+            if entry is None:
+                raise KeyError(f"Unknown experience entry: {entry_id}")
+            entry.confidence = min(1.0, max(entry.confidence, confidence) + 0.05)
+            if tags:
+                entry.tags = sorted(set(entry.tags).union(tags))
+            if metadata:
+                existing_evidence = list(entry.metadata.get("evidence_ids", []))
+                incoming_evidence = list(metadata.get("evidence_ids", []))
+                merged_evidence = list(dict.fromkeys([*existing_evidence, *incoming_evidence]))
+                entry.metadata.update(metadata)
+                entry.metadata["evidence_ids"] = merged_evidence
+                entry.metadata["evidence_count"] = len(merged_evidence)
+                entry.metadata["reinforcement_count"] = int(
+                    entry.metadata.get("reinforcement_count", 0)
+                ) + 1
+            self._save()
+            self._publish_event("memory.experience_reinforced", {
+                "entry_id": entry.id,
+                "title": entry.title,
+                "confidence": entry.confidence,
+            })
+            return entry
+
     def get(self, entry_id: str) -> Optional[ExperienceEntry]:
         """Get a specific experience entry by ID.
 

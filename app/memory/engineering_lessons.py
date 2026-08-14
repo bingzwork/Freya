@@ -437,6 +437,44 @@ class EngineeringLessonStorage:
 
             return lesson
 
+    def reinforce(
+        self,
+        lesson_id: str,
+        *,
+        confidence: float,
+        tags: Optional[List[str]] = None,
+        context: Optional[Dict[str, Any]] = None,
+        rationale: Optional[str] = None,
+    ) -> EngineeringLesson:
+        """Reinforce an equivalent skill/lesson without creating another durable entry."""
+        with self._lock:
+            lesson = self._lessons.get(lesson_id)
+            if lesson is None:
+                raise KeyError(f"Unknown engineering lesson: {lesson_id}")
+            lesson.confidence = min(1.0, max(lesson.confidence, confidence) + 0.05)
+            if tags:
+                lesson.tags = sorted(set(lesson.tags).union(tags))
+            if context:
+                existing_evidence = list(lesson.context.get("evidence_ids", []))
+                incoming_evidence = list(context.get("evidence_ids", []))
+                merged_evidence = list(dict.fromkeys([*existing_evidence, *incoming_evidence]))
+                lesson.context.update(context)
+                lesson.context["evidence_ids"] = merged_evidence
+                lesson.context["evidence_count"] = len(merged_evidence)
+                lesson.context["reinforcement_count"] = int(
+                    lesson.context.get("reinforcement_count", 0)
+                ) + 1
+            if rationale:
+                lesson.rationale = rationale
+            lesson.updated_at = datetime.now(timezone.utc).isoformat()
+            self._save()
+            self._publish_event("memory.lesson_reinforced", {
+                "lesson_id": lesson.id,
+                "title": lesson.title,
+                "confidence": lesson.confidence,
+            })
+            return lesson
+
     def get(self, lesson_id: str) -> Optional[EngineeringLesson]:
         """Get a specific lesson by ID.
 

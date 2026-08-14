@@ -1,7 +1,7 @@
 # Freya Remaining-Work Roadmap
 
-**Current Freya Completion: 60%**
-**Remaining to 100%: 40%**
+**Current Freya Completion: 64%**
+**Remaining to 100%: 36%**
 **Audit Basis: current codebase and verified runtime/test evidence**
 
 > This is a capability-weighted estimate, not a historical task count. The canonical runtime starts and several focused production paths work, including retrieval integration, execution safety, workflow orchestration, user-control replies, and the canonical integration suite. However, the ordinary conversation lifecycle currently drops internally resolved answers, misroutes ordinary LLM fallbacks, never persists supported-facade exchanges, and can loop through the learning/improvement path. Those defects prevent a claim of end-to-end autonomous personal-AI operation.
@@ -12,10 +12,37 @@
 | Conversation, local-first routing, and return paths | 25% | 10% | Control and legacy capability replies work; internal answers, capability resolver handling, LLM fallback, and exchange persistence are broken or disconnected. |
 | Durable memory and retrieval | 15% | 13% | Focused production retrieval integration passes; the supported facade does not add new user/assistant turns. |
 | Task execution, safety, verification, and repair | 15% | 14% | Execution safety state-machine tests pass. |
-| Learning, distillation, and safe self-improvement | 15% | 6% | Learning storage works, but real event-driven promotion calls a non-existent safety-gate method and derived memory events can re-enter learning. |
+| Learning, distillation, and safe self-improvement | 15% | 10% | Validated candidates now classify and deterministically distill into reusable knowledge, experience, or skills through `MemoryCoordinator`; the separate safety-promotion and feedback-loop blocker remains. |
 | Autonomy and background work | 10% | 8% | Workflow and autonomy integration tests pass, subject to the learning-loop blocker. |
 | Provider readiness and diagnostics | 5% | 4% | Health accurately reports an unavailable Ollama server, but affected fallback routing cannot return a safe answer. |
 | Local capabilities, tools, and observability | 5% | 5% | Local capability and focused observability/control tests pass. |
+
+---
+
+## Completed — Runtime learning classification and distillation flow
+
+**Status:** Completed on 2026-08-14. **Next unfinished priority:** Task 1 remains the highest-priority roadmap item.
+
+The learning runtime now preserves the required safety boundary: only candidates that pass observation, evaluation, extraction, validation, and `Worth Remembering?` reach deterministic classification. Explicitly unverified answer-verification output is rejected during validation and is never eligible for durable storage.
+
+| Runtime step | Implemented behavior | Durable destination |
+|---|---|---|
+| `Worth Remembering? → Classify` | Explicit metadata is preferred; stable category, candidate-type, structured-field, and lexical fallback signals are deterministic. | None before approval |
+| `KNOWLEDGE → KnowledgeDistiller` | Compacts declarative content and preserves source, evidence, provenance, confidence, tags, and useful metadata. | Existing `SemanticMemory` via `MemoryCoordinator.store_learned()` |
+| `EXPERIENCE → ExperienceDistiller` | Records bounded context, action, result, failure reason, successful repair, verification, outcome, provenance, and confidence. | Existing `ExperienceMemory` via `MemoryCoordinator.store_learned()` |
+| `SKILL → SkillDistiller` | Produces a reusable applicability, instructions, validation, and failure-handling strategy. Single-evidence skills are confidence-capped pending reinforcement. | Existing `EngineeringLessonStorage` via `MemoryCoordinator.store_learned()` |
+| `Better Knowledge & Skills → MemoryCoordinator` | Every normalized `DistilledLearning` item takes the canonical coordinated write path, preserving retrieval and memory events. | Existing Freya stores only |
+
+The implementation adapts the narrowly relevant PowerMem concepts: bounded experience shape (`situation/context`, action, outcome, lesson), exact supporting evidence, uncertainty preservation, distinct candidate handling, reusable skill instructions with observable validation, and the requirement to avoid automatic high-trust promotion from isolated evidence. No PowerMem memory store, retrieval path, `LearningPipeline` replacement, or `MemoryCoordinator` replacement was introduced.
+
+Knowledge uses existing semantic upsert behavior. Equivalent experience and skill writes use conservative deterministic equivalence and now reinforce the existing entry by merging evidence IDs, incrementing reinforcement metadata, and increasing confidence within bounds rather than creating a duplicate. The normal unified retrieval path was verified with a stored semantic learning item.
+
+| Verification | Result |
+|---|---|
+| `python3 -m pytest -q tests/test_learning_distillation_runtime.py` | Passed: 8 tests. Covers discard, all three routes, experience-to-skill derivation, failed validation, unverified answer safety, duplicate reinforcement, and normal retrieval. |
+| `python3 -m pytest -q tests/test_learning_pipeline.py tests/test_task5_execution_learning.py tests/test_shared_event_improvement_flow.py` | Passed: 25 tests. Confirms existing pipeline, execution-learning, and improvement-event compatibility. |
+| Combined focused command | Passed: 33 tests. |
+| Full suite | Not run; focused directly affected tests were prioritized. |
 
 ---
 

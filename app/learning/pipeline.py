@@ -23,6 +23,7 @@ from app.memory.coordinator import MemoryCoordinator
 from app.core.events import get_event_bus
 
 from .models import (
+    DistilledLearning,
     ExtractedLearning,
     EvaluationResult,
     LearningCandidate,
@@ -33,6 +34,12 @@ from .models import (
     ValidationResult,
     WorthRememberingDecision,
     WorthRememberingResult,
+)
+from .distillers import (
+    ExperienceDistiller,
+    KnowledgeDistiller,
+    LearningClassifier,
+    SkillDistiller,
 )
 
 
@@ -88,6 +95,10 @@ class LearningPipeline:
         self._min_actionability = self._policy.min_actionability
         self._min_confidence = self._policy.min_confidence
         self._event_bus = event_bus
+        self._classifier = LearningClassifier()
+        self._knowledge_distiller = KnowledgeDistiller()
+        self._experience_distiller = ExperienceDistiller()
+        self._skill_distiller = SkillDistiller()
         self._lock = threading.RLock()
         self._pending_candidates = deque()
         self._running = False
@@ -173,7 +184,13 @@ class LearningPipeline:
         result.worth_remembering_result = self._worth_remembering(candidate, result.validate_result)
         result.final_decision = result.worth_remembering_result.decision
         if result.worth_remembering_result.decision == WorthRememberingDecision.YES:
-            result.items_stored_via_memory_coordinator = self._persist_to_memory(candidate, result.worth_remembering_result.items_to_store)
+            result.classifications = self._classify_learning(
+                candidate, result.worth_remembering_result.items_to_store
+            )
+            result.distilled_items = self._distill_learning(candidate, result.classifications)
+            result.items_stored_via_memory_coordinator = self._persist_to_memory(
+                candidate, result.distilled_items
+            )
         result.duration_seconds = time.time() - start
         return result
 
@@ -434,6 +451,20 @@ class LearningPipeline:
             if len(content.strip()) < 10:
                 validation_reasons.append("Content too short")
 
+            # Explicitly unverified LLM/answer output must never pass into durable learning.
+            verification_status = (
+                candidate.raw_observation.get("verified")
+                if "verified" in candidate.raw_observation
+                else candidate.raw_observation.get(
+                    "answer_verified", candidate.raw_observation.get("verification_status")
+                )
+            )
+            if candidate.candidate_type == LearningCandidateType.ANSWER_VERIFICATION and (
+                verification_status is False
+                or str(verification_status).strip().lower() in {"false", "unverified", "failed", "rejected"}
+            ):
+                validation_reasons.append("Unverified answer output")
+
             # If no validation reasons, item is valid
             if not validation_reasons:
                 validated_items.append(item)
@@ -512,12 +543,62 @@ class LearningPipeline:
             }
         )
 
-    def _persist_to_memory(self, candidate, items):
+    def _classify_learning(self, candidate, items):
+        """Classify approved items using explicit metadata before deterministic signals."""
+        return [self._classifier.classify(candidate, item) for item in items]
+
+    def _distill_learning(self, candidate, classifications):
+        """Create normalized Better Knowledge & Skills results from each classification."""
+        distilled = []
+        for classification in classifications:
+            if classification.learning_type.value == "knowledge":
+                distilled.append(self._knowledge_distiller.distill(candidate, classification.item))
+            elif classification.learning_type.value == "experience":
+                experience = self._experience_distiller.distill(candidate, classification.item)
+                distilled.append(experience)
+                if self._skill_distiller.should_derive_from_experience(experience):
+                    distilled.append(self._skill_distiller.distill_from_experience(candidate, experience))
+            else:
+                distilled.append(self._skill_distiller.distill(candidate, classification.item))
+        return distilled
+
+    def _persist_distilled_items(self, candidate, items):
+        """Send normalized learning through MemoryCoordinator's canonical learned-item route."""
+        stored_item_ids = []
+        store_learned = getattr(self._memory, "store_learned", None)
+        if callable(store_learned):
+            for item in items:
+                try:
+                    stored_id = store_learned(item)
+                    stored_item_ids.append(str(stored_id))
+                    logger.debug(
+                        f"[LearningPipeline] Stored distilled {item.learning_type.value}: {item.title}"
+                    )
+                except Exception as error:
+                    logger.warning(f"[LearningPipeline] Failed to persist distilled item: {error}")
+                    raise RuntimeError("Failed to persist distilled learning item") from error
+        else:
+            # Compatibility for focused collaborators that expose only the
+            # pre-existing experience/lesson APIs. Production uses store_learned.
+            stored_item_ids = self._persist_to_memory(
+                candidate,
+                [item.to_memory_item() for item in items],
+                _suppress_improvement_event=True,
+            )
+        return stored_item_ids
+
+    def _persist_to_memory(self, candidate, items, _suppress_improvement_event=False):
         """Store validated learning items in memory via MemoryCoordinator.
 
         Calls MemoryCoordinator.add_experience() for ExperienceMemory
         and add_lesson() for EngineeringLessons based on item category.
         """
+        if items and isinstance(items[0], DistilledLearning):
+            stored_item_ids = self._persist_distilled_items(candidate, items)
+            if stored_item_ids and not _suppress_improvement_event:
+                self._emit_improvement_candidate(candidate, stored_item_ids)
+            return stored_item_ids
+
         stored_item_ids = []
 
         for i, item in enumerate(items):
@@ -628,7 +709,7 @@ class LearningPipeline:
                 raise RuntimeError(f"Failed to persist learning item {i}") from e
 
         # Emit improvement candidate event for SafeSelfImprovement
-        if stored_item_ids:
+        if stored_item_ids and not _suppress_improvement_event:
             self._emit_improvement_candidate(candidate, stored_item_ids)
 
         return stored_item_ids

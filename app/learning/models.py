@@ -30,12 +30,21 @@ class PipelineStage(Enum):
     EXTRACT_LEARNING = "extract_learning"
     VALIDATE_LEARNING = "validate_learning"
     WORTH_REMEMBERING = "worth_remembering"
+    CLASSIFY = "classify"
+    DISTILL = "distill"
 
 
 class WorthRememberingDecision(Enum):
     """Decision from the Worth Remembering? stage."""
     YES = "yes"           # Write to durable memory via MemoryCoordinator
     NO = "no"             # Discard or keep temporary only
+
+
+class LearnedItemType(Enum):
+    """Durable learning families supported by the runtime distillation flow."""
+    KNOWLEDGE = "knowledge"
+    EXPERIENCE = "experience"
+    SKILL = "skill"
 
 
 @dataclass
@@ -143,6 +152,40 @@ class WorthRememberingResult:
 
 
 @dataclass
+class LearningClassification:
+    """Deterministic classification for a validated learning item."""
+    item: Dict[str, Any]
+    learning_type: LearnedItemType
+    reason: str = ""
+
+
+@dataclass
+class DistilledLearning:
+    """Normalized output from a runtime distiller before canonical memory storage."""
+    learning_type: LearnedItemType
+    title: str
+    content: str
+    category: str
+    confidence: float
+    source: str
+    tags: List[str] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def to_memory_item(self) -> Dict[str, Any]:
+        """Return the common storage payload consumed by MemoryCoordinator."""
+        return {
+            "learning_type": self.learning_type.value,
+            "title": self.title,
+            "content": self.content,
+            "category": self.category,
+            "confidence": self.confidence,
+            "source": self.source,
+            "tags": self.tags,
+            "metadata": self.metadata,
+        }
+
+
+@dataclass
 class LearningPipelineResult:
     """Complete result of a learning pipeline run for a single candidate."""
     pipeline_run_id: str = field(default_factory=lambda: str(uuid4())[:8])
@@ -155,6 +198,8 @@ class LearningPipelineResult:
     extract_result: Optional[ExtractedLearning] = None
     validate_result: Optional[ValidationResult] = None
     worth_remembering_result: Optional[WorthRememberingResult] = None
+    classifications: List[LearningClassification] = field(default_factory=list)
+    distilled_items: List[DistilledLearning] = field(default_factory=list)
     
     # Final outcome
     final_decision: WorthRememberingDecision = WorthRememberingDecision.NO
@@ -177,6 +222,11 @@ class LearningPipelineResult:
             "extract_result": self.extract_result.__dict__ if self.extract_result else None,
             "validate_result": self.validate_result.__dict__ if self.validate_result else None,
             "worth_remembering_result": self.worth_remembering_result.__dict__ if self.worth_remembering_result else None,
+            "classifications": [
+                {"learning_type": value.learning_type.value, "reason": value.reason, "item": value.item}
+                for value in self.classifications
+            ],
+            "distilled_items": [value.to_memory_item() for value in self.distilled_items],
             "final_decision": self.final_decision.value,
             "items_stored_via_memory_coordinator": self.items_stored_via_memory_coordinator,
             "items_kept_temporary": self.items_kept_temporary,
