@@ -1,10 +1,10 @@
 # Completion Progress
 
-Overall Freya Functional Completion: 91.0%
-Completed Tasks: 15 / 17
-Remaining Tasks: 2 / 17
+Overall Freya Functional Completion: 96.0%
+Completed Tasks: 16 / 17
+Remaining Tasks: 1 / 17
 Last Updated: 2026-08-14
-Next Active Task: Task 16 — Resolve remaining memory and retrieval quality gaps
+Next Active Task: Task 17 — Resolve stale documentation and test contracts
 
 > The percentage retains the documented capability-weighted operational method: functionality receives credit only when its production path is implemented, wired, reachable, safe where required, and supported by runtime evidence. The task counts are the rolling queue counts and do not replace that capability-weighted percentage.
 
@@ -14,62 +14,20 @@ Next Active Task: Task 16 — Resolve remaining memory and retrieval quality gap
 > Completed, working, and verified items have been removed from the execution queue.
 > Tasks are ordered by documented dependency and execution sequence, not simply by priority.
 >
-> **Verified operational completion:** 91.0% (the capability-weighted estimate reflects fifteen completed and verified tasks after Task 15; it supersedes the earlier 88.0% estimate).
+> **Verified operational completion:** 96.0% (the capability-weighted estimate reflects sixteen completed and verified tasks after Task 16; it supersedes the earlier 91.0% estimate).
 
 ---
 
 # Critical Execution Path
-1. 🟡 Task 16 — Resolve remaining memory and retrieval quality gaps
+1. 🔵 Task 17 — Resolve stale documentation and test contracts
 
-Tasks 16–17 are parallel or independent work where the existing status document does not establish a prerequisite beyond the relationships stated in each task.
+Task 17 is the remaining final hygiene item in the documented execution queue.
 
 
 ---
 
 # Active Work
 
-
-## Task 16 — Resolve remaining memory and retrieval quality gaps
-
-**Size:** 🟡 YELLOW — MEDIUM
-**Priority:** P2/P3
-**Execution Order:** 16
-
-**Location**
-
-- `app/memory/unified_retrieval.py`
-- Memory retriever implementations
-- Cross-memory reference integration
-
-**Problem**
-
-The earlier status identifies duplicate retriever classes in `UnifiedRetrieval`, missing calibration/ranking/analytics, nine of sixteen memory modules with zero tests, no custom serialization framework, and `CrossMemoryReferences` auto-inference that is not triggered.
-
-**Required Work**
-
-- Consolidate duplicate retriever classes.
-- Provide the selected retrieval stack with calibration, ranking, and analytics where retained.
-- Add tests for currently untested memory modules.
-- Define or implement the required serialization behavior.
-- Trigger cross-memory reference auto-inference through the production flow.
-
-**Dependencies**
-
-- Retrieval portions must follow Task 1 and Task 6.
-- Cross-memory and test work may proceed independently once the supported memory contract is established.
-
-**Why This Order**
-
-These are remaining lower-priority memory and retrieval-quality items that depend on selecting a single supported retrieval architecture.
-
-**Acceptance Criteria**
-
-- [ ] Duplicate retriever behavior is consolidated.
-- [ ] Retained retrieval features are reachable through production.
-- [ ] Previously untested memory modules have coverage.
-- [ ] Serialization and cross-memory inference behavior are defined and exercised.
-
----
 
 ## Task 17 — Resolve stale documentation and test contracts
 
@@ -109,10 +67,9 @@ The source document explicitly places this hygiene work after runtime consolidat
 
 # Parallel / Independent Work
 
-These tasks do not have a documented prerequisite on the critical execution chain, or the source document explicitly allows them to proceed independently:
+The remaining task follows the completed runtime and memory-consolidation work:
 
-- 🟡 **Task 16 — Resolve remaining memory and retrieval quality gaps**. Its cross-memory and coverage portions can proceed after the supported memory contract is established.
-- 🔵 **Task 17 — Resolve stale documentation and test contracts**. It follows the prior runtime-consolidation work.
+- 🔵 **Task 17 — Resolve stale documentation and test contracts**. It aligns remaining tests and documentation with the supported runtime names and behavior.
 
 ---
 
@@ -129,24 +86,24 @@ No dependency has been added where the existing status document did not establis
 | Size | Remaining tasks |
 |---|---:|
 | 🔴 RED — Big / Complex | 0 |
-| 🟡 YELLOW — Medium | 1 |
+| 🟡 YELLOW — Medium | 0 |
 | 🔵 BLUE — Easy / Small | 1 |
-| **Total** | **2** |
+| **Total** | **1** |
 
 | Priority | Remaining work |
 |---|---|
 | **P0 — Critical** | No remaining P0 task on the active queue; the Task 3 autonomy blocker is complete. |
 | **P1 — High** | No remaining P1 task on the active queue. |
-| **P2 — Medium** | Task 16: memory quality |
-| **P3 — Low** | Tasks 16–17: memory-quality tail work and stale contracts |
+| **P2 — Medium** | No remaining P2 task on the active queue. |
+| **P3 — Low** | Task 17: stale documentation and test contracts |
 
-**Current verified completion:** 91.0%. Tasks 1–15 are recorded as complete and verified. The remaining active queue begins with Task 16’s memory and retrieval quality work.
+**Current verified completion:** 96.0%. Tasks 1–16 are recorded as complete and verified. The remaining active queue contains Task 17’s documentation and test-contract work.
 
 ---
 
 # Critical Blockers
 
-1. The now-quarantined advanced retrieval experiments retain separate calibration, learned-ranking, analytics, and decision contracts; Task 16 must decide whether to integrate them behind `UnifiedRetrieval` or retire them permanently.
+1. Task 17 must remove stale documentation and test assumptions that no longer represent the supported runtime contract.
 
 ---
 
@@ -154,11 +111,46 @@ No dependency has been added where the existing status document did not establis
 
 Freya reaches 100% only when a normal `FreyaApp` startup reliably composes one supported architecture; safely accepts or rejects actions; plans, executes, verifies, repairs, and persists outcomes; learns from those outcomes; uses persistent and retrievable knowledge across sessions; runs healthy autonomous background work; routes diagnostics and learning through controlled improvement safeguards; survives configured provider and tool failures; and demonstrates these chains through a clean, production-path test suite.
 
-The current verified operational completion is **91.0%**. The earlier 88.0% estimate is superseded by the current verified assessment and is not used as the completion baseline.
+The current verified operational completion is **96.0%**. The earlier 91.0% estimate is superseded by the current verified assessment and is not used as the completion baseline.
 
 ---
 
 # COMPLETED WORK HISTORY
+
+## Task 16 — Resolve Remaining Memory and Retrieval Quality Gaps
+
+**Status:** COMPLETE
+
+**Implementation Summary**
+
+Task 16 establishes `MemoryCoordinator.unified_retrieval` as the single supported production retrieval contract. The duplicate extended-memory retriever definitions in `app/memory/unified_retrieval.py` were removed, and the legacy parallel ranking wrapper (`app/memory/retrieval_ranking.py`) plus its legacy-agent construction were retired. Production retains deterministic source scoring, exact-content deduplication, and descending merged ordering through `UnifiedRetrieval`; no separate calibration, learned-ranking, or retrieval-analytics path remains active.
+
+**Memory Persistence and Coverage**
+
+Long-term and episodic persistence behavior is now covered with fresh-instance reconstruction tests. Episodic single-event recording, batch recording, and import now save through the existing atomic JSON persistence contract before returning, so restarted instances recover equivalent usable events. Focused Task 16 coverage also verifies canonical retriever consolidation, deterministic ordering, and coordinator-integrated reference persistence.
+
+**Cross-Memory References**
+
+`MemoryCoordinator` now owns a workspace-scoped `CrossMemoryReferences` instance at `data/memory/cross_references.json`. Canonical durable writes invoke the existing inference mechanism with bounded persisted candidates. Reference creation is idempotent in either direction, rejects self-links, skips same-source candidates, and persists immediately through the existing graph store. Coordinator adapters were also aligned with the real long-term, episodic, experience, lesson, goal, and task-memory write contracts.
+
+**Tests and Verification**
+
+The focused affected-memory suite passed: `154 passed` for `tests/test_task16_memory_quality.py`, `tests/test_production_retrieval_integration.py`, `tests/test_experience_memory.py`, `tests/test_project_memory.py`, and `tests/test_goals.py`. The final full-suite command `timeout 600 env PYTHONPATH=/home/ubuntu/Freya pytest -q` was stopped by the required ten-minute limit after reaching 63% progress; it reported failures before the timeout and no final aggregate count. This full-suite timeout does not supersede the focused Task 16 evidence.
+
+**Files Changed**
+
+- `app/agent/core_agent.py`
+- `app/memory/__init__.py`
+- `app/memory/coordinator.py`
+- `app/memory/cross_references.py`
+- `app/memory/episodic_memory.py`
+- `app/memory/retrieval_ranking.py` (removed)
+- `app/memory/unified_retrieval.py`
+- `tests/test_task16_memory_quality.py`
+- `CURRENT_ARCHITECTURE.md`
+- `PROJECT_STATUS.md`
+
+---
 
 ## Task 1 — Canonical Production Runtime Graph
 

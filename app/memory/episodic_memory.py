@@ -220,6 +220,7 @@ class EpisodicMemory:
 
             self._events.append(event)
             self._enforce_limit()
+            self._save()
             return event
 
     def record_batch(
@@ -247,6 +248,7 @@ class EpisodicMemory:
                 self._events.append(event)
 
             self._enforce_limit()
+            self._save()
             return created
 
     def recent(self, limit: int = 20) -> List[EpisodicEvent]:
@@ -492,6 +494,7 @@ class EpisodicMemory:
             # Sort by timestamp
             self._events.sort(key=lambda e: e.timestamp)
             self._enforce_limit()
+            self._save()
             return imported
 
     def __len__(self) -> int:

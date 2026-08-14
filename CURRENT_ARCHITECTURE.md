@@ -582,6 +582,16 @@ class L,C,D,D2,E,E3,G,G2,H,H0,H1,I,I1,I2,I3,I4,J,K,M,M1,M2,V1,LP2,LP5,Q1b,Q2 opt
 
 ---
 
+## Memory and Retrieval Contract
+
+`MemoryCoordinator.unified_retrieval` is the sole supported production retrieval entry point. It composes exactly one `MemoryRetriever` implementation for each configured memory source, merges source results, removes exact content duplicates, and orders the resulting `RetrievalResult` objects deterministically by descending score. The former parallel ranking wrapper is not part of the supported runtime contract; the retained production quality behavior is the source-provided score and deterministic merged ordering exposed by `UnifiedRetrieval`.
+
+Durable memory modules retain ownership of their native JSON persistence formats. Long-term, episodic, semantic, conversation, and cross-reference data are written through their existing persistence contracts and reconstructed by fresh memory instances from the workspace. In particular, episodic single-event, batch, and import writes persist atomically before returning, so a restart recovers the same usable event data.
+
+`MemoryCoordinator` invokes the existing `CrossMemoryReferences` inference after canonical durable writes. The inference graph is stored at `data/memory/cross_references.json` within the workspace and is saved by the reference component itself. Inference skips same-source targets, rejects self-links, and treats an existing relationship in either direction as idempotent, avoiding duplicate or recursive reference creation.
+
+---
+
 ## Key Architectural Decisions (from codebase)
 
 1. **Single-Pass Initialization** — `SystemInitializer` breaks circular deps by composing in strict order; no component holds `FreyaAgent` reference

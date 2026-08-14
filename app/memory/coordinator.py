@@ -24,6 +24,7 @@ from app.memory.engineering_lessons import EngineeringLessonStorage
 from app.memory.goals import GoalStorage
 from app.memory.conversation_memory import ConversationMemory
 from app.memory.unified_retrieval import UnifiedRetrieval, create_unified_retrieval
+from app.memory.cross_references import CrossMemoryReferences
 
 # Phase C: Memory Optimization
 from app.memory.consolidation import ConsolidationEngine, create_consolidation_engine
@@ -66,11 +67,86 @@ class MemoryCoordinator:
             conversation_memory=self._conversation,
         )
 
+        # Cross-memory references share the coordinator's workspace and event bus.
+        # Inference is invoked synchronously from canonical writes; this class
+        # remains the sole owner of graph serialization.
+        self._cross_references = CrossMemoryReferences(
+            storage_path=workspace / "data" / "memory" / "cross_references.json",
+            event_bus=event_bus,
+        )
+
         # Consolidation/Forgetting engines (background)
         self._consolidation = create_consolidation_engine(self)
         self._forgetting = create_forgetting_engine(self)
-
         logger.info("[MemoryCoordinator] Initialized all memory modules")
+
+    def _cross_memory_candidates(self, source_memory: str) -> Dict[str, List[tuple[str, str]]]:
+        """Build bounded durable candidates for coordinator-triggered inference."""
+        candidates: Dict[str, List[tuple[str, str]]] = {}
+        if source_memory != "long_term":
+            candidates["long_term"] = [
+                (
+                    entry.entry_id,
+                    f"{entry.category} {entry.key} {entry.value} {entry.description}",
+                )
+                for entry in self._long_term.get_all()[-100:]
+            ]
+        if source_memory != "episodic":
+            candidates["episodic"] = [
+                (
+                    str(event["event_id"]),
+                    " ".join(
+                        str(part)
+                        for part in (
+                            event.get("title", ""),
+                            event.get("description", ""),
+                            " ".join(event.get("tags", [])),
+                        )
+                    ),
+                )
+                for event in self._episodic.export().get("events", [])[-100:]
+            ]
+        if source_memory != "semantic":
+            candidates["semantic"] = [
+                (
+                    str(entry["entry_id"]),
+                    " ".join(
+                        str(part)
+                        for part in (
+                            entry.get("title", ""),
+                            entry.get("content", ""),
+                            " ".join(entry.get("tags", [])),
+                        )
+                    ),
+                )
+                for entry in self._semantic.export().get("entries", [])[-100:]
+            ]
+        if source_memory != "task":
+            candidates["task"] = [
+                (
+                    str(task.task_id),
+                    f"{task.description} {task.status} {task.metadata}",
+                )
+                for task in self._task.get_task_history(limit=100)
+            ]
+        return {memory_type: entries for memory_type, entries in candidates.items() if entries}
+
+    def _infer_cross_memory_references(
+        self, source_memory: str, source_id: str, source_content: str
+    ) -> None:
+        """Persist safe inferred links after a canonical durable memory write."""
+        normalized_content = source_content.strip()
+        if not normalized_content:
+            return
+        self._cross_references.add_node(
+            source_memory, source_id, source_content[:160], normalized_content
+        )
+        self._cross_references.infer_references_from_content(
+            source_memory=source_memory,
+            source_id=source_id,
+            source_content=normalized_content,
+            target_memories=self._cross_memory_candidates(source_memory),
+        )
 
     # ------------------------------------------------------------------
     # Single write entry points (transactional)
@@ -85,28 +161,58 @@ class MemoryCoordinator:
 
         with self._lock:
             persisted_turn = self._conversation.add_message(str(role), str(content))
+            self._infer_cross_memory_references(
+                "conversation", persisted_turn.timestamp, persisted_turn.content
+            )
             self._event_bus.emit(
                 "memory.conversation.updated",
                 {"turn_id": persisted_turn.timestamp},
             )
 
     def record_task_execution(self, task_id: str, result: Any) -> None:
-        """Record a task execution result."""
+        """Record a task execution result through the durable memory APIs."""
         with self._lock:
-            self._task.record_result(task_id, result)
-            self._episodic.append({
-                "type": "task_execution",
-                "task_id": task_id,
-                "data": result,
-            })
-            if getattr(result, "lesson", None):
-                self._lessons.add(result.lesson)
-            self._event_bus.emit("memory.task.completed", {"task_id": task_id})
+            if isinstance(result, dict):
+                succeeded = bool(result.get("success", True))
+                result_text = str(result.get("data", result))
+            else:
+                succeeded = bool(getattr(result, "success", True))
+                result_text = str(result)
+
+            if self._task.get_task(task_id) is not None:
+                if succeeded:
+                    self._task.complete_task(task_id)
+                else:
+                    self._task.fail_task(task_id, result_text)
+
+            event = self._episodic.record(
+                event_type="task_completed" if succeeded else "task_failed",
+                title=f"Task execution: {task_id}",
+                description=result_text,
+                outcome="success" if succeeded else "failure",
+                task_id=task_id,
+            )
+            self._infer_cross_memory_references(
+                "episodic", event.event_id, f"{event.title} {event.description}"
+            )
+
+            lesson = result.get("lesson") if isinstance(result, dict) else getattr(result, "lesson", None)
+            if lesson:
+                self.add_lesson(lesson)
+            self._event_bus.emit(
+                "memory.task.completed" if succeeded else "memory.task.failed",
+                {"task_id": task_id},
+            )
 
     def add_fact(self, category: str, key: str, value: str, **meta) -> None:
-        """Add a fact to long-term memory."""
+        """Add or update a long-term fact through the canonical write path."""
         with self._lock:
-            self._long_term.add(category, key, value, **meta)
+            entry = self._long_term.set(category, key, value, **meta)
+            self._infer_cross_memory_references(
+                "long_term",
+                entry.entry_id,
+                f"{entry.category} {entry.key} {entry.value} {entry.description}",
+            )
 
     def add_task(self, task: Any) -> None:
         """Add a task to working memory."""
@@ -116,7 +222,7 @@ class MemoryCoordinator:
     def add_experience(self, exp: Any) -> None:
         """Persist an experience entry through the ExperienceMemory write contract."""
         with self._lock:
-            self._experience.store(
+            entry = self._experience.store(
                 title=exp.title,
                 description=exp.description,
                 category=exp.category,
@@ -127,16 +233,46 @@ class MemoryCoordinator:
                 code_snippet=exp.code_snippet,
                 source=exp.source,
             )
+            self._infer_cross_memory_references(
+                "experience", entry.id, f"{entry.title} {entry.description} {' '.join(entry.tags)}"
+            )
 
     def add_lesson(self, lesson: Any) -> None:
-        """Add an engineering lesson."""
+        """Add an engineering lesson through its durable storage contract."""
         with self._lock:
-            self._lessons.add(lesson)
+            stored = self._lessons.store(
+                title=lesson.title,
+                description=lesson.description,
+                lesson_type=lesson.lesson_type,
+                category=lesson.category,
+                severity=lesson.severity,
+                tags=lesson.tags,
+                examples=lesson.examples,
+                related_ids=lesson.related_ids,
+                context=lesson.context,
+                rationale=lesson.rationale,
+                confidence=lesson.confidence,
+                code_example=getattr(lesson, "code_example", None),
+            )
+            self._infer_cross_memory_references(
+                "lessons", stored.id, f"{stored.title} {stored.description} {' '.join(stored.tags)}"
+            )
 
     def add_goal(self, goal: Any) -> None:
-        """Add a goal."""
+        """Add a goal through the durable goal-storage contract."""
         with self._lock:
-            self._goals.add(goal)
+            stored = self._goals.create(
+                name=goal.name,
+                description=goal.description,
+                status=goal.status,
+                priority=goal.priority,
+                parent_goal_id=getattr(goal, "parent_goal_id", None),
+                child_goal_ids=getattr(goal, "child_goal_ids", None),
+                depends_on_ids=getattr(goal, "depends_on_ids", None),
+            )
+            self._infer_cross_memory_references(
+                "goals", stored.id, f"{stored.name} {stored.description}"
+            )
 
     # ------------------------------------------------------------------
     # Read access (delegated to unified retrieval where possible)
@@ -151,7 +287,7 @@ class MemoryCoordinator:
         return self._retrieval.retrieve_for_execution(query)
 
     def get_active_goal(self) -> Optional[Any]:
-        return self._goals.get_active()
+        return self._goals.active_goal()
 
     def get_working_memory_snapshot(self) -> Dict[str, Any]:
         return self._working.get_snapshot()
@@ -203,6 +339,10 @@ class MemoryCoordinator:
     @property
     def unified_retrieval(self):
         return self._retrieval
+
+    @property
+    def cross_memory_references(self):
+        return self._cross_references
 
     @property
     def consolidation_engine(self):

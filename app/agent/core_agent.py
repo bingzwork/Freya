@@ -41,7 +41,6 @@ from app.conversational_control import ConversationControlHandler, create_conver
 from app.memory.consolidation import ConsolidationEngine, create_consolidation_engine, ConsolidationTrigger
 from app.memory.forgetting import ForgettingEngine, create_forgetting_engine
 from app.memory.cross_references import CrossMemoryReferences, create_cross_memory_references
-from app.memory.retrieval_ranking import RankingEngine, create_ranking_engine, RankedUnifiedRetrieval
 from app.memory.validation import KnowledgeValidator, create_knowledge_validator, ValidationSourceType
 from app.verification.repair_loop import RepairLoop
 from app.verification.runner import VerificationRunner
@@ -382,13 +381,6 @@ class FreyaAgent:
                 engineering_lessons=self.engineering_lessons,
                 long_term_memory=self.long_term_memory,
             )
-
-            # Ranking Engine - advanced relevance ranking for unified retrieval
-            self.ranking_engine = create_ranking_engine(
-                vector_db=None,  # Could be enhanced with vector DB later
-                long_term_memory=self.long_term_memory,
-            )
-            self.ranked_retrieval = RankedUnifiedRetrieval(self.unified_retrieval, self.ranking_engine)
 
             # Phase 1: Decision Management
             # Central decision orchestrator integrating confidence, risk, goals, planning, memory

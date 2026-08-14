@@ -55,14 +55,6 @@ from app.memory.cross_references import (
     link_goal_to_task,
     link_semantic_as_prerequisite,
 )
-from app.memory.retrieval_ranking import (
-    RankingEngine,
-    RankedResult,
-    RankingConfig,
-    RankingSignal,
-    create_ranking_engine,
-    RankedUnifiedRetrieval,
-)
 # Knowledge Validation
 from app.memory.validation import (
     KnowledgeValidator,
@@ -162,12 +154,6 @@ __all__ = [
     "link_episodic_to_lesson",
     "link_goal_to_task",
     "link_semantic_as_prerequisite",
-    "RankingEngine",
-    "RankedResult",
-    "RankingConfig",
-    "RankingSignal",
-    "create_ranking_engine",
-    "RankedUnifiedRetrieval",
     # Knowledge Validation
     "KnowledgeValidator",
     "ValidationConfig",

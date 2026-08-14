@@ -390,6 +390,27 @@ class CrossMemoryReferences:
     def _full_id(self, memory_type: str, entry_id: str) -> str:
         return f"{memory_type}:{entry_id}"
 
+    def _find_existing_reference(
+        self, source_memory: str, source_id: str, target_memory: str, target_id: str
+    ) -> Optional[CrossReference]:
+        """Return the persisted edge for an existing relationship in either direction."""
+        for reference in self._references.values():
+            same_direction = (
+                reference.source_memory == source_memory
+                and reference.source_id == source_id
+                and reference.target_memory == target_memory
+                and reference.target_id == target_id
+            )
+            reverse_direction = (
+                reference.source_memory == target_memory
+                and reference.source_id == target_id
+                and reference.target_memory == source_memory
+                and reference.target_id == source_id
+            )
+            if same_direction or reverse_direction:
+                return reference
+        return None
+
     def add_reference(
         self,
         source_memory: str,
@@ -403,6 +424,15 @@ class CrossMemoryReferences:
     ) -> CrossReference:
         """Add a cross-reference between two memory entries."""
         with self._lock:
+            if source_memory == target_memory and source_id == target_id:
+                raise ValueError("A memory entry cannot reference itself")
+
+            existing = self._find_existing_reference(
+                source_memory, source_id, target_memory, target_id
+            )
+            if existing is not None:
+                return existing
+
             if isinstance(reference_type, ReferenceType):
                 reference_type = reference_type.value
 
@@ -545,7 +575,15 @@ class CrossMemoryReferences:
         source_words = set(source_content.lower().split())
 
         for target_memory, entries in target_memories.items():
+            if target_memory == source_memory:
+                continue
             for target_id, target_content in entries:
+                if target_id == source_id:
+                    continue
+                if self._find_existing_reference(
+                    source_memory, source_id, target_memory, target_id
+                ) is not None:
+                    continue
                 target_words = set(target_content.lower().split())
 
                 # Jaccard similarity
