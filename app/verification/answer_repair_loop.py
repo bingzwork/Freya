@@ -10,6 +10,7 @@ AR →|"Retries Exhausted"| SF1 (AnswerSafeFailure) → Low-Confidence Disclosur
 import logging
 from typing import Optional, TYPE_CHECKING
 
+from app.core.config import Config, RepairPolicyConfig
 from app.core.priority_llm import PriorityLLMProvider, LLMPriority
 from app.core.logger import logger
 
@@ -33,7 +34,9 @@ class AnswerRepairLoop:
         self,
         priority_llm: PriorityLLMProvider,
         answer_verifier: 'AnswerVerifier',
-        max_attempts: int = 3,
+        max_attempts: int | None = None,
+        prompt_policy: str | None = None,
+        policy: RepairPolicyConfig | None = None,
     ):
         """
         Initialize the AnswerRepairLoop.
@@ -41,16 +44,46 @@ class AnswerRepairLoop:
         Args:
             priority_llm: The PriorityLLMProvider (D2) to use for retries
             answer_verifier: The AnswerVerifier (V1) to validate retries
-            max_attempts: Maximum number of retry attempts (default 3)
+            max_attempts: Optional explicit retry override for dependency-injected callers.
+            prompt_policy: Optional explicit prompt-policy override for dependency-injected callers.
+            policy: Validated repair policy; defaults to the application configuration.
         """
+        configured_policy = policy or Config().repair_policy
+        if max_attempts is not None or prompt_policy is not None:
+            configured_policy = RepairPolicyConfig(
+                max_attempts=(
+                    configured_policy.max_attempts
+                    if max_attempts is None
+                    else max_attempts
+                ),
+                prompt_policy=(
+                    configured_policy.prompt_policy
+                    if prompt_policy is None
+                    else prompt_policy
+                ),
+            )
         self._priority_llm = priority_llm
         self._answer_verifier = answer_verifier
-        self._max_attempts = max_attempts
-        self._system_prompt = """You are Freya, an expert software engineering assistant.
+        self._policy = configured_policy
+        self._max_attempts = self._policy.max_attempts
+        self._system_prompt = self._select_system_prompt(self._policy.prompt_policy)
+
+        logger.info(
+            "[AnswerRepairLoop] Initialized with "
+            f"max_attempts={self._max_attempts}, prompt_policy={self._policy.prompt_policy}"
+        )
+
+    @staticmethod
+    def _select_system_prompt(prompt_policy: str) -> str:
+        if prompt_policy == "concise":
+            return (
+                "You are Freya, an expert software engineering assistant. "
+                "Answer the user's question directly in concise, complete sentences. "
+                "Do not create plans or execute tasks unless explicitly asked to do so."
+            )
+        return """You are Freya, an expert software engineering assistant.
 Answer the user's question directly and concisely. Do not create plans or execute tasks
 unless explicitly asked to do so."""
-
-        logger.info(f"[AnswerRepairLoop] Initialized with max_attempts={max_attempts}")
 
     def attempt_repair(
         self,

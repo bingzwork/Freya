@@ -1,10 +1,10 @@
 # Completion Progress
 
-Overall Freya Functional Completion: 88.0%
-Completed Tasks: 14 / 17
-Remaining Tasks: 3 / 17
+Overall Freya Functional Completion: 91.0%
+Completed Tasks: 15 / 17
+Remaining Tasks: 2 / 17
 Last Updated: 2026-08-14
-Next Active Task: Task 15 — Add configurable learning and repair policy
+Next Active Task: Task 16 — Resolve remaining memory and retrieval quality gaps
 
 > The percentage retains the documented capability-weighted operational method: functionality receives credit only when its production path is implemented, wired, reachable, safe where required, and supported by runtime evidence. The task counts are the rolling queue counts and do not replace that capability-weighted percentage.
 
@@ -14,57 +14,20 @@ Next Active Task: Task 15 — Add configurable learning and repair policy
 > Completed, working, and verified items have been removed from the execution queue.
 > Tasks are ordered by documented dependency and execution sequence, not simply by priority.
 >
-> **Verified operational completion:** 88.0% (the capability-weighted estimate reflects fourteen completed and verified tasks after Task 14; it supersedes the earlier 84.0% estimate).
+> **Verified operational completion:** 91.0% (the capability-weighted estimate reflects fifteen completed and verified tasks after Task 15; it supersedes the earlier 88.0% estimate).
 
 ---
 
 # Critical Execution Path
-1. 🔵 Task 15 — Add configurable learning and repair policy
+1. 🟡 Task 16 — Resolve remaining memory and retrieval quality gaps
 
-Tasks 15–17 are parallel or independent work where the existing status document does not establish a prerequisite beyond the relationships stated in each task.
+Tasks 16–17 are parallel or independent work where the existing status document does not establish a prerequisite beyond the relationships stated in each task.
 
 
 ---
 
 # Active Work
 
-
-## Task 15 — Add configurable learning and repair policy
-
-**Size:** 🔵 BLUE — EASY / SMALL
-**Priority:** P3
-**Execution Order:** 15
-
-**Location**
-
-- `app/learning/pipeline.py`
-- `app/verification/answer_repair_loop.py`
-
-**Problem**
-
-Learning thresholds and repair-loop behavior remain hardcoded, limiting controlled tuning and environment-specific policy.
-
-**Required Work**
-
-- Move supported thresholds to validated configuration.
-- Move retry and prompt policy to validated configuration.
-- Preserve safe defaults and add configuration tests.
-
-**Dependencies**
-
-- Independent after Task 5 fixes the execution-learning contract.
-
-**Why This Order**
-
-The status document places configuration tuning after the learning contract and core implementation repairs.
-
-**Acceptance Criteria**
-
-- [ ] Thresholds and repair policy are configurable.
-- [ ] Invalid values are rejected safely.
-- [ ] Default behavior remains safe and tested.
-
----
 
 ## Task 16 — Resolve remaining memory and retrieval quality gaps
 
@@ -167,17 +130,17 @@ No dependency has been added where the existing status document did not establis
 |---|---:|
 | 🔴 RED — Big / Complex | 0 |
 | 🟡 YELLOW — Medium | 1 |
-| 🔵 BLUE — Easy / Small | 2 |
-| **Total** | **3** |
+| 🔵 BLUE — Easy / Small | 1 |
+| **Total** | **2** |
 
 | Priority | Remaining work |
 |---|---|
 | **P0 — Critical** | No remaining P0 task on the active queue; the Task 3 autonomy blocker is complete. |
 | **P1 — High** | No remaining P1 task on the active queue. |
 | **P2 — Medium** | Task 16: memory quality |
-| **P3 — Low** | Tasks 15–17: configurable policy, memory-quality tail work, and stale contracts |
+| **P3 — Low** | Tasks 16–17: memory-quality tail work and stale contracts |
 
-**Current verified completion:** 88.0%. Tasks 1–14 are recorded as complete and verified. The remaining active queue begins with Task 15’s configurable learning and repair policy.
+**Current verified completion:** 91.0%. Tasks 1–15 are recorded as complete and verified. The remaining active queue begins with Task 16’s memory and retrieval quality work.
 
 ---
 
@@ -191,7 +154,7 @@ No dependency has been added where the existing status document did not establis
 
 Freya reaches 100% only when a normal `FreyaApp` startup reliably composes one supported architecture; safely accepts or rejects actions; plans, executes, verifies, repairs, and persists outcomes; learns from those outcomes; uses persistent and retrievable knowledge across sessions; runs healthy autonomous background work; routes diagnostics and learning through controlled improvement safeguards; survives configured provider and tool failures; and demonstrates these chains through a clean, production-path test suite.
 
-The current verified operational completion is **88.0%**. The earlier 84.0% estimate is superseded by the current verified assessment and is not used as the completion baseline.
+The current verified operational completion is **91.0%**. The earlier 88.0% estimate is superseded by the current verified assessment and is not used as the completion baseline.
 
 ---
 
@@ -744,8 +707,40 @@ Task 14 adds a production liveness and readiness surface without introducing ano
 - `docs/HEALTH_READINESS.md`
 - `PROJECT_STATUS.md`
 
+---
+
+## Task 15 — Add configurable learning and repair policy
+
+**Status:** COMPLETE
+
+**Implementation Summary**
+
+Task 15 moves learning and answer-repair policy into the existing core configuration path. `LearningPolicyConfig` owns validated relevance, novelty, actionability, item-confidence, storage-confidence, and minimum-item thresholds; `RepairPolicyConfig` owns validated repair retries and prompt selection. The `LearningPipeline` consumes learning policy for evaluation, validation, and durable-storage decisions, while `AnswerRepairLoop` consumes repair policy for retry limits and the supported `standard` or `concise` prompt behavior. The hot-reload validator rejects invalid policy values before applying them.
+
+Defaults preserve the previous production behavior: learning thresholds are `0.3`, `0.2`, `0.2`, and `0.1`; durable-storage confidence is `0.4` with one item required; answer repair allows three attempts using the `standard` prompt policy. Thresholds must remain within `0.0`–`1.0`, the item minimum is at least one, repair attempts are restricted to `1`–`10`, and unsupported or empty prompt policies are rejected.
+
+**Tests and Verification Results**
+
+- `PYTHONPATH=. python3 -m pytest -q --basetemp=/tmp/freya-task15-policy tests/test_learning_repair_policy.py`: **10 passed**. This covers defaults, learning-threshold use, repair retry and prompt-policy overrides, and invalid values.
+- `PYTHONPATH=. python3 -m pytest -q --basetemp=/tmp/freya-task15-learning tests/test_learning_pipeline.py`: **15 passed**.
+- `PYTHONPATH=. python3 -m pytest -q --basetemp=/tmp/freya-task15-repair tests/test_repair_loop.py tests/test_learning_repair_policy.py`: **11 passed**.
+- `PYTHONPATH=. python3 -m pytest -q --basetemp=/tmp/freya-task15-affected tests/test_task5_execution_learning.py tests/test_task11_autonomous_learning.py tests/test_shared_event_improvement_flow.py`: **14 passed**.
+- `PYTHONPATH=. python3 -m py_compile app/core/config.py app/core/config_hot_reload.py app/learning/pipeline.py app/verification/answer_repair_loop.py app/verification/answer_verifier.py`: passed.
+- The final command, `timeout 600 env PYTHONPATH=. python3 -m pytest -q --basetemp=/tmp/freya-task15-full-suite`, exceeded the required ten-minute limit and was manually stopped once after its partial output reached **93%**. It had already reported repository-wide failures and errors; the full suite is not claimed as passing. The focused and directly affected results above remain the Task 15 verification evidence.
+
+**Files Changed**
+
+- `.env.example`
+- `app/core/config.py`
+- `app/core/config_hot_reload.py`
+- `app/learning/pipeline.py`
+- `app/verification/answer_repair_loop.py`
+- `app/verification/answer_verifier.py`
+- `tests/test_learning_repair_policy.py`
+- `PROJECT_STATUS.md`
+
 **Next Active Task**
 
-Task 15 — Add configurable learning and repair policy.
+Task 16 — Resolve remaining memory and retrieval quality gaps.
 
 ---

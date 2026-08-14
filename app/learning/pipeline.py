@@ -17,6 +17,7 @@ import threading
 from collections import deque
 from typing import Any, Dict, List
 
+from app.core.config import Config, LearningPolicyConfig
 from app.core.logger import logger
 from app.memory.coordinator import MemoryCoordinator
 from app.core.events import get_event_bus
@@ -38,12 +39,54 @@ from .models import (
 class LearningPipeline:
     """Self-Learning Pipeline - deterministic 5-stage pipeline for learning from candidates."""
 
-    def __init__(self, memory_coordinator, min_relevance=0.3, min_novelty=0.2, min_actionability=0.2, min_confidence=0.3, event_bus=None):
+    def __init__(
+        self,
+        memory_coordinator,
+        min_relevance=None,
+        min_novelty=None,
+        min_actionability=None,
+        min_confidence=None,
+        event_bus=None,
+        policy: LearningPolicyConfig | None = None,
+    ):
         self._memory = memory_coordinator
-        self._min_relevance = min_relevance
-        self._min_novelty = min_novelty
-        self._min_actionability = min_actionability
-        self._min_confidence = min_confidence
+        configured_policy = policy or Config().learning_policy
+        overrides = {
+            "min_relevance": min_relevance,
+            "min_novelty": min_novelty,
+            "min_actionability": min_actionability,
+            "min_confidence": min_confidence,
+        }
+        if any(value is not None for value in overrides.values()):
+            configured_policy = LearningPolicyConfig(
+                min_relevance=(
+                    configured_policy.min_relevance
+                    if min_relevance is None
+                    else min_relevance
+                ),
+                min_novelty=(
+                    configured_policy.min_novelty
+                    if min_novelty is None
+                    else min_novelty
+                ),
+                min_actionability=(
+                    configured_policy.min_actionability
+                    if min_actionability is None
+                    else min_actionability
+                ),
+                min_confidence=(
+                    configured_policy.min_confidence
+                    if min_confidence is None
+                    else min_confidence
+                ),
+                worth_remembering_threshold=configured_policy.worth_remembering_threshold,
+                min_items_for_storage=configured_policy.min_items_for_storage,
+            )
+        self._policy = configured_policy
+        self._min_relevance = self._policy.min_relevance
+        self._min_novelty = self._policy.min_novelty
+        self._min_actionability = self._policy.min_actionability
+        self._min_confidence = self._policy.min_confidence
         self._event_bus = event_bus
         self._lock = threading.RLock()
         self._pending_candidates = deque()
@@ -377,7 +420,7 @@ class LearningPipeline:
 
             # Check 2: Item must have reasonable confidence
             confidence = item.get("confidence", 0.0)
-            if confidence < 0.1:
+            if confidence < self._policy.min_confidence:
                 validation_reasons.append(f"Confidence too low: {confidence}")
 
             # Check 3: Item must have category and source
@@ -439,8 +482,8 @@ class LearningPipeline:
 
         # Decision logic: worth remembering if average confidence exceeds threshold
         # and we have a reasonable number of quality items
-        worth_remembering_threshold = 0.4  # Configurable threshold
-        min_items_for_storage = 1
+        worth_remembering_threshold = self._policy.worth_remembering_threshold
+        min_items_for_storage = self._policy.min_items_for_storage
 
         decision_worth_remembering = (
             avg_confidence >= worth_remembering_threshold and

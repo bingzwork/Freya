@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set
 from copy import deepcopy
 
-from app.core.config import Config, BASE_DIR
+from app.core.config import Config, BASE_DIR, LearningPolicyConfig, RepairPolicyConfig
 from app.core.events import EventBus, get_event_bus, Event
 from app.core.file_watcher import FileWatcher, FileEventBusIntegration, FileEventType
 from app.core.logger import logger
@@ -70,6 +70,14 @@ class ConfigValidator:
         "MAX_INDEX_SIZE": lambda v: _try_parse_int(v) is not None and _try_parse_int(v) > 0,
         "INDEX_BATCH_SIZE": lambda v: _try_parse_int(v) is not None and _try_parse_int(v) > 0,
         "LLM_TIMEOUT": lambda v: _try_parse_number(v) is not None and _try_parse_number(v) > 0,
+        "LEARNING_MIN_RELEVANCE": LearningPolicyConfig.is_valid_threshold,
+        "LEARNING_MIN_NOVELTY": LearningPolicyConfig.is_valid_threshold,
+        "LEARNING_MIN_ACTIONABILITY": LearningPolicyConfig.is_valid_threshold,
+        "LEARNING_MIN_CONFIDENCE": LearningPolicyConfig.is_valid_threshold,
+        "LEARNING_WORTH_REMEMBERING_THRESHOLD": LearningPolicyConfig.is_valid_threshold,
+        "LEARNING_MIN_ITEMS_FOR_STORAGE": LearningPolicyConfig.is_valid_min_items,
+        "ANSWER_REPAIR_MAX_ATTEMPTS": RepairPolicyConfig.is_valid_max_attempts,
+        "ANSWER_REPAIR_PROMPT_POLICY": RepairPolicyConfig.is_valid_prompt_policy,
     }
 
     @staticmethod

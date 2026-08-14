@@ -14,6 +14,7 @@ which is used by ExecutionEngine for plan verification.
 from typing import Optional
 from dataclasses import dataclass
 
+from app.core.config import RepairPolicyConfig
 from app.core.logger import logger
 from app.learning.pipeline import LearningPipeline
 from app.learning.models import LearningCandidate, LearningCandidateType
@@ -43,6 +44,7 @@ class AnswerVerifier:
         self,
         learning_pipeline: LearningPipeline,
         priority_llm=None,  # PriorityLLMProvider for AnswerRepairLoop
+        repair_policy: Optional[RepairPolicyConfig] = None,
     ):
         """
         Initialize the AnswerVerifier.
@@ -50,6 +52,7 @@ class AnswerVerifier:
         Args:
             learning_pipeline: The learning pipeline to send candidates to
             priority_llm: Optional PriorityLLMProvider for AnswerRepairLoop (D2)
+            repair_policy: Optional validated repair policy for AnswerRepairLoop
         """
         self._learning_pipeline = learning_pipeline
         self._priority_llm = priority_llm
@@ -59,7 +62,7 @@ class AnswerVerifier:
             self._repair_loop = AnswerRepairLoop(
                 priority_llm=priority_llm,
                 answer_verifier=self,
-                max_attempts=3,
+                policy=repair_policy,
             )
             self._safe_failure = AnswerSafeFailure(learning_pipeline)
         else:
