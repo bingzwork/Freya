@@ -34,6 +34,31 @@ The reproducible canonical command now includes the priority-hardening and produ
 | Focused priority, readiness, capability, and architecture contracts | Passed: **26 tests**. |
 | Full reproducible canonical suite | Passed: **111 tests** across clean-process lifecycle, architecture, routing, execution, learning, capability safety, provider resilience, priority hardening, and readiness contracts. |
 
+## Freya Core Architecture v1 freeze
+
+Freya Core Architecture v1 is finalized and **FROZEN**. [`ARCHITECTURE_CONTRACT.md`](ARCHITECTURE_CONTRACT.md) is authoritative for architectural ownership, component boundaries, canonical runtime paths, composition ownership, routing, memory, execution, learning, background-service ownership, and extension points. The implementation remains authoritative for implementation details, APIs, algorithms, configuration, bugs, tests, and runtime behavior inside those boundaries. If code conflicts with the frozen contract, the implementation must be repaired to conform unless the user explicitly authorizes an architecture version change.
+
+The freeze contract now clarifies that `WorkflowOrchestrator` and `AutonomyManager` are optional only because workflow/task or autonomy runtime modes may be disabled. When enabled, their ownership remains canonical and no replacement orchestrator or autonomy manager may be introduced. The extension-port table is valid Markdown, and the capability rule explicitly permits normal additions through the existing registry, router, handler, `ToolManager`, `SafetyGate`, execution/verification, `BackgroundJobService`, workflow, and autonomy ports without redesigning the core architecture.
+
+### Targeted production-graph verification
+
+The current production graph was checked against [`CURRENT_ARCHITECTURE.md`](CURRENT_ARCHITECTURE.md), [`app/core/initializer.py`](app/core/initializer.py), [`app/core/protocols.py`](app/core/protocols.py), and the implemented owner modules. The verification confirmed the following canonical ownerships without redesigning the graph:
+
+| Boundary | Canonical owner verified |
+|---|---|
+| Bootstrap and composition | `SystemInitializer` |
+| Public agent and conversation control | `AgentFacadeImpl`, `ConversationControlHandler` |
+| Routing and retrieval | `UnifiedRouter`, `UnifiedRetrieval` |
+| Memory persistence | `MemoryCoordinator` |
+| Capabilities and tools | `CapabilityRegistry`, `CapabilityRouter`, `ToolManager` |
+| LLM composition | `LLMStack` |
+| Planning, execution, and safety | `ExecutionEngine`, `WorkflowOrchestrator`, `SafetyGate` |
+| Learning | `LearningPipeline` |
+| Autonomy and diagnostics | `AutonomyManager`, `DiagnosticEngine`, `SafeSelfImprovement` |
+| Shared runtime services | `EventBus`, `BackgroundJobService`, `ObservabilityHub` |
+
+**Verification result:** the frozen document matches the current implemented production graph for these boundaries. No real implementation discrepancy requiring a code change was discovered. No production implementation files were changed; documentation validation was therefore sufficient. Remaining future-growth items and any future bugs must be addressed through the existing Freya Core Architecture v1 extension points and must preserve the frozen architecture.
+
 ## Remaining tasks
 
 There are **no remaining MVP tasks**. The six dependency-first P1/P2 hardening tasks are complete. The following entries are deliberately future growth work, not blockers for the MVP boundary.

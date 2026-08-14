@@ -4,7 +4,7 @@
 
 This document freezes Freya’s currently implemented core architecture as **Freya Core Architecture v1**. It is a compatibility contract for future work. It records the stable ownership boundaries and extension points that are present in the codebase today; it does not claim that every implementation detail is complete or correct.
 
-The contract is grounded in the current runtime composition in [`main.py`](./main.py), [`app/core/initializer.py`](./app/core/initializer.py), [`app/core/protocols.py`](./app/core/protocols.py), and the current architecture map in [`CURRENT_ARCHITECTURE.md`](./CURRENT_ARCHITECTURE.md). The implementation remains the source of truth if this document and code ever disagree.
+The contract is grounded in the current runtime composition in [`main.py`](./main.py), [`app/core/initializer.py`](./app/core/initializer.py), [`app/core/protocols.py`](./app/core/protocols.py), and the current architecture map in [`CURRENT_ARCHITECTURE.md`](./CURRENT_ARCHITECTURE.md). For architectural ownership, boundaries, canonical runtime paths, and extension points, this frozen document is authoritative. The implementation remains the source of truth for implementation details, APIs, algorithms, configuration, bugs, tests, and runtime behavior inside those boundaries. If implementation code conflicts with this contract, repair the implementation to conform unless the user explicitly authorizes an architecture version change.
 
 ## 1. Freeze rules
 
@@ -31,14 +31,14 @@ The initializer’s current construction boundary is:
 5. The canonical `CapabilityRegistry` and its startup audit.
 6. `SafetyGate` and the `UnifiedRouter`.
 7. `ExecutionEngine` and answer verification.
-8. Optional `WorkflowOrchestrator`.
+8. `WorkflowOrchestrator`, constructed when workflow/task execution is enabled.
 9. `ConversationControlHandler`.
 10. `AgentFacadeImpl`.
-11. Optional `AutonomyManager`.
+11. `AutonomyManager`, constructed when autonomy is enabled.
 12. `LearningPipeline`, including late-bound learning collaborators.
-13. Optional diagnostics and safe self-improvement.
+13. Optional diagnostics and safe self-improvement, constructed when those feature modes are enabled.
 
-The order may be repaired or extended internally when required by a bug fix, but another composition root must not be introduced for the same runtime.
+The order may be repaired or extended internally when required by a bug fix, but another composition root must not be introduced for the same runtime. A component being optional means its feature/runtime mode may be disabled; it does not mean another implementation may replace its architectural ownership. When enabled, `WorkflowOrchestrator`, `AutonomyManager`, diagnostics, and safe self-improvement remain canonical owners of their respective boundaries.
 
 ### 2.2 Public agent boundary
 
@@ -80,6 +80,8 @@ Provider health and readiness belong to the existing observability/readiness sur
 
 [`WorkflowOrchestrator`](./app/orchestrator/workflow_orchestrator.py) is the coordinating workflow boundary. It composes the shared capability registry, router, execution engine, safety gate, task executor, chat activity, event bus, and background-job service. It may coordinate workflows and approved self-improvement actions, but it must not become a second router, memory owner, capability registry, or execution engine.
 
+Workflow/task execution may disable construction of `WorkflowOrchestrator` through the existing runtime configuration, but no alternative orchestrator may take its place when workflow/task execution is enabled.
+
 [`SafetyGate`](./app/orchestrator/safety_gate.py) remains the safety boundary for approved actions. Tool results return to the existing execution path for verification rather than bypassing execution ownership.
 
 ### 2.8 Learning boundary
@@ -91,6 +93,8 @@ Learning may observe events and execution outcomes through the shared infrastruc
 ### 2.9 Autonomy, diagnostics, and safe improvement
 
 [`AutonomyManager`](./app/autonomy/manager.py) owns the current autonomy/watchdog/self-initiated/maintenance coordination boundary and uses the existing goal storage, workflow orchestration, learning, observability, and background-job services.
+
+Autonomy may be disabled through the existing runtime configuration, but no alternative autonomy manager may take its place when autonomy is enabled.
 
 [`DiagnosticEngine`](./app/diagnostics/diagnostic_engine.py) owns diagnostic analysis. [`SafeSelfImprovement`](./app/safe_self_improvement/self_improvement.py) owns the approved-change boundary and routes approved changes through the existing workflow orchestration path. These components may be improved internally, but new autonomous or diagnostic graphs must not be created beside them.
 
@@ -109,7 +113,7 @@ The legacy `FreyaAgent`, legacy local-memory bundle, and `ConversationState` rem
 New capabilities should use the following existing ports:
 
 | Need | Existing extension point | Ownership rule |
-| --- | --- | --- |
+|---|---|---|
 | Add a callable or query-facing capability | `CapabilityMetadata`, `Capability`, `CapabilityRegistry`, `CapabilityRegistrationBridge` | Register once in the canonical registry; expose natural-language discovery only through the existing safe-query contract. |
 | Add a tool-backed action | Capability handler plus `ToolManager` | Approved actions stay behind `SafetyGate` and return through the existing execution/verification flow. |
 | Add durable memory | `MemoryCoordinator` write API and `UnifiedRetrieval` | The coordinator remains the single durable write owner and retrieval aggregation surface. |
@@ -118,6 +122,16 @@ New capabilities should use the following existing ports:
 | Add a user-facing chat behavior | `AgentFacadeImpl`, `ConversationControlHandler`, `UnifiedRouter`, and registered capability paths | Do not add another request router or facade. |
 | Add learning from an outcome | `LearningPipeline` and `MemoryCoordinator` | Reuse the existing observe-to-validated-learning pipeline and canonical persistence path. |
 | Add diagnostics or safe repair | `DiagnosticEngine`, `SafeSelfImprovement`, `WorkflowOrchestrator` | Approved changes remain inside the existing safety and workflow boundaries. |
+
+## 3.1 Capability extension rule
+
+Normal new capabilities such as web search, image generation, video generation, podcast editing, audio processing, browser actions, new tools, and new automated jobs should normally **not** require a core architecture change. They should plug into the existing ports, primarily:
+
+> `CapabilityRegistry → CapabilityRouter → capability handler → ToolManager`
+
+When execution requires approval, mutation, or verification, the capability must use the existing `SafetyGate` and `ExecutionEngine`/verification path. Scheduled or autonomous work must use `BackgroundJobService` with the appropriate `WorkflowOrchestrator` or `AutonomyManager` owner. Adding one of these capabilities does not authorize a parallel router, orchestrator, memory owner, retrieval architecture, learning pipeline, event bus, background-job system, capability registry, execution engine, or composition root.
+
+If a future requirement genuinely cannot fit these extension ports, the agent must report the required architecture change, reason, affected boundary, compatibility impact, and proposed Freya Core Architecture v2 change, then stop before changing the frozen boundary unless the user explicitly approves it.
 
 ## 4. What this freeze does not mean
 
