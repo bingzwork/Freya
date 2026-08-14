@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set
 from uuid import uuid4
 
+from app.core.correlation import correlation_scope, get_correlation_id
 from app.core.events import get_event_bus, Event, EventPriority
 from app.core.observability import get_observability_hub, ComponentInfo, ComponentType
 from app.core.background_jobs import get_job_service
@@ -336,6 +337,11 @@ class WorkflowOrchestrator:
         if self._state != OrchestratorState.RUNNING:
             raise RuntimeError(f"Orchestrator not running (state: {self._state})")
         workflow = self._workflow_composer.compose(spec)
+        correlation_id = spec.context.get("correlation_id") or spec.context.get("request_id") or workflow.spec.workflow_id
+        spec.context.setdefault("correlation_id", correlation_id)
+        spec.context.setdefault("request_id", correlation_id)
+        workflow.spec.context.setdefault("correlation_id", correlation_id)
+        workflow.spec.context.setdefault("request_id", correlation_id)
         with self._workflow_lock:
             self._active_workflows[workflow.spec.workflow_id] = workflow
         capabilities = {}
@@ -345,17 +351,19 @@ class WorkflowOrchestrator:
                 capabilities[step.capability_name] = cap
 
         try:
-            self._safety_gate.check_and_enforce(
-                f"Execute workflow: {workflow.spec.name or workflow.spec.workflow_id}",
-                "workflow_execution",
-                {
-                    "workflow_id": workflow.spec.workflow_id,
-                    "workflow_name": workflow.spec.name,
-                    "description": workflow.spec.description,
-                    "capabilities": list(capabilities),
-                    "context": spec.context,
-                },
-            )
+            with correlation_scope(correlation_id, prefix="workflow"):
+                self._safety_gate.check_and_enforce(
+                    f"Execute workflow: {workflow.spec.name or workflow.spec.workflow_id}",
+                    "workflow_execution",
+                    {
+                        "workflow_id": workflow.spec.workflow_id,
+                        "workflow_name": workflow.spec.name,
+                        "description": workflow.spec.description,
+                        "capabilities": list(capabilities),
+                        "context": spec.context,
+                        "correlation_id": correlation_id,
+                    },
+                )
         except Exception as error:
             workflow.status = WorkflowStatus.FAILED
             workflow.completed_at = datetime.now(timezone.utc).isoformat()
@@ -365,6 +373,7 @@ class WorkflowOrchestrator:
             })
             self._publish_event("workflow.safety_denied", {
                 "workflow_id": workflow.spec.workflow_id,
+                "correlation_id": correlation_id,
                 "error": str(error),
             })
             raise
@@ -381,6 +390,7 @@ class WorkflowOrchestrator:
         workflow.started_at = datetime.now(timezone.utc).isoformat()
         self._publish_event("workflow.started", {
             "workflow_id": workflow.spec.workflow_id,
+            "correlation_id": correlation_id,
             "name": workflow.spec.name,
             "steps": len(workflow.steps),
         })
@@ -412,7 +422,9 @@ class WorkflowOrchestrator:
         candidate_id = getattr(candidate, "id", "unknown")
         candidate_title = getattr(candidate, "title", "safe self-improvement")
         metadata = getattr(candidate, "metadata", {}) or {}
+        correlation_id = metadata.get("correlation_id") or candidate_id
         context = {
+            "correlation_id": correlation_id,
             "candidate_id": candidate_id,
             "title": candidate_title,
             "description": getattr(candidate, "description", ""),
@@ -422,11 +434,12 @@ class WorkflowOrchestrator:
             "metadata": metadata,
         }
         self._publish_event("workflow.self_improvement.requested", context)
-        self._safety_gate.check_and_enforce(
-            f"Apply safe self-improvement: {candidate_title}",
-            "safe_self_improvement",
-            context,
-        )
+        with correlation_scope(correlation_id, prefix="workflow"):
+            self._safety_gate.check_and_enforce(
+                f"Apply safe self-improvement: {candidate_title}",
+                "safe_self_improvement",
+                context,
+            )
         self._publish_event("workflow.self_improvement.approved", context)
 
         try:
@@ -576,11 +589,20 @@ class WorkflowOrchestrator:
 
     def _publish_event(self, event_type: str, payload: Dict[str, Any]):
         try:
+            event_payload = dict(payload)
+            correlation_id = (
+                event_payload.get("correlation_id")
+                or get_correlation_id()
+                or event_payload.get("workflow_id")
+            )
+            if correlation_id:
+                event_payload.setdefault("correlation_id", correlation_id)
             event = Event(
                 name=event_type,
-                data=payload,
+                data=event_payload,
                 source="workflow_orchestrator",
-                priority=EventPriority.NORMAL
+                priority=EventPriority.NORMAL,
+                metadata={"correlation_id": correlation_id} if correlation_id else {},
             )
             self._event_bus.publish(event)
         except Exception as e:

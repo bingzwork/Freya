@@ -72,6 +72,10 @@ class AutonomyConfig:
     watchdog_event_subscriptions: List[str] = field(default_factory=lambda: [
         "task.*", "workflow.*", "health.*", "alert.*", "goal.*", "memory.*"
     ])
+    # Identical health/event observations are admitted once per window before
+    # reaching LearningPipeline. This prevents feedback loops and job pressure.
+    watchdog_dedup_window_seconds: float = 300.0
+    watchdog_dedup_max_entries: int = 512
     
     # Self-initiated work settings
     self_initiated_enabled: bool = True

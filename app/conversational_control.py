@@ -30,6 +30,7 @@ from app.memory.conversation_memory import ConversationMemory, ConversationTurn
 from app.planner.plan_manager import Plan, PlanManager, Task, TaskStatus
 
 # Shared infrastructure imports
+from app.core.correlation import correlation_scope
 from app.core.events import get_event_bus, EventBus, Event
 from app.core.background_jobs import get_job_service, BackgroundJobService, JobTriggerConfig, JobTriggerType, JobPriority
 from app.core.observability import get_observability_hub, ObservabilityHub, ComponentInfo, ComponentType, HealthResult, HealthStatus
@@ -198,14 +199,21 @@ class ConversationControlHandler:
                 metadata={"error": str(e)}
             )
 
-    def _publish_event(self, event_name: str, data: Dict[str, Any]) -> None:
-        """Publish an event to the shared EventBus."""
+    def _publish_event(
+        self,
+        event_name: str,
+        data: Dict[str, Any],
+        *,
+        correlation_id: Optional[str] = None,
+    ) -> None:
+        """Publish an event to the shared EventBus with request correlation."""
         try:
-            self.event_bus.emit(
-                name=event_name,
-                data=data,
-                source="ConversationControlHandler"
-            )
+            with correlation_scope(correlation_id, prefix="request"):
+                self.event_bus.emit(
+                    name=event_name,
+                    data=data,
+                    source="ConversationControlHandler",
+                )
         except Exception as e:
             logger.warning(f"[ConversationControl] Failed to publish event {event_name}: {e}")
 
@@ -249,7 +257,7 @@ class ConversationControlHandler:
         self._intelligence = intelligence
         self._chat_activity = chat_activity
 
-    def route_question(self, user_input: str) -> Any:
+    def route_question(self, user_input: str, *, correlation_id: Optional[str] = None) -> Any:
         """Route one normal question through the target ingress contract.
 
         The control layer obtains bounded context and the active goal through
@@ -260,31 +268,47 @@ class ConversationControlHandler:
         if self._router is None or self._memory_coordinator is None:
             raise RuntimeError("ConversationControl question flow is not configured")
 
-        if self._chat_activity is not None:
-            self._chat_activity.chat_started()
-        context = {
-            "recent_conversation": self._memory_coordinator.get_conversation_context(limit=3),
-            "active_goal": self._memory_coordinator.get_active_goal(),
-            "ingress": "ConversationControl",
-        }
-        self._publish_event(
-            "conversation.question.received",
-            {"question": user_input[:500], "has_active_goal": context["active_goal"] is not None},
-        )
-        route_result = self._router.route(user_input, context=context)
-        self._publish_event(
-            "conversation.question.routed",
-            {"question": user_input[:500], "route_reason": getattr(route_result, "reason", "")},
-        )
-        return route_result
+        with correlation_scope(correlation_id, prefix="request") as active_correlation_id:
+            if self._chat_activity is not None:
+                self._chat_activity.chat_started()
+            context = {
+                "recent_conversation": self._memory_coordinator.get_conversation_context(limit=3),
+                "active_goal": self._memory_coordinator.get_active_goal(),
+                "ingress": "ConversationControl",
+                "correlation_id": active_correlation_id,
+                "request_id": active_correlation_id,
+            }
+            self._publish_event(
+                "conversation.question.received",
+                {"question": user_input[:500], "has_active_goal": context["active_goal"] is not None},
+                correlation_id=active_correlation_id,
+            )
+            route_result = self._router.route(user_input, context=context)
+            self._publish_event(
+                "conversation.question.routed",
+                {"question": user_input[:500], "route_reason": getattr(route_result, "reason", "")},
+                correlation_id=active_correlation_id,
+            )
+            return route_result
 
-    def record_question_exchange(self, user_input: str, response: str) -> None:
+    def record_question_exchange(
+        self,
+        user_input: str,
+        response: str,
+        *,
+        correlation_id: Optional[str] = None,
+    ) -> None:
         """Persist both turns through the canonical MemoryCoordinator boundary."""
         if self._memory_coordinator is None:
             raise RuntimeError("ConversationControl memory coordinator is not configured")
-        self._memory_coordinator.record_conversation({"role": "user", "content": user_input})
-        self._memory_coordinator.record_conversation({"role": "assistant", "content": response})
-        self._publish_event("conversation.question.completed", {"response_length": len(response)})
+        with correlation_scope(correlation_id, prefix="request") as active_correlation_id:
+            self._memory_coordinator.record_conversation({"role": "user", "content": user_input})
+            self._memory_coordinator.record_conversation({"role": "assistant", "content": response})
+            self._publish_event(
+                "conversation.question.completed",
+                {"response_length": len(response)},
+                correlation_id=active_correlation_id,
+            )
 
     def finish_question(self) -> None:
         """End chat activity after the caller has produced the final response."""

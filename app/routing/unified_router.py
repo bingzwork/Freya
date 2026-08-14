@@ -24,6 +24,7 @@ from app.core.protocols import ChatActivityProvider
 from app.routing.knowledge_first_resolver import KnowledgeFirstResolver, ResolutionResult
 from app.memory.unified_retrieval import UnifiedRetrieval
 from app.intelligence.intelligence import Intelligence
+from app.core.correlation import correlation_scope
 from app.core.llm_stack import LLMStack
 from app.core.logger import logger
 from app.capabilities.registration_bridge import CapabilityRegistrationBridge
@@ -180,59 +181,67 @@ class UnifiedRouter:
         Returns a complete routing decision in a single call.
         Uses KnowledgeFirstResolver for knowledge-first routing when available.
         """
-        # 1. Check conversational control FIRST (short-circuits everything)
-        control_cmd = self._control_parser.parse(user_input)
-        if control_cmd:
-            return RouteResult(
-                intent=IntentType.CONVERSATIONAL_CONTROL,
-                confidence=1.0,
-                reason="Control command",
-                is_control=True,
-                control_command=control_cmd,
+        route_context = dict(context or {})
+        with correlation_scope(route_context.get("correlation_id"), prefix="request") as correlation_id:
+            route_context.setdefault("correlation_id", correlation_id)
+            route_context.setdefault("request_id", correlation_id)
+
+            # 1. Check conversational control FIRST (short-circuits everything)
+            control_cmd = self._control_parser.parse(user_input)
+            if control_cmd:
+                return RouteResult(
+                    intent=IntentType.CONVERSATIONAL_CONTROL,
+                    confidence=1.0,
+                    reason="Control command",
+                    is_control=True,
+                    control_command=control_cmd,
+                )
+
+            # 2. Knowledge-first routing is authoritative. Resolver failures are
+            # surfaced to the caller rather than silently selecting a conflicting
+            # legacy path.
+            classification = self._intent_classifier.classify(user_input, route_context)
+            resolution = self._knowledge_first_resolver.resolve(
+                query=user_input,
+                context=route_context,
+                intent_type=classification.intent,
             )
 
-        # 2. Knowledge-first routing is authoritative. Resolver failures are
-        # surfaced to the caller rather than silently selecting a conflicting
-        # legacy path.
-        classification = self._intent_classifier.classify(user_input, context)
-        resolution = self._knowledge_first_resolver.resolve(
-            query=user_input,
-            context=context,
-            intent_type=classification.intent,
-        )
+            # Convert ResolutionResult to RouteResult.
+            if resolution.action == "answer":
+                return RouteResult(
+                    intent=IntentType.QUESTION,
+                    confidence=resolution.confidence,
+                    reason=f"Knowledge-first answer: {', '.join(resolution.sources)}",
+                    is_direct_answer=True,
+                    answer=resolution.answer,
+                )
+            if resolution.action == "capability":
+                return RouteResult(
+                    intent=IntentType.QUESTION,
+                    confidence=resolution.capability_confidence,
+                    reason=f"Capability: {resolution.capability_name}",
+                    is_direct_answer=True,
+                    capability_name=resolution.capability_name,
+                    capability_confidence=resolution.capability_confidence,
+                    capability_result=resolution.capability_result,
+                )
+            if resolution.action == "llm_fallback":
+                llm_context = dict(resolution.llm_context or {})
+                llm_context.setdefault("correlation_id", correlation_id)
+                llm_context.setdefault("request_id", correlation_id)
+                return RouteResult(
+                    intent=IntentType.QUESTION,
+                    confidence=resolution.confidence,
+                    reason="LLM fallback required",
+                    is_direct_answer=True,
+                    llm_prompt=resolution.llm_prompt,
+                    llm_priority=resolution.llm_priority,
+                    llm_context=llm_context,
+                )
 
-        # Convert ResolutionResult to RouteResult.
-        if resolution.action == "answer":
-            return RouteResult(
-                intent=IntentType.QUESTION,
-                confidence=resolution.confidence,
-                reason=f"Knowledge-first answer: {', '.join(resolution.sources)}",
-                is_direct_answer=True,
-                answer=resolution.answer,
-            )
-        if resolution.action == "capability":
-            return RouteResult(
-                intent=IntentType.QUESTION,
-                confidence=resolution.capability_confidence,
-                reason=f"Capability: {resolution.capability_name}",
-                is_direct_answer=True,
-                capability_name=resolution.capability_name,
-                capability_confidence=resolution.capability_confidence,
-                capability_result=resolution.capability_result,
-            )
-        if resolution.action == "llm_fallback":
-            return RouteResult(
-                intent=IntentType.QUESTION,
-                confidence=resolution.confidence,
-                reason="LLM fallback required",
-                is_direct_answer=True,
-                llm_prompt=resolution.llm_prompt,
-                llm_priority=resolution.llm_priority,
-                llm_context=resolution.llm_context,
-            )
-
-        # Resolver implementations must return one of the above actions.
-        raise RuntimeError(f"Unsupported knowledge-first routing action: {resolution.action}")
+            # Resolver implementations must return one of the above actions.
+            raise RuntimeError(f"Unsupported knowledge-first routing action: {resolution.action}")
 
     def execute_capability(self, capability_name: str, query: str, **context) -> CapabilityResult:
         """Execute a specific capability by name through the shared router path."""

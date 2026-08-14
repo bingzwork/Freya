@@ -1,54 +1,49 @@
 # Freya Project Status
 
-## Scope and current position
+## Current position
 
-Freya’s canonical runtime follows the component ownership and flow boundaries in [`TARGET_ARCHITECTURE.md`](TARGET_ARCHITECTURE.md). The implementation remains intentionally **minimal**: it preserves existing components, introduces only narrow adapters where a declared target edge was absent, and relies on late-bound dependencies rather than replacement subsystems.
+**Freya is MVP Ready.** The canonical local-first runtime now starts from one initializer-owned graph and supports grounded local-memory answers, registered local capabilities, verified local-model fallback disclosure, safety-gated execution, execution-result verification, terminal-failure reporting, and validated learning promotion through `MemoryCoordinator`.
 
-> **Current P0 status:** All P0 work identified in the preceding status report is complete. The canonical graph now has clean-process lifecycle coverage, claim-level fallback grounding, bounded provider outcomes, and a reproducible package-installed validation command.
+> **MVP decision:** There are **no remaining MVP blockers** in the current canonical runtime. The completed P1/P2 work below is intentionally narrow hardening; it preserves the established architecture and compatibility boundaries rather than introducing a replacement subsystem.
 
-## Completed focused implementation work
+## Completed Top 6 Priority work
 
-| Area | Completed implementation | Result |
-|---|---|---|
-| Clean-process canonical runtime | Added `tests/test_clean_process_runtime.py` and its standalone probe. The probe starts the intended optional components, verifies shared-service identity, exercises local-memory, capability, unsupported-question, and read-only verified execution paths, and checks owned worker shutdown. | The canonical runtime is covered in a fresh Python process without requiring a local-model download. |
-| Claim-level fallback verification | Replaced answer-wide lexical-overlap acceptance with per-claim checks against individual local evidence records. Rejected claims and their supporting/rejection evidence are retained in learning context. | A multi-claim answer now requires local support for every material claim; a single unsupported statement rejects the draft. |
-| Safe fallback failure handoff | Added explicit claim-verification context to repair and safe-failure handling, and prevented nested repair attempts from recursively starting additional repair loops. | Failed repairs remain bounded and emit a knowledge-gap observation through the existing learning boundary. |
-| Provider failure semantics | Added `LLMOutcome` and `LLMOutcomeKind` to `PriorityLLMProvider`, including bounded timeout, unavailable-provider, malformed-output, and shutdown outcomes. The canonical facade consumes these outcomes before answer verification. | The fallback path does not return a raw provider failure or unverified draft, and provider failure enters the normal safe-disclosure and learning flow. |
-| Reproducible canonical validation | Added [`scripts/run_canonical_tests.sh`](scripts/run_canonical_tests.sh), which installs the declared development extra and runs the focused canonical suite without setting `PYTHONPATH`. | A contributor has one package-installation-based command for the canonical validation suite. |
-| Safe Self-Improvement workflow handoff | Added a minimal `WorkflowOrchestrator.execute_safe_self_improvement()` adapter. Approved candidates now pass through the orchestrator and its `SafetyGate` before the existing risk executor runs; workflow, applied, verification, rejection, and rollback outcomes are emitted on the shared `EventBus`. | No self-improvement mutation is applied when the workflow boundary is absent, while existing rollback and promotion logic remains intact. |
-| Runtime lifecycle ownership | Bound Safe Self-Improvement to the canonical workflow orchestrator during initialization and stopped it before infrastructure teardown. | The initialized runtime graph retains explicit ownership and shutdown order for the added handoff. |
+| Priority | Completed implementation | Definition of done | Result |
+|---|---|---|---|
+| **P1.2** | Added a configurable, bounded fingerprint/TTL cache at the `Watchdog` pre-learning ingress. It normalizes ephemeral event and health fields, suppresses duplicate observations before handlers or `LearningPipeline`, and enforces a maximum cache size. | Replayed watchdog, EventBus, and observability signals cannot create unbounded learning candidates, autonomous work, or background jobs. | Complete. |
+| **P1.3** | Added `correlation_scope` and automatic EventBus metadata attachment. `AgentFacadeImpl`, `ConversationControlHandler`, `UnifiedRouter`, `WorkflowOrchestrator`, `TaskExecutor`, capability execution inputs, and background-job lifecycle events preserve one `correlation_id` / `request_id`. | One identifier reconstructs a question, workflow result, or safe failure across the canonical path. | Complete. |
+| **P1.4** | Added `CapabilityRegistry.audit_startup()` and ran it during canonical initialization. The audit verifies declared action callability, required collaborators, ToolManager availability, and safe-query discoverability; non-query capabilities are isolated from natural-language discovery while remaining available through safety-gated workflow execution. | Every active capability is executable, required collaborators are checked, and public discovery is explicitly safe. | Complete. |
+| **P2.1** | Added concise priority-hardening contracts covering capability registration, EventBus observer delivery, BackgroundJobService scheduling, correlation metadata, and the existing `MemoryCoordinator` durable-learning boundary. | A representative extension uses the canonical registration, event, scheduler, and memory ports rather than bypassing shared infrastructure. | Complete. |
+| **P2.2** | Extended readiness with health checks for `MemoryCoordinator`, `CapabilityRegistry`, `UnifiedRouter`, `ExecutionEngine`, `LearningPipeline`, `ToolManager`, and a bounded shutdown budget. Provider readiness now surfaces `healthy`, `degraded`, or `unavailable_but_safe` local-model state while identifying local memory and registered capabilities as safe paths. | Readiness distinguishes healthy, degraded, and unavailable-but-safe local-model states without breaking local memory or capability behavior. | Complete. |
+| **P2.3** | Removed seven confirmed unreferenced `.bak`, `.orig`, and `.full` duplicate source artifacts. The canonical package/import path retains one active runtime implementation. | Documentation and default imports identify one canonical runtime path, with compatibility retained only through declared code paths. | Complete. |
 
-## Reproducible validation
+## Architecture and validation surface
 
-From the repository root, run the following command. It installs Freya with the declared `dev` extra and executes the clean-process, architecture, routing, execution, learning, workflow, and provider-outcome contracts without manual import-path configuration.
+The current code-backed Mermaid graph is maintained in [`CURRENT_ARCHITECTURE.md`](CURRENT_ARCHITECTURE.md). It records the canonical startup order, request/workflow correlation context, capability audit and tool bridge, readiness surface, bounded watchdog ingress, extension ports, and the legacy compatibility boundary.
+
+The reproducible canonical command now includes the priority-hardening and production-readiness contracts:
 
 ```bash
 ./scripts/run_canonical_tests.sh
 ```
 
-The suite intentionally replaces only true external boundaries in its clean-process probe: the optional local model, planner generation for the one read-only execution fixture, and the operating-system verification command. The production `SystemInitializer` object graph, safety gate, capability routing, verification, learning, and shutdown paths remain live.
-
-| Latest validation | Result |
+| Verification | Result at status update |
 |---|---|
-| `python3 -m compileall -q app main.py tests/clean_runtime_probe.py` | Passed. |
-| `git diff --check` | Passed. |
-| `./scripts/run_canonical_tests.sh` | **99 passed**. |
+| `git diff --check` | Passed before final test run. |
+| `python3 -m compileall -q app main.py tests` | Passed before final test run. |
+| Focused priority, readiness, capability, and architecture contracts | Passed: **26 tests**. |
+| Full reproducible canonical suite | Passed: **111 tests** across clean-process lifecycle, architecture, routing, execution, learning, capability safety, provider resilience, priority hardening, and readiness contracts. |
 
-## Remaining dependency-first hardening plan
+## Remaining tasks
 
-The resolved priorities have been removed from this list. The order below remains dependency-first for the next iteration.
+There are **no remaining MVP tasks**. The six dependency-first P1/P2 hardening tasks are complete. The following entries are deliberately future growth work, not blockers for the MVP boundary.
 
-| Priority | Dependency-first work item | Necessary implementation or fix | Definition of done |
+## Future implementation for Freya to grow
+
+| Growth priority | Future implementation / optimization task | Contribution to growth | Definition of done |
 |---|---|---|---|
-| **P1.2** | Bound and deduplicate autonomy observations | Enforce bounded de-duplication for repeated Watchdog, EventBus, and observability observations before they enter LearningPipeline. | Replayed health or memory events cannot create unbounded learning candidates, autonomous work, or background jobs. |
-| **P1.3** | Propagate correlation metadata | Carry one request/workflow identifier through conversation events, router decisions, capability dispatch, tools, execution verification, learning, diagnostics, and observability. | One identifier reconstructs an answer, task result, or safe failure end-to-end. |
-| **P1.4** | Verify capability metadata at startup | Add a startup audit for registered actions, required injected collaborators, unsafe discoverability, and ToolManager availability. | Every active capability is callable, has its required collaborators, and either exposes a safe query contract or is deliberately non-discoverable. |
-| **P2.1** | Validate future extension ports | Add concise contract tests for capability registration, EventBus observers, BackgroundJobService scheduling, and MemoryCoordinator-only durable writes. | A representative extension uses only the four target extension ports and cannot bypass the registry, shared infrastructure, or memory boundary. |
-| **P2.2** | Establish operational readiness checks | Extend readiness to include target-path dependency health, bounded shutdown timing, and recovery from unavailable optional local-model services. | Readiness distinguishes healthy, degraded, and unavailable-but-safe local-model states without breaking local memory and capability behavior. |
-| **P2.3** | Trim or isolate obsolete parallel implementations | Mark legacy, experimental, and duplicate route/orchestrator modules as compatibility-only or remove them after migration tests prove no public caller needs them. | Documentation and default imports identify exactly one canonical runtime path. |
-
-## Explicit MVP boundary
-
-Freya is **MVP-ready** when its canonical runtime can be started in a clean process and reliably execute grounded local-memory questions, registered local capabilities, verified fallback disclosure, safety-gated execution, execution-result verification, terminal-failure reporting, and validated learning promotion through `MemoryCoordinator`.
-
-The clean-process lifecycle, claim verification, provider resilience, reproducible validation, and Safe Self-Improvement workflow handoff are now complete. The remaining entries are P1/P2 hardening tasks rather than required MVP redesign work.
+| **G1** | Add an operator-facing local control surface for health, correlation search, active work, approvals, and safe capability discovery. | Makes the current reliable runtime observable and usable for daily personal-agent workflows, directly increasing adoption. | A local user can inspect one correlated request/workflow, approve or deny guarded work, and understand readiness without reading logs. |
+| **G2** | Expand the audited capability catalog with high-value local integrations behind explicit safe-query and SafetyGate contracts. | Broadens what Freya can accomplish while retaining the hardening and discoverability guarantees completed here. | Each new integration declares collaborators, passes startup audit, exposes only approved query actions, and has execution/recovery tests. |
+| **G3** | Add scenario benchmarks and regression dashboards for grounded answers, capability execution, provider outage recovery, and learning quality. | Converts reliability into measurable product velocity and protects future feature growth from silent regressions. | A repeatable local benchmark reports quality, latency, safe-failure rate, and learning-promotion outcomes by release. |
+| **G4** | Improve local-model resilience with provider warm-up, model availability diagnostics, and bounded retry/backoff policies. | Reduces perceived downtime and improves response quality where local models are available, without weakening safe fallback behavior. | The runtime recovers from local-provider restart/model availability changes and reports state transitions through readiness and correlation data. |
+| **G5** | Mature long-term autonomy through user-configured goal policies, work budgets, and transparent review queues. | Increases recurring value while keeping autonomous action bounded, reviewable, and aligned with user intent. | Autonomous work respects explicit budgets and approval policy, is traceable by correlation identifier, and can be paused or reviewed locally. |

@@ -23,6 +23,7 @@ from app.planner.task_graph import TaskGraph
 from app.planner.task import Task, TaskPriority, TaskStatus
 from app.planner.scheduler import Scheduler, SchedulingStrategy
 from app.orchestrator.capability_registry import Capability, CapabilityRegistry, CapabilityState, get_capability_registry
+from app.core.correlation import correlation_scope
 from app.core.events import get_event_bus, Event, EventPriority
 from app.core.observability import get_observability_hub, ComponentInfo, ComponentType, HealthCheck
 from app.core.background_jobs import get_job_service, JobTriggerConfig, JobTriggerType, JobPriority
@@ -176,14 +177,21 @@ class TaskExecutor:
                 raise ValueError(f"Workflow {workflow_id} already executing")
 
             # Create execution context
+            execution_inputs = dict(global_inputs or {})
+            correlation_id = execution_inputs.setdefault(
+                "correlation_id",
+                execution_inputs.get("request_id") or workflow_id,
+            )
+            execution_inputs.setdefault("request_id", correlation_id)
             context = ExecutionContext(
                 workflow_id=workflow_id,
                 task_graph=task_graph,
                 capabilities=capabilities,
                 checkpoint_dir=self.checkpoint_dir / workflow_id,
-                                global_inputs=global_inputs or {},
+                global_inputs=execution_inputs,
             )
             context.metadata["safety_approved"] = safety_approved
+            context.metadata["correlation_id"] = correlation_id
             context.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
 
@@ -235,7 +243,8 @@ class TaskExecutor:
 
             if self._verification_runner:
                 self._set_state(workflow_id, ExecutionState.VERIFYING)
-                verification = self._verification_runner.dry_run_verify()
+                with correlation_scope(context.metadata.get("correlation_id"), prefix="workflow"):
+                    verification = self._verification_runner.dry_run_verify()
                 context.metadata["verification"] = {
                     "success": verification.success,
                     "return_code": verification.return_code,
@@ -387,15 +396,17 @@ class TaskExecutor:
         if self._safety_gate:
             self._set_state(workflow_id, ExecutionState.SAFETY_CHECKING)
             try:
-                self._safety_gate.check_and_enforce(
-                    f"Execute task: {task.title}",
-                    "task_execution",
-                    {
-                        "workflow_id": workflow_id,
-                        "task_id": task_id,
-                        "capability": capability_name,
-                    },
-                )
+                with correlation_scope(context.metadata.get("correlation_id"), prefix="workflow"):
+                    self._safety_gate.check_and_enforce(
+                        f"Execute task: {task.title}",
+                        "task_execution",
+                        {
+                            "workflow_id": workflow_id,
+                            "task_id": task_id,
+                            "capability": capability_name,
+                            "correlation_id": context.metadata.get("correlation_id"),
+                        },
+                    )
             except Exception as error:
                 task.status = TaskStatus.FAILED
                 task.error = f"Safety gate blocked: {error}"
@@ -422,7 +433,8 @@ class TaskExecutor:
                 start_time = time.time()
 
                 # Call the capability's execute method
-                result = self._invoke_capability(capability, task, inputs)
+                with correlation_scope(context.metadata.get("correlation_id"), prefix="workflow"):
+                    result = self._invoke_capability(capability, task, inputs)
 
                 duration_ms = (time.time() - start_time) * 1000
                 if hasattr(capability, "record_success"):
@@ -507,6 +519,8 @@ class TaskExecutor:
     def _prepare_task_inputs(self, context: ExecutionContext, task: Task) -> Dict[str, Any]:
         """Prepare inputs for a task from global inputs and previous step outputs."""
         inputs = context.global_inputs.copy()
+        inputs.setdefault("correlation_id", context.metadata.get("correlation_id", context.workflow_id))
+        inputs.setdefault("request_id", inputs["correlation_id"])
 
         # Add step outputs from dependencies
         for dep_id in task.dependencies:
@@ -663,13 +677,24 @@ class TaskExecutor:
             self._execution_states[workflow_id] = state
 
     def _publish_event(self, event_type: str, payload: Dict[str, Any]):
-        """Publish an event to the event bus."""
+        """Publish an event to the event bus with execution correlation metadata."""
         try:
+            event_payload = dict(payload)
+            workflow_id = event_payload.get("workflow_id")
+            context = self._active_executions.get(workflow_id) if workflow_id else None
+            correlation_id = (
+                event_payload.get("correlation_id")
+                or (context.metadata.get("correlation_id") if context else None)
+                or workflow_id
+            )
+            if correlation_id:
+                event_payload.setdefault("correlation_id", correlation_id)
             event = Event(
                 name=event_type,
-                data=payload,
+                data=event_payload,
                 source="task_executor",
-                priority=EventPriority.NORMAL
+                priority=EventPriority.NORMAL,
+                metadata={"correlation_id": correlation_id} if correlation_id else {},
             )
             self._event_bus.publish(event)
         except Exception as e:

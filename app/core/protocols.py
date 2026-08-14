@@ -118,6 +118,7 @@ class SystemConfig:
         enable_file_watcher: bool = True,
         enable_config_hot_reload: bool = True,
         enable_observability: bool = True,
+        shutdown_timeout_seconds: float = 10.0,
         workspace: Optional[Path] = None,
     ):
         self.enable_autonomy = enable_autonomy
@@ -127,6 +128,7 @@ class SystemConfig:
         self.enable_file_watcher = enable_file_watcher
         self.enable_config_hot_reload = enable_config_hot_reload
         self.enable_observability = enable_observability
+        self.shutdown_timeout_seconds = max(0.1, float(shutdown_timeout_seconds))
         self.workspace = workspace
 
 

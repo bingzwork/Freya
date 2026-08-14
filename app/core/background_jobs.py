@@ -634,12 +634,16 @@ class BackgroundJobService:
         }
         if data:
             event_data.update(data)
+        correlation_id = job.metadata.get("correlation_id") or job.metadata.get("request_id")
+        if correlation_id:
+            event_data.setdefault("correlation_id", correlation_id)
 
         self._event_bus.emit(
             event_name,
             data=event_data,
             source="BackgroundJobService",
             priority=EventPriority.NORMAL,
+            metadata={"correlation_id": correlation_id} if correlation_id else {},
         )
 
     # Public API

@@ -15,4 +15,6 @@ python3 -m pytest \
   tests/test_capability_routing.py \
   tests/test_execution_safety_state_machine.py \
   tests/test_learning_repair_policy.py \
-  tests/test_priority_llm_outcomes.py
+  tests/test_priority_llm_outcomes.py \
+  tests/test_priority_hardening.py \
+  tests/test_production_health_readiness.py

@@ -1,7 +1,10 @@
 """Watchdog - Observes system events and metrics, feeds LearningPipeline."""
 
+import hashlib
+import json
 import threading
 import time
+from collections import OrderedDict
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
@@ -51,6 +54,10 @@ class Watchdog:
         
         # Callbacks for custom handling
         self._observation_handlers: List[Callable[[WatchdogObservation], None]] = []
+        # Bounded recent-observation cache.  It lives at the canonical ingress
+        # so repeated EventBus, watchdog, and observability signals are stopped
+        # before they can create learning candidates or scheduled work.
+        self._recent_observations: OrderedDict[str, float] = OrderedDict()
 
     def start(self) -> None:
         """Start the watchdog."""
@@ -274,7 +281,10 @@ class Watchdog:
         return observation
 
     def _process_observation(self, observation: WatchdogObservation) -> None:
-        """Process an observation - feed to LearningPipeline and call handlers."""
+        """Process one unique observation before it reaches learning or handlers."""
+        if self._is_duplicate_observation(observation):
+            return
+
         # Feed to LearningPipeline if available
         if self._learning_pipeline:
             try:
@@ -304,6 +314,60 @@ class Watchdog:
                 handler(observation)
             except Exception:
                 pass
+
+    def _is_duplicate_observation(self, observation: WatchdogObservation) -> bool:
+        """Return whether an equivalent observation was admitted in the configured window."""
+        window = max(0.0, float(self.config.watchdog_dedup_window_seconds))
+        if window == 0:
+            return False
+
+        fingerprint = self._observation_fingerprint(observation)
+        now = time.monotonic()
+        max_entries = max(1, int(self.config.watchdog_dedup_max_entries))
+        with self._lock:
+            expired = [
+                key for key, seen_at in self._recent_observations.items()
+                if now - seen_at >= window
+            ]
+            for key in expired:
+                self._recent_observations.pop(key, None)
+
+            if fingerprint in self._recent_observations:
+                self._recent_observations.move_to_end(fingerprint)
+                return True
+
+            self._recent_observations[fingerprint] = now
+            while len(self._recent_observations) > max_entries:
+                self._recent_observations.popitem(last=False)
+        return False
+
+    @staticmethod
+    def _observation_fingerprint(observation: WatchdogObservation) -> str:
+        """Create a stable key while ignoring ephemeral event and clock fields."""
+        ignored_keys = {"event_id", "timestamp", "checked_at", "emitted_at"}
+
+        def normalize(value):
+            if isinstance(value, dict):
+                return {
+                    str(key): normalize(item)
+                    for key, item in sorted(value.items(), key=lambda entry: str(entry[0]))
+                    if str(key) not in ignored_keys
+                }
+            if isinstance(value, (list, tuple, set)):
+                return [normalize(item) for item in value]
+            return value
+
+        payload = {
+            "event_type": observation.event_type.value,
+            "severity": observation.severity.value,
+            "source": observation.source,
+            "component": observation.component,
+            "message": observation.message,
+            "details": normalize(observation.details),
+            "tags": sorted(observation.tags),
+        }
+        encoded = json.dumps(payload, sort_keys=True, default=str, separators=(",", ":"))
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
     def add_observation_handler(self, handler: Callable[[WatchdogObservation], None]) -> None:
         """Add a custom observation handler."""

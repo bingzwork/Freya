@@ -23,6 +23,7 @@ from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Set, Union
 from uuid import uuid4
 
+from app.core.correlation import get_correlation_id, with_correlation_metadata
 from app.core.logger import logger
 
 
@@ -45,6 +46,14 @@ class Event:
     priority: EventPriority = EventPriority.NORMAL
     tags: Dict[str, str] = field(default_factory=dict)
     metadata: Dict[str, Any] = field(default_factory=dict)
+    correlation_id: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        """Keep correlation visible in event metadata without changing payloads."""
+        self.metadata = with_correlation_metadata(self.metadata)
+        self.correlation_id = self.correlation_id or self.metadata.get("correlation_id") or get_correlation_id()
+        if self.correlation_id:
+            self.metadata.setdefault("correlation_id", self.correlation_id)
 
     def matches(self, filter_pattern: str) -> bool:
         """Check if event matches a filter pattern (supports wildcards)."""
@@ -62,6 +71,7 @@ class Event:
             "priority": self.priority.name,
             "tags": self.tags,
             "metadata": self.metadata,
+            "correlation_id": self.correlation_id,
         }
 
 

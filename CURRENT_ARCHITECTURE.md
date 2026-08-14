@@ -1,313 +1,213 @@
 flowchart TD
-%% SIMPLE FREYA WIRING
-%% Every node name below is retained from the original diagram.
-%% No new components have been added: only the critical edges are simplified/corrected.
-%% =========================================================
-%% 1. BOOTSTRAP
-%% =========================================================
+%% Freya current canonical runtime — generated from the codebase on 2026-08-14.
+%% The graph documents current ownership and runtime data flow only.
+
 subgraph BOOT["1. BOOTSTRAP"]
-direction TB
-A["main.py"]
-B["SystemInitializer"]
-A --> B
+  direction TB
+  A["main.py / FreyaApp"] --> B["SystemInitializer"]
+  B --> CA["Capability startup audit"]
+  B --> RDY["Readiness registration"]
 end
-%% =========================================================
-%% 2. FREYA INTERFACE
-%% =========================================================
+
 subgraph INTERFACE["2. FREYA INTERFACE"]
-direction TB
-K["AgentFacadeImpl"]
-J["ConversationControl"]
-K --> J
+  direction TB
+  K["AgentFacadeImpl"] --> J["ConversationControlHandler"]
+  J --> CORR["correlation_scope\nrequest_id / correlation_id"]
 end
-%% =========================================================
-%% 3. FREYA KNOWLEDGE + MEMORY
-%% =========================================================
+
 subgraph MEMORY["3. FREYA KNOWLEDGE + MEMORY"]
-direction TB
-E["MemoryCoordinator"]
-E3["UnifiedRetrieval"]
-E2["GoalManager"]
-E1["Core Memory Modules<br/>Working · Task · Long-Term<br/>Semantic · Episodic · Project"]
-E4["ExperienceMemory"]
-E5["ConversationMemory"]
-E6["EngineeringLessons"]
-E --> E3
-E --> E2
-E --> E1
-E --> E4
-E --> E5
-E --> E6
-E3 --> E1
-E3 --> E4
-E3 --> E5
-E3 --> E6
+  direction TB
+  E["MemoryCoordinator"]
+  E3["UnifiedRetrieval"]
+  E2["Goal Storage"]
+  E1["Working · Task · Long-Term\nSemantic · Episodic · Project Memory"]
+  E4["ExperienceMemory"]
+  E5["ConversationMemory"]
+  E6["EngineeringLessons"]
+  E --> E3
+  E --> E2
+  E --> E1
+  E --> E4
+  E --> E5
+  E --> E6
+  E3 --> E1
+  E3 --> E4
+  E3 --> E5
+  E3 --> E6
 end
-%% =========================================================
-%% 4. FREYA INTELLIGENCE
-%% =========================================================
+
 subgraph INTELLIGENCE["4. FREYA INTELLIGENCE"]
-direction TB
-G["IntelligenceEngine"]
-G1["Reasoning + Decision Logic"]
-G2["Confidence / Answerability"]
-G3["Context + Goal Awareness"]
-G --> G1
-G --> G2
-G --> G3
+  direction TB
+  G["Intelligence"] --> G1["Reasoning + Decision"]
+  G --> G2["Confidence / Answerability"]
+  G --> G3["Context + Goal Awareness"]
 end
-%% =========================================================
-%% 5. KNOWLEDGE-FIRST ROUTING
-%% =========================================================
+
 subgraph ROUTING["5. KNOWLEDGE-FIRST ROUTING"]
-direction TB
-H["UnifiedRouter"]
-H0["KnowledgeFirstResolver"]
-H5{"Can Freya Answer?"}
-H6{"Local Capability Available?"}
-RESULT["Freya Answer"]
-H --> H0
-H0 -->|"Search Freya first"| E3
-E3 --> H5
-H5 -->|"Yes: grounded and confident"| RESULT
-H5 -->|"No / insufficient"| H6
-H6 -->|"Yes"| H1
-H6 -->|"No"| D2
+  direction TB
+  H["UnifiedRouter"] --> H0["KnowledgeFirstResolver"]
+  H0 --> H5{"Grounded local answer?"}
+  H5 -->|"Yes"| RESULT["Freya Answer"]
+  H5 -->|"No"| H6{"Safe local capability?"}
+  H6 -->|"Yes"| H1
+  H6 -->|"No"| D2
 end
-%% =========================================================
-%% 6. MODULAR CAPABILITY SYSTEM
-%% =========================================================
+
 subgraph CAPABILITY["6. MODULAR CAPABILITY SYSTEM"]
-direction TB
-M2["CapabilityRegistry"]
-H1["CapabilityRouter"]
-H2["Capability Handlers"]
-F["ToolManager"]
-M2 --> H1 --> H2 --> F
+  direction TB
+  M2["CapabilityRegistry"] --> H1["CapabilityRouter"] --> H2["Capability Handlers"] --> F["ToolManager"]
+  CA -->|"callability · collaborators\nsafe query discoverability"| M2
+  TD["tool_dispatch\nnon-discoverable"] --> F
 end
-%% =========================================================
-%% 7. LOCAL LLM FALLBACK ONLY
-%% =========================================================
+
 subgraph LLM["7. LOCAL LLM FALLBACK ONLY"]
-direction TB
-D["LLMStack"]
-D2["PriorityLLMProvider"]
-D1["Ollama / Local Model"]
-D3["ChatActivityProvider"]
-D --> D2
-D --> D3
-D2 --> D1
+  direction TB
+  D["LLMStack"] --> D2["PriorityLLMProvider"]
+  D --> D3["ChatActivityProvider"]
+  D2 --> D1["Ollama / Local Model"]
+  D2 --> V1
 end
-%% =========================================================
-%% 8. SELF-LEARNING PIPELINE
-%% =========================================================
+
 subgraph LEARNING["8. SELF-LEARNING PIPELINE"]
-direction TB
-LP["LearningPipeline"]
-LP1["Observe"]
-LP2["Evaluate"]
-LP3["Extract Learning"]
-LP4["Validate Learning"]
-LP5{"Worth Remembering?"}
-LP6["Classify<br/>KNOWLEDGE · EXPERIENCE · SKILL"]
-LP7["KnowledgeDistiller"]
-LP8["ExperienceDistiller"]
-LP9["SkillDistiller"]
-LP10["Better Knowledge & Skills<br/>normalized DistilledLearning"]
-TEMP["Discard / Keep Temporary"]
-LP --> LP1 --> LP2 --> LP3 --> LP4 --> LP5
-LP5 -->|"No"| TEMP
-LP5 -->|"Yes"| LP6
-LP6 -->|"KNOWLEDGE"| LP7
-LP6 -->|"EXPERIENCE"| LP8
-LP6 -->|"SKILL"| LP9
-LP8 -->|"Reusable experience evidence"| LP9
-LP7 --> LP10
-LP8 --> LP10
-LP9 --> LP10
-%% Critical learning rule: only source-backed, validated learning is written to memory.
-LP10 -->|"Validated learning only"| E
+  direction TB
+  LP["LearningPipeline"] --> LP1["Observe"] --> LP2["Evaluate"] --> LP3["Extract"] --> LP4["Validate"] --> LP5{"Worth remembering?"}
+  LP5 -->|"No"| TEMP["Discard / temporary"]
+  LP5 -->|"Yes"| LP6["Classify\nknowledge · experience · skill"]
+  LP6 --> LP7["KnowledgeDistiller"]
+  LP6 --> LP8["ExperienceDistiller"]
+  LP6 --> LP9["SkillDistiller"]
+  LP8 -->|"reusable evidence"| LP9
+  LP7 --> LP10["Validated DistilledLearning"]
+  LP8 --> LP10
+  LP9 --> LP10
+  LP10 -->|"Validated learning only"| E
 end
-%% =========================================================
-%% 9. WORKFLOW + EXECUTION
-%% =========================================================
+
 subgraph EXECUTION["9. WORKFLOW + EXECUTION"]
-direction TB
-M["WorkflowOrchestrator"]
-M1["SafetyGate"]
-I["ExecutionEngine"]
-I1["UnifiedPlanner"]
-I2["UnifiedExecutor"]
-I3["ExecutionVerifier"]
-I4["RepairLoop"]
-V1["AnswerVerifier"]
-DONE["Task Complete"]
-AR["AnswerRepairLoop"]
-SF1["AnswerSafeFailure"]
-SF2["ExecutionSafeFailure"]
-M --> M1
-I --> I1 --> I2 --> I3
-I3 -->|"Passed"| DONE
-I3 -->|"Failed / Partial"| I4
-I4 -->|"Repair / Replan (Attempt < Max)"| I1
-I4 -->|"Retries Exhausted"| SF2
-V1 -->|"Valid"| RESULT
-V1 -->|"Invalid / Low Confidence"| AR
-AR -->|"Retry w/ Corrective Context (Attempt < Max)"| D2
-AR -->|"Retries Exhausted"| SF1
+  direction TB
+  M["WorkflowOrchestrator"] --> M1["SafetyGate"]
+  I["ExecutionEngine"] --> I1["UnifiedPlanner"] --> I2["UnifiedExecutor"] --> I3["ExecutionVerifier"]
+  I3 -->|"passed"| DONE["Task Complete"]
+  I3 -->|"failed / partial"| I4["RepairLoop"]
+  I4 -->|"bounded retry"| I1
+  I4 -->|"exhausted"| SF2["ExecutionSafeFailure"]
+  V1["AnswerVerifier"] -->|"valid"| RESULT
+  V1 -->|"invalid / low confidence"| AR["AnswerRepairLoop"]
+  AR -->|"bounded retry"| D2
+  AR -->|"exhausted"| SF1["AnswerSafeFailure"]
+  M --> TX["TaskExecutor\nworkflow correlation context"]
+  TX --> M1
+  TX --> H1
 end
-%% =========================================================
-%% 11. AUTONOMY + OBSERVATION
-%% =========================================================
-subgraph AUTONOMY["11. AUTONOMY + OBSERVATION"]
-direction TB
-L["AutonomyManager"]
-L1["Watchdog"]
-L3["SelfInitiatedWorkManager"]
-L4["MaintenanceManager"]
-L --> L1
-L --> L3
-L --> L4
-end
-%% =========================================================
-%% 10. LEGACY COMPATIBILITY ENTRY POINT
-%% =========================================================
+
 subgraph LEGACY["10. LEGACY COMPATIBILITY"]
-direction TB
-LC["Legacy FreyaAgent"]
-LC1["Legacy Local Memory Bundle<br/>Project · Experience · Conversation<br/>Working · Task · Long-Term · Episodic · Semantic"]
-LC2["ConversationState"]
-LC -->|"Legacy mode"| LC1
-LC --> LC2
+  direction TB
+  LC["Legacy FreyaAgent"] --> LC1["Legacy local memory bundle"]
+  LC --> LC2["ConversationState"]
 end
-%% =========================================================
-%% 12. DIAGNOSTICS + SAFE SELF-IMPROVEMENT
-%% =========================================================
+
+subgraph AUTONOMY["11. AUTONOMY + OBSERVATION"]
+  direction TB
+  L["AutonomyManager"] --> L1["Watchdog"]
+  L --> L3["SelfInitiatedWorkManager"]
+  L --> L4["MaintenanceManager"]
+  L1 --> DD["Bounded dedup cache\nfingerprint + TTL + capacity"]
+  DD -->|"unique observations only"| LP
+end
+
 subgraph IMPROVEMENT["12. DIAGNOSTICS + SAFE SELF-IMPROVEMENT"]
-direction TB
-Q1["Diagnostics"]
-Q2["Safe Self-Improvement"]
-Q1 --> Q2
+  direction TB
+  Q1["DiagnosticEngine"] --> Q2["Safe Self-Improvement"]
+  Q2 -->|"approved change request"| M
 end
-%% =========================================================
-%% 13. SHARED INFRASTRUCTURE
-%% =========================================================
+
 subgraph INFRA["13. SHARED INFRASTRUCTURE"]
-direction TB
-C["Infrastructure"]
-C1["EventBus"]
-C2["BackgroundJobService"]
-C3["ObservabilityHub"]
-C --> C1
-C --> C2
-C --> C3
+  direction TB
+  C["Infrastructure"] --> C1["EventBus\ncorrelation metadata"]
+  C --> C2["BackgroundJobService\ncorrelation-preserving lifecycle events"]
+  C --> C3["ObservabilityHub"]
+  C3 --> RH["Readiness\ntarget-path checks + local-model state"]
+  C2 --> SB["Bounded shutdown budget"]
 end
-%% =========================================================
-%% 14. FUTURE EXTENSION PORTS
-%% =========================================================
+
 subgraph EXTENSIONS["14. FUTURE EXTENSION PORTS"]
-direction TB
-X["Future Capability / Feature"]
-X1["Callable Capability"]
-X2["Event / Observer"]
-X3["Background / Autonomous"]
-X4["Memory-Aware Feature"]
-X --> X1
-X --> X2
-X --> X3
-X --> X4
+  direction TB
+  X["Future capability / feature"] --> X1["Callable capability"]
+  X --> X2["Event observer"]
+  X --> X3["Background / autonomous work"]
+  X --> X4["Memory-aware feature"]
 end
-%% =========================================================
-%% THE ESSENTIAL CROSS-GROUP WIRING
-%% =========================================================
-%% Conversation and local-knowledge-first answer flow
-J -->|"Question / Knowledge Request"| H
-J -->|"Task / Action Request"| M
-J -->|"Context / Memory Read"| E
-J -->|"Intelligence Context"| G
-J -->|"Chat Activity"| D3
-J -->|"Goal Updates"| E2
-RESULT -->|"Final Answer"| J
-DONE -->|"Task Result"| J
-%% Answerability uses local retrieval, goal context, and confidence
-E2 -->|"Active Goals"| G3
-E2 -->|"Goal Context"| I1
-E3 -->|"Retrieved Knowledge"| G
-G -->|"Intent / Plan Hints"| I1
-G1 -->|"Reasoned Decisions"| I1
-G2 -->|"Confidence Score"| H5
-G3 -->|"Context Snapshot"| I1
-%% The LLM produces a draft; AnswerVerifier decides whether it is safe to return.
-D2 -->|"Fallback draft"| V1
-SF1 -->|"Low-Confidence Disclosure"| RESULT
-SF1 -->|"Log Knowledge Gap"| LP
-%% The LLM may propose learning; it never writes straight to memory.
-D2 -->|"LLM learning candidate"| LP
-V1 -->|"Learning Candidate"| LP
-%% Planner still asks Freya knowledge first; tools run only through the safety gate.
-I1 -->|"Knowledge / Capability Query"| H
-I2 -->|"Proposed Action"| M1
-M1 -->|"Approved Action"| H1
-F -->|"Tool Result"| I2
-I3 -->|"Outcome / Experience"| LP
-%% Execution failure and task completion
-SF2 -->|"Request Compensation"| M1
-SF2 -->|"Partial Failure Report"| J
-SF2 -->|"Log Failure Pattern"| Q1
-%% Autonomy is routed through the same workflow and learning path.
-L3 -->|"Read Goals"| E2
-L3 -->|"Autonomous Work Request"| M
-L4 -->|"Maintenance Work Request"| M
-L1 -->|"Observations / Anomalies"| LP
-L1 -->|"Health Events"| C1
-%% Diagnostics and improvement remain behind the workflow safety gate.
-LP -->|"Improvement Candidate"| Q2
-Q1 -->|"Failure Patterns"| Q2
-Q2 -->|"Approved Improvement Proposal"| M
-%% Eventing, observation, and extensions
-M -->|"Events / Commands"| C1
-M -->|"Schedule Background"| C2
-I -->|"Metrics / Traces"| C3
-C1 -->|"System Events"| L1
-C1 -->|"Learning Events"| LP
-C1 -->|"Autonomy Triggers"| L3
-C1 -->|"Maintenance Triggers"| L4
-C3 -->|"Metrics / Health"| L1
-C3 -->|"Diagnostics Data"| Q1
-C3 -->|"Execution Metrics"| M
-L -->|"Background Jobs"| C2
-X1 -.->|"Register Capability"| M2
-X2 -.->|"Publish / Subscribe"| C1
-X3 -.->|"Schedule Background"| C2
-X4 -.->|"Stable Memory API"| E
-%% Legacy callers may receive the canonical runtime through injected components;
-%% local legacy construction retains a complete compatibility memory bundle.
-LC -.->|"Injected canonical components"| K
-LC2 -.->|"Compatibility conversation history"| J
-%% =========================================================
-%% INITIALIZATION
-%% =========================================================
-B -->|"1. Init Infrastructure"| C
-B -->|"2. Init LLM Stack"| D
-B -->|"3. Init Memory"| E
-B -->|"4. Init Intelligence"| G
-B -->|"5. Init Capability Registry"| M2
-B -->|"6. Init Router"| H
-B -->|"7. Init Execution Engine"| I
-B -->|"8. Init Orchestrator"| M
-B -->|"9. Init Interface"| J
-B -->|"10. Init Facade"| K
-B -->|"11. Init Autonomy"| L
-B -->|"12. Init Learning Pipeline"| LP
-B -->|"13. Init Diagnostics"| Q1
+
+%% Canonical contract chain forms retained for compatibility validation.
+M2 --> H1 --> H2 --> F
+I --> I1 --> I2 --> I3
+LP10 -->|"Validated learning only"| E
+
+%% Canonical answer flow.
+CORR -->|"context carries same identifier"| H
+J -->|"memory reads / writes"| E
+J -->|"intelligence context"| G
+J -->|"chat activity"| D3
+H0 -->|"local retrieval first"| E3
+E3 --> G
+G2 --> H5
+D2 -->|"fallback draft"| V1
+SF1 -->|"safe disclosure"| RESULT
+SF1 -->|"knowledge gap"| LP
+V1 -->|"learning candidate"| LP
+RESULT -->|"final response"| J
+
+%% Canonical task and learning flow.
+J -->|"task request"| M
+I1 -->|"planning context"| H
+I2 -->|"proposed action"| M1
+M1 -->|"approved action"| H1
+F -->|"tool result"| I2
+I3 -->|"verified outcome"| LP
+SF2 -->|"partial failure report"| J
+SF2 -->|"failure pattern"| Q1
+LP -->|"improvement candidate"| Q2
+
+%% Shared-event, autonomous, and extension flow.
+M -->|"events / commands"| C1
+M -->|"scheduled work"| C2
+I -->|"metrics / traces"| C3
+C1 -->|"system events"| L1
+C1 -->|"learning events"| LP
+C1 -->|"autonomy triggers"| L3
+C1 -->|"maintenance triggers"| L4
+C3 -->|"health / alerts"| L1
+C3 -->|"diagnostic data"| Q1
+L3 -->|"read goals"| E2
+L3 -->|"autonomous request"| M
+L4 -->|"maintenance request"| M
+L -->|"background jobs"| C2
+X1 -.->|"register capability"| M2
+X2 -.->|"publish / subscribe"| C1
+X3 -.->|"schedule work"| C2
+X4 -.->|"MemoryCoordinator-only durable write path"| E
+
+%% Initialization ownership and compatibility boundary.
+B -->|"1. Infrastructure"| C
+B -->|"2. LLM stack"| D
+B -->|"3. Memory"| E
+B -->|"4. Intelligence"| G
+B -->|"5. Capability registry"| M2
+B -->|"6. Router"| H
+B -->|"7. Execution engine"| I
+B -->|"8. Orchestrator"| M
+B -->|"9. Conversation control"| J
+B -->|"10. Facade"| K
+B -->|"11. Autonomy"| L
+B -->|"12. Learning pipeline"| LP
+B -->|"13. Diagnostics"| Q1
 B -->|"14. Init Self-Improvement"| Q2
-%% =========================================================
-%% STYLING
-%% =========================================================
+LC -.->|"Injected canonical components"| K
+LC2 -.->|"compatibility conversation history"| J
+
 classDef bootstrap fill:#263238,color:#ffffff,stroke:#546e7a,stroke-width:2px;
 classDef interface fill:#6a1b9a,color:#ffffff,stroke:#ab47bc;
 classDef memory fill:#00695c,color:#ffffff,stroke:#26a69a,stroke-width:2px;
-classDef intelligence fill:#1565c0,color:#ffffff,stroke:#42a5f5;
 classDef routing fill:#00838f,color:#ffffff,stroke:#26c6da;
 classDef capability fill:#0277bd,color:#ffffff,stroke:#29b6f6;
 classDef llm fill:#4527a0,color:#ffffff,stroke:#7e57c2;
@@ -319,41 +219,17 @@ classDef infrastructure fill:#37474f,color:#ffffff,stroke:#78909c;
 classDef improvement fill:#ad1457,color:#ffffff,stroke:#ec407a;
 classDef extension fill:#455a64,color:#ffffff,stroke:#90a4ae,stroke-dasharray:5 5;
 classDef legacy fill:#5d4037,color:#ffffff,stroke:#8d6e63,stroke-dasharray:4 3;
-class A,B bootstrap;
-class K,J interface;
+class A,B,CA,RDY bootstrap;
+class K,J,CORR interface;
 class E,E1,E2,E3,E4,E5,E6 memory;
-class G,G1,G2,G3 intelligence;
 class H,H0,H5,H6,RESULT routing;
-class M2,H1,H2,F capability;
+class M2,H1,H2,F,TD capability;
 class D,D1,D2,D3 llm;
 class LP,LP1,LP2,LP3,LP4,LP5,LP6,LP7,LP8,LP9,LP10,TEMP learning;
-class I,I1,I2,I3,I4,V1,DONE,AR execution;
+class I,I1,I2,I3,I4,V1,DONE,AR,TX execution;
 class M,L,L1,L3,L4 workflow;
 class M1,SF1,SF2 safety;
-class C,C1,C2,C3 infrastructure;
+class C,C1,C2,C3,RH,SB infrastructure;
 class Q1,Q2 improvement;
 class X,X1,X2,X3,X4 extension;
 class LC,LC1,LC2 legacy;
-
-
-# Current Architecture Implementation Notes
-
-The Mermaid graph above retains the complete target architecture from [`TARGET_ARCHITECTURE.md`](TARGET_ARCHITECTURE.md) and adds one code-backed **Legacy Compatibility** subgraph. That subgraph makes the existing `FreyaAgent` entry point explicit: injected callers use the canonical runtime, while legacy callers retain their own compatibility memory bundle and conversation state. No target component is renamed, collapsed, or replaced.
-
-## Implemented target-preserving wiring
-
-| Target edge or boundary | Implementation location | Current contract |
-|---|---|---|
-| `SystemInitializer` construction sequence | `app/core/initializer.py` | The target components are constructed in the documented order. `LearningPipeline` is created at step 12 and late-bound into `AnswerVerifier`, `ExecutionVerifier`, and `AutonomyManager`. |
-| `ConversationControl → UnifiedRouter` | `app/conversational_control.py`, `app/agent/facade_impl.py` | Ordinary questions enter through `ConversationControl.route_question()` before reaching the router. |
-| `ConversationControl → MemoryCoordinator → IntelligenceEngine` | `app/conversational_control.py`, `app/memory/coordinator.py` | Bounded conversation context and active-goal state are obtained from the coordinator and passed to the router, which invokes the existing intelligence path. Conversation writes use `MemoryCoordinator.record_conversation()`. |
-| `CapabilityRegistry → CapabilityRouter → Capability Handlers → ToolManager` | `app/capabilities/registration_bridge.py` | `CapabilityRegistry` remains the owner. The bridge projects registered entries into `CapabilityRouter` and executes declared actions through a `ToolManager` adapter. |
-| `UnifiedPlanner → UnifiedRouter` | `app/execution/engine.py`, `app/routing/unified_router.py` | Planning asks the router for memory and available-capability context before the existing planner generates a plan. |
-| `UnifiedExecutor → SafetyGate → CapabilityRouter → ToolManager` | `app/execution/engine.py` | The executor safety-checks every action. In the initialized runtime, approved tool actions are dispatched by name through the router capability chain and return as tool results to the executor. |
-| `ExecutionSafeFailure` recovery edges | `app/execution/engine.py`, `app/conversational_control.py`, `app/diagnostics/diagnostic_engine.py` | Exhausted/terminal execution failures request gated compensation, report partial failure through control, and record a bounded diagnostics failure pattern. |
-| Learning and shared infrastructure edges | `app/learning`, `app/autonomy`, `app/core` | LLM, answer verification, execution verification, watchdog, events, background jobs, observability, diagnostics, and safe-self-improvement retain their shared-service connections; learning remains durably promoted only through `MemoryCoordinator`. |
-| `Legacy FreyaAgent` compatibility entry point | `app/agent/core_agent.py` | Legacy construction now creates `ExperienceMemory` before unified retrieval, validation, consolidation, and forgetting use it. Injected compatibility mode delegates to the canonical runtime; legacy mode retains its bounded compatibility memory bundle. |
-
-## Verification focus
-
-The target architecture is validated by focused contracts for initialization ordering, local-first question routing, capability registration and tool dispatch, execution safety/recovery, learning handoffs, shared-event autonomy/improvement paths, and legacy conversation compatibility. See [`PROJECT_STATUS.md`](PROJECT_STATUS.md) for the dependency-ordered MVP completion plan and remaining production-hardening tasks.

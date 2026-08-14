@@ -12,6 +12,7 @@ from app.routing.unified_router import UnifiedRouter, RouteResult
 from app.execution.engine import ExecutionEngine
 from app.conversational_control import ConversationControlHandler
 from app.core.chat_activity import FreyaChatActivityProvider
+from app.core.correlation import correlation_scope
 from app.core.priority_llm import PriorityLLMProvider, LLMPriority
 from app.memory.coordinator import MemoryCoordinator
 from app.verification.answer_verifier import AnswerVerifier
@@ -44,23 +45,31 @@ class AgentFacadeImpl:
 
     def chat(self, user_input: str) -> str:
         """Handle a chat message through the canonical control, routing, and memory paths."""
-        try:
-            route_result = self._control.route_question(user_input)
-            if route_result.is_control:
-                response = self._handle_control(route_result.control_command)
-            elif route_result.is_direct_answer:
-                response = self._answer_directly(user_input, route_result)
-            elif route_result.is_clarification:
-                response = self._ask_clarification(user_input, route_result)
-            elif route_result.is_engineering:
-                response = self._execute_engineering_task(user_input, route_result)
-            else:
-                response = self._answer_directly(user_input, route_result)
+        with correlation_scope(prefix="request") as correlation_id:
+            try:
+                route_result = self._control.route_question(
+                    user_input,
+                    correlation_id=correlation_id,
+                )
+                if route_result.is_control:
+                    response = self._handle_control(route_result.control_command)
+                elif route_result.is_direct_answer:
+                    response = self._answer_directly(user_input, route_result)
+                elif route_result.is_clarification:
+                    response = self._ask_clarification(user_input, route_result)
+                elif route_result.is_engineering:
+                    response = self._execute_engineering_task(user_input, route_result)
+                else:
+                    response = self._answer_directly(user_input, route_result)
 
-            self._control.record_question_exchange(user_input, response)
-            return response
-        finally:
-            self._control.finish_question()
+                self._control.record_question_exchange(
+                    user_input,
+                    response,
+                    correlation_id=correlation_id,
+                )
+                return response
+            finally:
+                self._control.finish_question()
 
     def execute_task(self, task: str, allow_mutations: bool = True) -> str:
         """Execute an engineering task directly (bypasses router)."""

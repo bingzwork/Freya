@@ -72,6 +72,12 @@ class CapabilityMetadata:
     conflicts_with: List[str] = field(default_factory=list)
     provides: List[str] = field(default_factory=list)
     timeout_seconds: float = 30.0
+    # Public query exposure must be explicit. Internal workflow capabilities
+    # remain callable through the workflow safety boundary but are not routed
+    # from natural-language discovery unless this is true.
+    safe_query: bool = False
+    # Logical collaborators injected by the canonical initializer.
+    required_collaborators: List[str] = field(default_factory=list)
 
 
 class Capability:
@@ -250,6 +256,68 @@ class CapabilityRegistry:
 
     def is_running(self) -> bool:
         return self._running
+
+    def audit_startup(
+        self,
+        *,
+        collaborators: Optional[Dict[str, Any]] = None,
+        isolate_unsafe_discoverability: bool = True,
+    ) -> Dict[str, Any]:
+        """Verify the active capability surface before accepting runtime work.
+
+        The audit is intentionally registry-local: it checks existing
+        registrations rather than introducing a second capability owner.  A
+        capability without an explicit safe-query contract is retained for
+        safety-gated workflow use but made non-discoverable.
+        """
+        collaborators = collaborators or {}
+        errors: List[str] = []
+        warnings: List[str] = []
+        isolated: List[str] = []
+        checked: List[str] = []
+
+        with self._lock:
+            capabilities = list(self._capabilities.values())
+
+        tool_manager = collaborators.get("tool_manager")
+        tool_manager_available = callable(getattr(tool_manager, "execute", None)) and callable(
+            getattr(tool_manager, "register", None)
+        )
+
+        for capability in capabilities:
+            checked.append(capability.name)
+            if not capability.is_executable():
+                errors.append(f"{capability.name}: declared actions are not callable")
+            if capability.state == CapabilityState.ACTIVE and not capability.is_executable():
+                errors.append(f"{capability.name}: active capability is not executable")
+
+            for collaborator_name in capability.metadata.required_collaborators:
+                collaborator = collaborators.get(collaborator_name)
+                if collaborator is None:
+                    errors.append(
+                        f"{capability.name}: missing required collaborator '{collaborator_name}'"
+                    )
+                elif collaborator_name == "tool_manager" and not tool_manager_available:
+                    errors.append(f"{capability.name}: ToolManager is unavailable")
+
+            if capability.metadata.auto_discoverable and not capability.metadata.safe_query:
+                message = (
+                    f"{capability.name}: no explicit safe query contract; "
+                    "isolated from natural-language discovery"
+                )
+                warnings.append(message)
+                if isolate_unsafe_discoverability:
+                    capability.metadata.auto_discoverable = False
+                    isolated.append(capability.name)
+
+        return {
+            "passed": not errors,
+            "checked": checked,
+            "errors": errors,
+            "warnings": warnings,
+            "isolated_from_discovery": isolated,
+            "tool_manager_available": tool_manager_available,
+        }
 
     def get_stats(self) -> Dict[str, Any]:
         """Get registry statistics."""

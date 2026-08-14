@@ -74,6 +74,7 @@ class CapabilityRegistrationBridge:
                 default_action="execute",
                 supported_actions=["execute"],
                 tags=list(tags or keywords or []),
+                safe_query=True,
             )
             existing = RegisteredCapability(metadata=metadata, handler=handler)
             if not self._registry.register(existing, registered_by="SystemInitializer"):

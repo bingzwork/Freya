@@ -230,10 +230,20 @@ class SystemInitializer:
                 auto_discoverable=False,
                 default_action="execute",
                 supported_actions=["execute"],
+                required_collaborators=["tool_manager"],
             ),
             handler=dispatch_tool_action,
         ), registered_by="SystemInitializer")
-        logger.debug("[SystemInitializer] CapabilityRegistry created and started")
+        capability_audit = capability_registry.audit_startup(
+            collaborators={"tool_manager": tool_manager},
+            isolate_unsafe_discoverability=True,
+        )
+        if not capability_audit["passed"]:
+            raise RuntimeError(
+                "Capability startup audit failed: " + "; ".join(capability_audit["errors"])
+            )
+        self.capability_audit = capability_audit
+        logger.debug("[SystemInitializer] CapabilityRegistry created, started, and audited")
 
         # ------------------------------------------------------------------
         # 7. Safety Gate (required for ExecutionEngine/WorkflowOrchestrator)
@@ -385,6 +395,18 @@ class SystemInitializer:
         # ------------------------------------------------------------------
         # Finalize
         # ------------------------------------------------------------------
+        # Query adapters are registered by UnifiedRouter after the first audit.
+        # Re-audit the complete surface now that their explicit safe-query
+        # contracts are present, still using the same canonical registry.
+        capability_audit = capability_registry.audit_startup(
+            collaborators={"tool_manager": tool_manager},
+            isolate_unsafe_discoverability=True,
+        )
+        if not capability_audit["passed"]:
+            raise RuntimeError(
+                "Capability startup audit failed: " + "; ".join(capability_audit["errors"])
+            )
+        self.capability_audit = capability_audit
         self._register_readiness_checks(
             observability=observability,
             job_service=job_service,
@@ -392,6 +414,12 @@ class SystemInitializer:
             facade=facade,
             orchestrator=orchestrator,
             autonomy=autonomy,
+            memory_coordinator=memory_coordinator,
+            capability_registry=capability_registry,
+            unified_router=unified_router,
+            execution_engine=execution_engine,
+            learning_pipeline=learning_pipeline,
+            tool_manager=tool_manager,
         )
         # Populate the existing observability state before exposing readiness.
         observability.run_health_checks()
@@ -460,6 +488,12 @@ class SystemInitializer:
         facade,
         orchestrator,
         autonomy,
+        memory_coordinator=None,
+        capability_registry=None,
+        unified_router=None,
+        execution_engine=None,
+        learning_pipeline=None,
+        tool_manager=None,
     ) -> None:
         """Register required runtime dependencies with the shared health monitor."""
         self._register_readiness_component(
@@ -482,6 +516,66 @@ class SystemInitializer:
             component_type=ComponentType.SERVICE,
             category="background_service",
             check=job_service.is_running,
+        )
+        self._register_readiness_component(
+            observability,
+            name="memory_coordinator",
+            component_type=ComponentType.SERVICE,
+            category="target_path",
+            check=lambda: (
+                memory_coordinator is not None
+                and getattr(memory_coordinator, "unified_retrieval", None) is not None
+                and callable(getattr(memory_coordinator, "record_conversation", None))
+            ),
+        )
+        self._register_readiness_component(
+            observability,
+            name="capability_registry",
+            component_type=ComponentType.SERVICE,
+            category="target_path",
+            check=lambda: (
+                capability_registry is not None
+                and capability_registry.is_running()
+                and bool(capability_registry.get_all())
+            ),
+        )
+        self._register_readiness_component(
+            observability,
+            name="unified_router",
+            component_type=ComponentType.SERVICE,
+            category="target_path",
+            check=lambda: callable(getattr(unified_router, "route", None)),
+        )
+        self._register_readiness_component(
+            observability,
+            name="execution_engine",
+            component_type=ComponentType.SERVICE,
+            category="target_path",
+            check=lambda: callable(getattr(execution_engine, "execute_plan", None)),
+        )
+        self._register_readiness_component(
+            observability,
+            name="learning_pipeline",
+            component_type=ComponentType.SERVICE,
+            category="target_path",
+            check=lambda: callable(getattr(learning_pipeline, "run", None)),
+        )
+        self._register_readiness_component(
+            observability,
+            name="tool_manager",
+            component_type=ComponentType.SERVICE,
+            category="target_path",
+            check=lambda: (
+                callable(getattr(tool_manager, "execute", None))
+                and callable(getattr(tool_manager, "register", None))
+            ),
+        )
+        self._register_readiness_component(
+            observability,
+            name="bounded_shutdown",
+            component_type=ComponentType.SERVICE,
+            category="lifecycle",
+            check=lambda: self.config.shutdown_timeout_seconds > 0,
         )
 
         if orchestrator is not None:
@@ -541,6 +635,16 @@ class SystemInitializer:
             for name, status in provider_health.items()
         }
         healthy_count = sum(1 for status in provider_health.values() if status.is_healthy)
+        local_model_state = (
+            "healthy" if providers and healthy_count == len(providers)
+            else "degraded" if healthy_count
+            else "unavailable_but_safe"
+        )
+        readiness_metadata = {
+            "providers": providers,
+            "local_model_state": local_model_state,
+            "safe_paths": ["local_memory", "registered_capabilities"],
+        }
 
         if not providers:
             return HealthResult(
@@ -548,7 +652,7 @@ class SystemInitializer:
                 component="llm_providers",
                 status=HealthStatus.UNHEALTHY,
                 message="No LLM providers are configured",
-                metadata={"providers": providers},
+                metadata=readiness_metadata,
             )
         if healthy_count == len(providers):
             status = HealthStatus.HEALTHY
@@ -565,7 +669,7 @@ class SystemInitializer:
             component="llm_providers",
             status=status,
             message=message,
-            metadata={"providers": providers},
+            metadata=readiness_metadata,
         )
 
     def shutdown(self, system: InitializedSystem) -> None:
@@ -596,8 +700,22 @@ class SystemInitializer:
             system.infra.observability.stop()
             logger.debug("[SystemInitializer] ObservabilityHub stopped")
 
-        system.infra.job_service.shutdown(wait=True, timeout=10.0)
-        logger.debug("[SystemInitializer] BackgroundJobService shut down")
+        shutdown_started = time.monotonic()
+        system.infra.job_service.shutdown(
+            wait=True,
+            timeout=self.config.shutdown_timeout_seconds,
+        )
+        shutdown_elapsed = time.monotonic() - shutdown_started
+        if shutdown_elapsed > self.config.shutdown_timeout_seconds:
+            logger.warning(
+                "[SystemInitializer] BackgroundJobService exceeded shutdown budget "
+                f"({shutdown_elapsed:.2f}s > {self.config.shutdown_timeout_seconds:.2f}s)"
+            )
+        else:
+            logger.debug(
+                "[SystemInitializer] BackgroundJobService shut down within budget "
+                f"({shutdown_elapsed:.2f}s)"
+            )
 
         system.infra.event_bus.shutdown()
         logger.debug("[SystemInitializer] EventBus shut down")
