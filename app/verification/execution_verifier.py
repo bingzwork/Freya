@@ -42,6 +42,10 @@ class ExecutionVerifier:
         self._observability_hub = observability_hub
         self._chat_activity = chat_activity
 
+    def set_learning_pipeline(self, learning_pipeline: Any) -> None:
+        """Late-bind the canonical LearningPipeline after ordered construction."""
+        self._learning_pipeline = learning_pipeline
+
     def verify_execution(
         self,
         task: str,

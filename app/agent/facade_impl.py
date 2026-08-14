@@ -43,10 +43,9 @@ class AgentFacadeImpl:
         self._start_time = time.time()
 
     def chat(self, user_input: str) -> str:
-        """Handle a chat message through the canonical route and memory paths."""
-        self._chat_activity.chat_started()
+        """Handle a chat message through the canonical control, routing, and memory paths."""
         try:
-            route_result = self._router.route(user_input)
+            route_result = self._control.route_question(user_input)
             if route_result.is_control:
                 response = self._handle_control(route_result.control_command)
             elif route_result.is_direct_answer:
@@ -58,11 +57,10 @@ class AgentFacadeImpl:
             else:
                 response = self._answer_directly(user_input, route_result)
 
-            self._memory.record_conversation({"role": "user", "content": user_input})
-            self._memory.record_conversation({"role": "assistant", "content": response})
+            self._control.record_question_exchange(user_input, response)
             return response
         finally:
-            self._chat_activity.chat_ended()
+            self._control.finish_question()
 
     def execute_task(self, task: str, allow_mutations: bool = True) -> str:
         """Execute an engineering task directly (bypasses router)."""

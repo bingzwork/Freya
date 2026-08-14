@@ -1,137 +1,341 @@
-# Current Freya Architecture
-
-*Reconciled with `TARGET_ARCHITECTURE.md` and the codebase at commit `470fd7a` on 2026-08-14.*
-
-This document preserves the target architecture’s component names, ownership, and control-flow boundaries. It does not introduce replacement components or a parallel runtime design. The implementation status below distinguishes existing wiring from remaining MVP fixes.
-
-## Target-preserving runtime wiring
-
-```mermaid
 flowchart TD
-    A["main.py"] --> B["SystemInitializer"]
-    B --> C["Infrastructure"]
-    B --> D["LLMStack"]
-    B --> E["MemoryCoordinator"]
-    B --> G["IntelligenceEngine"]
-    B --> M2["CapabilityRegistry"]
-    B --> H["UnifiedRouter"]
-    B --> I["ExecutionEngine"]
-    B --> M["WorkflowOrchestrator"]
-    B --> J["ConversationControl"]
-    B --> K["AgentFacadeImpl"]
-    B --> L["AutonomyManager"]
-    B --> LP["LearningPipeline"]
-    B --> Q1["Diagnostics"]
-    B --> Q2["Safe Self-Improvement"]
+%% SIMPLE FREYA WIRING
+%% Every node name below is retained from the original diagram.
+%% No new components have been added: only the critical edges are simplified/corrected.
+%% =========================================================
+%% 1. BOOTSTRAP
+%% =========================================================
+subgraph BOOT["1. BOOTSTRAP"]
+direction TB
+A["main.py"]
+B["SystemInitializer"]
+A --> B
+end
+%% =========================================================
+%% 2. FREYA INTERFACE
+%% =========================================================
+subgraph INTERFACE["2. FREYA INTERFACE"]
+direction TB
+K["AgentFacadeImpl"]
+J["ConversationControl"]
+K --> J
+end
+%% =========================================================
+%% 3. FREYA KNOWLEDGE + MEMORY
+%% =========================================================
+subgraph MEMORY["3. FREYA KNOWLEDGE + MEMORY"]
+direction TB
+E["MemoryCoordinator"]
+E3["UnifiedRetrieval"]
+E2["GoalManager"]
+E1["Core Memory Modules<br/>Working · Task · Long-Term<br/>Semantic · Episodic · Project"]
+E4["ExperienceMemory"]
+E5["ConversationMemory"]
+E6["EngineeringLessons"]
+E --> E3
+E --> E2
+E --> E1
+E --> E4
+E --> E5
+E --> E6
+E3 --> E1
+E3 --> E4
+E3 --> E5
+E3 --> E6
+end
+%% =========================================================
+%% 4. FREYA INTELLIGENCE
+%% =========================================================
+subgraph INTELLIGENCE["4. FREYA INTELLIGENCE"]
+direction TB
+G["IntelligenceEngine"]
+G1["Reasoning + Decision Logic"]
+G2["Confidence / Answerability"]
+G3["Context + Goal Awareness"]
+G --> G1
+G --> G2
+G --> G3
+end
+%% =========================================================
+%% 5. KNOWLEDGE-FIRST ROUTING
+%% =========================================================
+subgraph ROUTING["5. KNOWLEDGE-FIRST ROUTING"]
+direction TB
+H["UnifiedRouter"]
+H0["KnowledgeFirstResolver"]
+H5{"Can Freya Answer?"}
+H6{"Local Capability Available?"}
+RESULT["Freya Answer"]
+H --> H0
+H0 -->|"Search Freya first"| E3
+E3 --> H5
+H5 -->|"Yes: grounded and confident"| RESULT
+H5 -->|"No / insufficient"| H6
+H6 -->|"Yes"| H1
+H6 -->|"No"| D2
+end
+%% =========================================================
+%% 6. MODULAR CAPABILITY SYSTEM
+%% =========================================================
+subgraph CAPABILITY["6. MODULAR CAPABILITY SYSTEM"]
+direction TB
+M2["CapabilityRegistry"]
+H1["CapabilityRouter"]
+H2["Capability Handlers"]
+F["ToolManager"]
+M2 --> H1 --> H2 --> F
+end
+%% =========================================================
+%% 7. LOCAL LLM FALLBACK ONLY
+%% =========================================================
+subgraph LLM["7. LOCAL LLM FALLBACK ONLY"]
+direction TB
+D["LLMStack"]
+D2["PriorityLLMProvider"]
+D1["Ollama / Local Model"]
+D3["ChatActivityProvider"]
+D --> D2
+D --> D3
+D2 --> D1
+end
+%% =========================================================
+%% 8. SELF-LEARNING PIPELINE
+%% =========================================================
+subgraph LEARNING["8. SELF-LEARNING PIPELINE"]
+direction TB
+LP["LearningPipeline"]
+LP1["Observe"]
+LP2["Evaluate"]
+LP3["Extract Learning"]
+LP4["Validate Learning"]
+LP5{"Worth Remembering?"}
+LP6["Classify<br/>KNOWLEDGE · EXPERIENCE · SKILL"]
+LP7["KnowledgeDistiller"]
+LP8["ExperienceDistiller"]
+LP9["SkillDistiller"]
+LP10["Better Knowledge & Skills<br/>normalized DistilledLearning"]
+TEMP["Discard / Keep Temporary"]
+LP --> LP1 --> LP2 --> LP3 --> LP4 --> LP5
+LP5 -->|"No"| TEMP
+LP5 -->|"Yes"| LP6
+LP6 -->|"KNOWLEDGE"| LP7
+LP6 -->|"EXPERIENCE"| LP8
+LP6 -->|"SKILL"| LP9
+LP8 -->|"Reusable experience evidence"| LP9
+LP7 --> LP10
+LP8 --> LP10
+LP9 --> LP10
+%% Critical learning rule: only source-backed, validated learning is written to memory.
+LP10 -->|"Validated learning only"| E
+end
+%% =========================================================
+%% 9. WORKFLOW + EXECUTION
+%% =========================================================
+subgraph EXECUTION["9. WORKFLOW + EXECUTION"]
+direction TB
+M["WorkflowOrchestrator"]
+M1["SafetyGate"]
+I["ExecutionEngine"]
+I1["UnifiedPlanner"]
+I2["UnifiedExecutor"]
+I3["ExecutionVerifier"]
+I4["RepairLoop"]
+V1["AnswerVerifier"]
+DONE["Task Complete"]
+AR["AnswerRepairLoop"]
+SF1["AnswerSafeFailure"]
+SF2["ExecutionSafeFailure"]
+M --> M1
+I --> I1 --> I2 --> I3
+I3 -->|"Passed"| DONE
+I3 -->|"Failed / Partial"| I4
+I4 -->|"Repair / Replan (Attempt < Max)"| I1
+I4 -->|"Retries Exhausted"| SF2
+V1 -->|"Valid"| RESULT
+V1 -->|"Invalid / Low Confidence"| AR
+AR -->|"Retry w/ Corrective Context (Attempt < Max)"| D2
+AR -->|"Retries Exhausted"| SF1
+end
+%% =========================================================
+%% 11. AUTONOMY + OBSERVATION
+%% =========================================================
+subgraph AUTONOMY["11. AUTONOMY + OBSERVATION"]
+direction TB
+L["AutonomyManager"]
+L1["Watchdog"]
+L3["SelfInitiatedWorkManager"]
+L4["MaintenanceManager"]
+L --> L1
+L --> L3
+L --> L4
+end
+%% =========================================================
+%% 12. DIAGNOSTICS + SAFE SELF-IMPROVEMENT
+%% =========================================================
+subgraph IMPROVEMENT["12. DIAGNOSTICS + SAFE SELF-IMPROVEMENT"]
+direction TB
+Q1["Diagnostics"]
+Q2["Safe Self-Improvement"]
+Q1 --> Q2
+end
+%% =========================================================
+%% 13. SHARED INFRASTRUCTURE
+%% =========================================================
+subgraph INFRA["13. SHARED INFRASTRUCTURE"]
+direction TB
+C["Infrastructure"]
+C1["EventBus"]
+C2["BackgroundJobService"]
+C3["ObservabilityHub"]
+C --> C1
+C --> C2
+C --> C3
+end
+%% =========================================================
+%% 14. FUTURE EXTENSION PORTS
+%% =========================================================
+subgraph EXTENSIONS["14. FUTURE EXTENSION PORTS"]
+direction TB
+X["Future Capability / Feature"]
+X1["Callable Capability"]
+X2["Event / Observer"]
+X3["Background / Autonomous"]
+X4["Memory-Aware Feature"]
+X --> X1
+X --> X2
+X --> X3
+X --> X4
+end
+%% =========================================================
+%% THE ESSENTIAL CROSS-GROUP WIRING
+%% =========================================================
+%% Conversation and local-knowledge-first answer flow
+J -->|"Question / Knowledge Request"| H
+J -->|"Task / Action Request"| M
+J -->|"Context / Memory Read"| E
+J -->|"Intelligence Context"| G
+J -->|"Chat Activity"| D3
+J -->|"Goal Updates"| E2
+RESULT -->|"Final Answer"| J
+DONE -->|"Task Result"| J
+%% Answerability uses local retrieval, goal context, and confidence
+E2 -->|"Active Goals"| G3
+E2 -->|"Goal Context"| I1
+E3 -->|"Retrieved Knowledge"| G
+G -->|"Intent / Plan Hints"| I1
+G1 -->|"Reasoned Decisions"| I1
+G2 -->|"Confidence Score"| H5
+G3 -->|"Context Snapshot"| I1
+%% The LLM produces a draft; AnswerVerifier decides whether it is safe to return.
+D2 -->|"Fallback draft"| V1
+SF1 -->|"Low-Confidence Disclosure"| RESULT
+SF1 -->|"Log Knowledge Gap"| LP
+%% The LLM may propose learning; it never writes straight to memory.
+D2 -->|"LLM learning candidate"| LP
+V1 -->|"Learning Candidate"| LP
+%% Planner still asks Freya knowledge first; tools run only through the safety gate.
+I1 -->|"Knowledge / Capability Query"| H
+I2 -->|"Proposed Action"| M1
+M1 -->|"Approved Action"| H1
+F -->|"Tool Result"| I2
+I3 -->|"Outcome / Experience"| LP
+%% Execution failure and task completion
+SF2 -->|"Request Compensation"| M1
+SF2 -->|"Partial Failure Report"| J
+SF2 -->|"Log Failure Pattern"| Q1
+%% Autonomy is routed through the same workflow and learning path.
+L3 -->|"Read Goals"| E2
+L3 -->|"Autonomous Work Request"| M
+L4 -->|"Maintenance Work Request"| M
+L1 -->|"Observations / Anomalies"| LP
+L1 -->|"Health Events"| C1
+%% Diagnostics and improvement remain behind the workflow safety gate.
+LP -->|"Improvement Candidate"| Q2
+Q1 -->|"Failure Patterns"| Q2
+Q2 -->|"Approved Improvement Proposal"| M
+%% Eventing, observation, and extensions
+M -->|"Events / Commands"| C1
+M -->|"Schedule Background"| C2
+I -->|"Metrics / Traces"| C3
+C1 -->|"System Events"| L1
+C1 -->|"Learning Events"| LP
+C1 -->|"Autonomy Triggers"| L3
+C1 -->|"Maintenance Triggers"| L4
+C3 -->|"Metrics / Health"| L1
+C3 -->|"Diagnostics Data"| Q1
+C3 -->|"Execution Metrics"| M
+L -->|"Background Jobs"| C2
+X1 -.->|"Register Capability"| M2
+X2 -.->|"Publish / Subscribe"| C1
+X3 -.->|"Schedule Background"| C2
+X4 -.->|"Stable Memory API"| E
+%% =========================================================
+%% INITIALIZATION
+%% =========================================================
+B -->|"1. Init Infrastructure"| C
+B -->|"2. Init LLM Stack"| D
+B -->|"3. Init Memory"| E
+B -->|"4. Init Intelligence"| G
+B -->|"5. Init Capability Registry"| M2
+B -->|"6. Init Router"| H
+B -->|"7. Init Execution Engine"| I
+B -->|"8. Init Orchestrator"| M
+B -->|"9. Init Interface"| J
+B -->|"10. Init Facade"| K
+B -->|"11. Init Autonomy"| L
+B -->|"12. Init Learning Pipeline"| LP
+B -->|"13. Init Diagnostics"| Q1
+B -->|"14. Init Self-Improvement"| Q2
+%% =========================================================
+%% STYLING
+%% =========================================================
+classDef bootstrap fill:#263238,color:#ffffff,stroke:#546e7a,stroke-width:2px;
+classDef interface fill:#6a1b9a,color:#ffffff,stroke:#ab47bc;
+classDef memory fill:#00695c,color:#ffffff,stroke:#26a69a,stroke-width:2px;
+classDef intelligence fill:#1565c0,color:#ffffff,stroke:#42a5f5;
+classDef routing fill:#00838f,color:#ffffff,stroke:#26c6da;
+classDef capability fill:#0277bd,color:#ffffff,stroke:#29b6f6;
+classDef llm fill:#4527a0,color:#ffffff,stroke:#7e57c2;
+classDef learning fill:#558b2f,color:#ffffff,stroke:#9ccc65;
+classDef execution fill:#2e7d32,color:#ffffff,stroke:#66bb6a;
+classDef workflow fill:#ef6c00,color:#ffffff,stroke:#ffa726;
+classDef safety fill:#c62828,color:#ffffff,stroke:#ef5350,stroke-width:3px;
+classDef infrastructure fill:#37474f,color:#ffffff,stroke:#78909c;
+classDef improvement fill:#ad1457,color:#ffffff,stroke:#ec407a;
+classDef extension fill:#455a64,color:#ffffff,stroke:#90a4ae,stroke-dasharray:5 5;
+class A,B bootstrap;
+class K,J interface;
+class E,E1,E2,E3,E4,E5,E6 memory;
+class G,G1,G2,G3 intelligence;
+class H,H0,H5,H6,RESULT routing;
+class M2,H1,H2,F capability;
+class D,D1,D2,D3 llm;
+class LP,LP1,LP2,LP3,LP4,LP5,LP6,LP7,LP8,LP9,LP10,TEMP learning;
+class I,I1,I2,I3,I4,V1,DONE,AR execution;
+class M,L,L1,L3,L4 workflow;
+class M1,SF1,SF2 safety;
+class C,C1,C2,C3 infrastructure;
+class Q1,Q2 improvement;
+class X,X1,X2,X3,X4 extension;
 
-    J -->|"Question / Knowledge Request"| H
-    J -->|"Task / Action Request"| M
-    J -->|"Context / Memory Read"| E
-    J -->|"Intelligence Context"| G
-    J -->|"Chat Activity"| D
-    J -->|"Goal Updates"| E
 
-    H --> H0["KnowledgeFirstResolver"]
-    H0 -->|"Search Freya first"| E3["UnifiedRetrieval"]
-    E3 --> H5{"Can Freya Answer?"}
-    H5 -->|"Yes: grounded and confident"| RESULT["Freya Answer"]
-    H5 -->|"No / insufficient"| H6{"Local Capability Available?"}
-    H6 -->|"Yes"| H1["CapabilityRouter"]
-    H6 -->|"No"| D2["PriorityLLMProvider"]
+# Current Architecture Implementation Notes
 
-    M2 --> H1
-    H1 --> H2["Capability Handlers"]
-    H2 --> F["ToolManager"]
+The Mermaid graph above is a **literal copy** of [`TARGET_ARCHITECTURE.md`](TARGET_ARCHITECTURE.md). The notes below describe the implementation state without adding, renaming, collapsing, or substituting any target component.
 
-    D2 --> D1["Ollama / Local Model"]
-    D2 --> V1["AnswerVerifier"]
-    V1 -->|"Valid"| RESULT
-    V1 -->|"Invalid / Low Confidence"| AR["AnswerRepairLoop"]
-    AR -->|"Retries Exhausted"| SF1["AnswerSafeFailure"]
-    SF1 --> RESULT
+## Implemented target-preserving wiring
 
-    M --> M1["SafetyGate"]
-    M --> I
-    I --> I1["UnifiedPlanner"]
-    I1 --> I2["UnifiedExecutor"]
-    I2 --> I3["ExecutionVerifier"]
-    I3 -->|"Passed"| DONE["Task Complete"]
-    I3 -->|"Failed / Partial"| I4["RepairLoop"]
-    I4 --> I1
-    I4 -->|"Retries Exhausted"| SF2["ExecutionSafeFailure"]
-
-    D2 --> LP
-    V1 --> LP
-    I3 --> LP
-    L --> LP
-    Q1 --> Q2
-    LP --> Q2
-    Q2 --> M
-
-    LP --> LP1["Observe"] --> LP2["Evaluate"] --> LP3["Extract Learning"] --> LP4["Validate Learning"] --> LP5{"Worth Remembering?"}
-    LP5 -->|"No"| TEMP["Discard / Keep Temporary"]
-    LP5 -->|"Yes"| LP6["Classify: KNOWLEDGE · EXPERIENCE · SKILL"]
-    LP6 --> LP7["KnowledgeDistiller"]
-    LP6 --> LP8["ExperienceDistiller"]
-    LP6 --> LP9["SkillDistiller"]
-    LP7 --> LP10["Better Knowledge & Skills / normalized DistilledLearning"]
-    LP8 --> LP10
-    LP9 --> LP10
-    LP10 -->|"Validated learning only"| E
-
-    RESULT --> J
-    DONE --> J
-    I2 --> M1
-    M1 --> H1
-    F --> I2
-    SF2 --> M1
-    SF2 --> J
-    L --> C
-    C --> L
-```
-
-## Component responsibilities
-
-| Target component | Current code location | Responsibility |
+| Target edge or boundary | Implementation location | Current contract |
 |---|---|---|
-| `SystemInitializer` | `app/core/initializer.py` | Constructs the target runtime in dependency order. |
-| `AgentFacadeImpl` | `app/agent/facade_impl.py` | Public interface for chat, task execution, status, and shutdown. |
-| `ConversationControl` | `app/conversational_control.py` | Handles user control commands and active task state. |
-| `MemoryCoordinator` | `app/memory/coordinator.py` | Owns coordinated memory stores and canonical memory writes. |
-| `UnifiedRetrieval` | `app/memory/unified_retrieval.py` | Searches Freya’s internal memory sources through one retrieval contract. |
-| `IntelligenceEngine` | `app/intelligence/intelligence.py` | Provides reasoning, confidence/answerability, and context/goal awareness. |
-| `UnifiedRouter` | `app/routing/unified_router.py` | Routes questions through `KnowledgeFirstResolver`, capabilities, or fallback. |
-| `KnowledgeFirstResolver` | `app/routing/knowledge_first_resolver.py` | Searches local knowledge first and chooses answer, capability, or fallback. |
-| `CapabilityRegistry` | `app/orchestrator/capability_registry.py` | Registers callable capabilities and their declared actions. |
-| `CapabilityRouter` | `app/capabilities/router.py` | Selects matching capability handlers. |
-| `Capability Handlers` | `app/capabilities/handlers.py` and orchestrator capabilities | Execute registered local capabilities. |
-| `ToolManager` | `app/core/tool_manager.py` | Executes tools after routing and safety approval. |
-| `LLMStack` | `app/core/llm_stack.py` | Owns the local-model provider and chat activity provider. |
-| `PriorityLLMProvider` | `app/core/priority_llm.py` | Provides local-model fallback drafts. |
-| `AnswerVerifier` | `app/verification/answer_verifier.py` | Decides whether a fallback answer is safe to return or repair. |
-| `AnswerRepairLoop` / `AnswerSafeFailure` | `app/verification/answer_repair_loop.py` and verifier module | Retries invalid drafts within policy and discloses safe failure when exhausted. |
-| `WorkflowOrchestrator` | `app/orchestrator/workflow_orchestrator.py` | Coordinates workflow planning and execution behind the safety gate. |
-| `ExecutionEngine` | `app/execution/engine.py` | Plans, executes, verifies, repairs, and reports task outcomes. |
-| `UnifiedPlanner` / `UnifiedExecutor` | planner and execution modules | Build and dispatch approved execution work. |
-| `ExecutionVerifier` / `RepairLoop` | `app/verification/execution_verifier.py` and repair modules | Verify execution and perform bounded repair/replan. |
-| `LearningPipeline` | `app/learning/pipeline.py` | Promotes only validated learning through the target stages. |
-| `KnowledgeDistiller`, `ExperienceDistiller`, `SkillDistiller` | `app/learning/distillers.py` | Normalize the three target learning types. |
-| `AutonomyManager` / `Watchdog` | `app/autonomy` and self-observation modules | Submit autonomous work and observations through the existing workflow and learning paths. |
-| `Diagnostics` / `Safe Self-Improvement` | diagnostics and safe-self-improvement modules | Produce and evaluate improvement proposals behind target safety boundaries. |
-| `Infrastructure` | event, background-job, and observability modules | Supplies `EventBus`, `BackgroundJobService`, and `ObservabilityHub`. |
+| `SystemInitializer` construction sequence | `app/core/initializer.py` | The target components are constructed in the documented order. `LearningPipeline` is created at step 12 and late-bound into `AnswerVerifier`, `ExecutionVerifier`, and `AutonomyManager`. |
+| `ConversationControl → UnifiedRouter` | `app/conversational_control.py`, `app/agent/facade_impl.py` | Ordinary questions enter through `ConversationControl.route_question()` before reaching the router. |
+| `ConversationControl → MemoryCoordinator → IntelligenceEngine` | `app/conversational_control.py`, `app/memory/coordinator.py` | Bounded conversation context and active-goal state are obtained from the coordinator and passed to the router, which invokes the existing intelligence path. Conversation writes use `MemoryCoordinator.record_conversation()`. |
+| `CapabilityRegistry → CapabilityRouter → Capability Handlers → ToolManager` | `app/capabilities/registration_bridge.py` | `CapabilityRegistry` remains the owner. The bridge projects registered entries into `CapabilityRouter` and executes declared actions through a `ToolManager` adapter. |
+| `UnifiedPlanner → UnifiedRouter` | `app/execution/engine.py`, `app/routing/unified_router.py` | Planning asks the router for memory and available-capability context before the existing planner generates a plan. |
+| `UnifiedExecutor → SafetyGate → CapabilityRouter → ToolManager` | `app/execution/engine.py` | The executor safety-checks every action. In the initialized runtime, approved tool actions are dispatched by name through the router capability chain and return as tool results to the executor. |
+| `ExecutionSafeFailure` recovery edges | `app/execution/engine.py`, `app/conversational_control.py`, `app/diagnostics/diagnostic_engine.py` | Exhausted/terminal execution failures request gated compensation, report partial failure through control, and record a bounded diagnostics failure pattern. |
+| Learning and shared infrastructure edges | `app/learning`, `app/autonomy`, `app/core` | LLM, answer verification, execution verification, watchdog, events, background jobs, observability, diagnostics, and safe-self-improvement retain their shared-service connections; learning remains durably promoted only through `MemoryCoordinator`. |
 
-## Target flow status
+## Verification focus
 
-The target local-first question path is implemented through `AgentFacadeImpl` → `ConversationControl` → `UnifiedRouter` → `KnowledgeFirstResolver` → `UnifiedRetrieval`. When internal knowledge is sufficient, the resolver returns `Freya Answer`. When it is insufficient, the resolver checks the existing capability path before preparing a `PriorityLLMProvider` fallback.
-
-The fallback now carries the retrieval evidence already collected by `UnifiedRetrieval` into `AnswerVerifier` through the existing route context. The verifier requires evidence grounding on this target fallback path, and invalid or low-confidence output continues through `AnswerRepairLoop` and `AnswerSafeFailure`; no new verifier or router has been introduced.
-
-The target action path remains `WorkflowOrchestrator` → `SafetyGate` → `ExecutionEngine` → `UnifiedPlanner` → `UnifiedExecutor` → `ExecutionVerifier`, with bounded `RepairLoop` behavior and `ExecutionSafeFailure` for exhausted retries. The target learning path remains the sole promotion route: `Observe` → `Evaluate` → `Extract Learning` → `Validate Learning` → `Worth Remembering?` → classification and distillation → validated write through `MemoryCoordinator`.
-
-## Known target-aligned limitations
-
-The current implementation still requires MVP hardening in capability registration consistency, claim-level rather than lexical answer grounding, end-to-end acceptance coverage, execution compensation, autonomy event deduplication, and safe self-improvement integration. These are implementation fixes within the existing target components and edges, not reasons to redesign the architecture.
-
-The legacy `FreyaAgent`, older autonomy modules, and experimental retrieval implementations remain in the repository but are not part of the target’s canonical initialized path. They are not represented as replacement architecture here.
-
-See [`PROJECT_STATUS.md`](PROJECT_STATUS.md) for the prioritized fix list.
+The target architecture is validated by focused contracts for initialization ordering, local-first question routing, capability registration and tool dispatch, execution safety/recovery, learning handoffs, and shared-event autonomy/improvement paths. See [`PROJECT_STATUS.md`](PROJECT_STATUS.md) for the dependency-ordered MVP completion plan and remaining production-hardening tasks.

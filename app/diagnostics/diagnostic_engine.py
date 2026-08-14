@@ -57,6 +57,18 @@ class DiagnosticEngine:
         self._start_time: Optional[datetime] = None
         self._end_time: Optional[datetime] = None
         self._event_bus = event_bus or get_event_bus()
+        self._failure_patterns: List[Dict[str, Any]] = []
+
+    def record_failure_pattern(self, pattern: Dict[str, Any]) -> None:
+        """Record and publish a bounded execution failure pattern."""
+        normalized = {**pattern, "recorded_at": datetime.now(timezone.utc).isoformat()}
+        self._failure_patterns.append(normalized)
+        self._failure_patterns = self._failure_patterns[-100:]
+        self._event_bus.emit(
+            "diagnostics.execution_failure_pattern",
+            normalized,
+            source="DiagnosticEngine",
+        )
 
     def run(self, paths: Optional[List[str]] = None) -> IssueCollection:
         """Run diagnostic analysis on specified paths.

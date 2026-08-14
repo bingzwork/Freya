@@ -433,6 +433,18 @@ class MemoryCoordinator:
         """Retrieve relevant context for execution."""
         return self._retrieval.retrieve_for_execution(query)
 
+    def get_conversation_context(self, limit: int = 3) -> List[Dict[str, Any]]:
+        """Return bounded recent conversation through the coordinator boundary."""
+        history = self._conversation.get_history(limit=max(1, limit))
+        return [
+            {
+                "role": turn.role,
+                "content": turn.content,
+                "timestamp": turn.timestamp,
+            }
+            for turn in history
+        ]
+
     def get_active_goal(self) -> Optional[Any]:
         return self._goals.active_goal()
 

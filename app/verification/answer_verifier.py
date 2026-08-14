@@ -44,7 +44,7 @@ class AnswerVerifier:
 
     def __init__(
         self,
-        learning_pipeline: LearningPipeline,
+        learning_pipeline: Optional[LearningPipeline] = None,
         priority_llm=None,  # PriorityLLMProvider for AnswerRepairLoop
         repair_policy: Optional[RepairPolicyConfig] = None,
     ):
@@ -52,11 +52,12 @@ class AnswerVerifier:
         Initialize the AnswerVerifier.
 
         Args:
-            learning_pipeline: The learning pipeline to send candidates to
+            learning_pipeline: The learning pipeline to send candidates to. It
+                may be late-bound after target-order initialization.
             priority_llm: Optional PriorityLLMProvider for AnswerRepairLoop (D2)
             repair_policy: Optional validated repair policy for AnswerRepairLoop
         """
-        self._learning_pipeline = learning_pipeline
+        self._learning_pipeline: Optional[LearningPipeline] = learning_pipeline
         self._priority_llm = priority_llm
 
         # Initialize repair loop if priority_llm provided
@@ -72,6 +73,21 @@ class AnswerVerifier:
             self._safe_failure = None
 
         logger.info(f"[AnswerVerifier] Initialized (repair_loop={'enabled' if self._repair_loop else 'disabled'})")
+
+    def set_learning_pipeline(self, learning_pipeline: LearningPipeline) -> None:
+        """Late-bind the target LearningPipeline after its ordered construction."""
+        self._learning_pipeline = learning_pipeline
+        if self._safe_failure is None:
+            self._safe_failure = AnswerSafeFailure(learning_pipeline)
+        else:
+            self._safe_failure.set_learning_pipeline(learning_pipeline)
+
+    def _submit_learning_candidate(self, candidate: LearningCandidate) -> None:
+        """Submit only after the learning boundary is available."""
+        if self._learning_pipeline is None:
+            logger.warning("[AnswerVerifier] Learning candidate dropped before pipeline binding")
+            return
+        self._learning_pipeline.run(candidate)
 
     def verify_fallback_answer(
         self,
@@ -107,7 +123,7 @@ class AnswerVerifier:
                 learning_candidate = self._create_learning_candidate(
                     answer, prompt, context, is_valid_answer=True
                 )
-                self._learning_pipeline.run(learning_candidate)
+                self._submit_learning_candidate(learning_candidate)
             return answer
         else:
             # Not a valid answer - attempt repair if repair loop is available
@@ -136,7 +152,7 @@ class AnswerVerifier:
                 learning_candidate = self._create_learning_candidate(
                     answer, prompt, context, is_valid_answer=False
                 )
-                self._learning_pipeline.run(learning_candidate)
+                self._submit_learning_candidate(learning_candidate)
 
             # Return None to indicate no valid answer
             return None

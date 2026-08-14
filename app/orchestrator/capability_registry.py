@@ -181,6 +181,12 @@ class CapabilityRegistry:
                 )
                 return False
             self._capabilities[capability.name] = capability
+            # The target runtime starts the registry before later interface
+            # adapters are registered.  A late registration must therefore
+            # receive the same lifecycle activation as startup registrations.
+            if self._running:
+                capability._initialize()
+                capability._activate()
 
         logger.info(
             f"[CapabilityRegistry] Registered capability '{capability.name}' from {registered_by}"

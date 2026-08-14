@@ -105,10 +105,21 @@ class ConversationControlHandler:
         event_bus: Optional[EventBus] = None,
         job_service: Optional[BackgroundJobService] = None,
         observability: Optional[ObservabilityHub] = None,
+        router: Optional[Any] = None,
+        memory_coordinator: Optional[Any] = None,
+        intelligence: Optional[Any] = None,
+        chat_activity: Optional[Any] = None,
     ):
         self.plan_manager = plan_manager
         self.executor = executor
         self.conversation_memory = conversation_memory
+        # Question traffic is configured through these existing target
+        # components.  ConversationControl is the ingress boundary; it never
+        # constructs replacement routers, memory stores, or intelligence.
+        self._router = router
+        self._memory_coordinator = memory_coordinator
+        self._intelligence = intelligence
+        self._chat_activity = chat_activity
 
         # Shared infrastructure
         self.event_bus = event_bus or get_event_bus()
@@ -221,6 +232,71 @@ class ConversationControlHandler:
 
 
     # =========================================================================
+    # Canonical question ingress
+    # =========================================================================
+
+    def configure_question_flow(
+        self,
+        *,
+        router: Any,
+        memory_coordinator: Any,
+        intelligence: Any,
+        chat_activity: Any,
+    ) -> None:
+        """Attach the target question-flow collaborators after construction."""
+        self._router = router
+        self._memory_coordinator = memory_coordinator
+        self._intelligence = intelligence
+        self._chat_activity = chat_activity
+
+    def route_question(self, user_input: str) -> Any:
+        """Route one normal question through the target ingress contract.
+
+        The control layer obtains bounded context and the active goal through
+        ``MemoryCoordinator`` and passes that state to ``UnifiedRouter``.  The
+        router then invokes the existing intelligence interface as part of its
+        knowledge-first decision; no direct facade-to-router bypass remains.
+        """
+        if self._router is None or self._memory_coordinator is None:
+            raise RuntimeError("ConversationControl question flow is not configured")
+
+        if self._chat_activity is not None:
+            self._chat_activity.chat_started()
+        context = {
+            "recent_conversation": self._memory_coordinator.get_conversation_context(limit=3),
+            "active_goal": self._memory_coordinator.get_active_goal(),
+            "ingress": "ConversationControl",
+        }
+        self._publish_event(
+            "conversation.question.received",
+            {"question": user_input[:500], "has_active_goal": context["active_goal"] is not None},
+        )
+        route_result = self._router.route(user_input, context=context)
+        self._publish_event(
+            "conversation.question.routed",
+            {"question": user_input[:500], "route_reason": getattr(route_result, "reason", "")},
+        )
+        return route_result
+
+    def record_question_exchange(self, user_input: str, response: str) -> None:
+        """Persist both turns through the canonical MemoryCoordinator boundary."""
+        if self._memory_coordinator is None:
+            raise RuntimeError("ConversationControl memory coordinator is not configured")
+        self._memory_coordinator.record_conversation({"role": "user", "content": user_input})
+        self._memory_coordinator.record_conversation({"role": "assistant", "content": response})
+        self._publish_event("conversation.question.completed", {"response_length": len(response)})
+
+    def finish_question(self) -> None:
+        """End chat activity after the caller has produced the final response."""
+        if self._chat_activity is not None:
+            self._chat_activity.chat_ended()
+
+    def report_partial_failure(self, task: str, error: str, details: Optional[Dict[str, Any]] = None) -> None:
+        """Report an exhausted execution failure through the control boundary."""
+        self._publish_event(
+            "conversation.execution.partial_failure",
+            {"task": task, "error": error, **(details or {})},
+        )
 
     def handle_stop(self, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Handle 'stop'/'halt'/'wait' command - immediate interruption.

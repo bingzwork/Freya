@@ -185,9 +185,13 @@ class AnswerSafeFailure:
     SF1 →|"Log Knowledge Gap"| LP (LearningPipeline)
     """
 
-    def __init__(self, learning_pipeline):
+    def __init__(self, learning_pipeline=None):
         self._learning_pipeline = learning_pipeline
         logger.info("[AnswerSafeFailure] Initialized")
+
+    def set_learning_pipeline(self, learning_pipeline) -> None:
+        """Late-bind LearningPipeline after target-order initialization."""
+        self._learning_pipeline = learning_pipeline
 
     def handle_exhausted_retries(
         self,
@@ -227,7 +231,10 @@ class AnswerSafeFailure:
                 },
                 tags=["answer_verification", "llm_fallback", "exhausted", "knowledge_gap"]
             )
-            self._learning_pipeline.run(candidate)
+            if self._learning_pipeline is None:
+                logger.warning("[AnswerSafeFailure] Learning pipeline is not bound; knowledge gap retained only in logs")
+            else:
+                self._learning_pipeline.run(candidate)
         except Exception as e:
             logger.warning(f"[AnswerSafeFailure] Failed to log knowledge gap: {e}")
 

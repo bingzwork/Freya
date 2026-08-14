@@ -230,6 +230,37 @@ class CapabilityRouter:
 
         return matches
 
+    def execute_named(self, name: str, query: str = "", **context) -> CapabilityResult:
+        """Execute one registered capability without rematching the query.
+
+        ExecutionEngine uses this after safety approval, so an approved action
+        cannot be re-routed to a different capability by keyword matching.
+        """
+        import time
+
+        capability = self._capabilities.get(name)
+        if capability is None:
+            raise NoCapabilityError(f"No registered capability named: {name}")
+        start_time = time.time()
+        handler_context = {
+            "query": query,
+            "capability_name": name,
+            **context,
+        }
+        try:
+            result = capability.handler(handler_context)
+            result.execution_time = time.time() - start_time
+            result.capability_name = name
+            return result
+        except Exception as error:
+            logger.error(f"[CapabilityRouter] Error executing capability {name}: {error}")
+            return CapabilityResult(
+                success=False,
+                message=str(error),
+                capability_name=name,
+                execution_time=time.time() - start_time,
+            )
+
     def route(self, query: str, intent_type: Optional[str] = None, **context) -> CapabilityResult:
         """Route a query to the appropriate capability handler.
 

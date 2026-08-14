@@ -85,20 +85,25 @@ class SystemInitializer:
     """
     Single-pass construction of all Freya subsystems.
 
-    Order of initialization per TARGET_ARCHITECTURE.md Section 15:
-    1. Infrastructure (EventBus, JobService, Observability, ConfigHotReload, FileWatcher)
-    2. LLM Stack (PriorityLLMProvider + ChatActivityProvider)
-    3. Memory Coordinator
-    4. Tool Manager
-    5. Intelligence (G1, G2, G3)
-    6. Capability Registry
-    7. Safety Gate
-    8. Unified Router (with KnowledgeFirstResolver)
-    9. Execution Engine
-    10. Conversation Control Handler
-    11. Agent Facade
-    12. Optional: Autonomy Manager
-    13. Optional: Workflow Orchestrator
+    Target construction order:
+    1. Infrastructure
+    2. LLMStack
+    3. MemoryCoordinator
+    4. IntelligenceEngine
+    5. CapabilityRegistry
+    6. UnifiedRouter
+    7. ExecutionEngine
+    8. WorkflowOrchestrator
+    9. ConversationControl
+    10. AgentFacadeImpl
+    11. AutonomyManager
+    12. LearningPipeline
+    13. Diagnostics
+    14. Safe Self-Improvement
+
+    Supporting dependencies such as ToolManager and SafetyGate are constructed
+    only to satisfy the declared target components. Dependencies that would
+    violate target order are late-bound after their target component exists.
     """
 
     def __init__(self, workspace: Path, config: Optional[SystemConfig] = None):
@@ -172,24 +177,6 @@ class SystemInitializer:
         logger.debug("[SystemInitializer] MemoryCoordinator created")
 
         # ------------------------------------------------------------------
-        # 3b. Learning Pipeline (depends on memory_coordinator, event_bus)
-        # ------------------------------------------------------------------
-        learning_pipeline = create_learning_pipeline(
-            memory_coordinator=memory_coordinator,
-            event_bus=event_bus,
-        )
-        logger.debug("[SystemInitializer] LearningPipeline created")
-
-        # ------------------------------------------------------------------
-        # 3c. Answer Verifier (V1) with Repair Loop (AR) - depends on learning_pipeline, priority_llm
-        # ------------------------------------------------------------------
-        answer_verifier = AnswerVerifier(
-            learning_pipeline=learning_pipeline,
-            priority_llm=priority_llm,
-        )
-        logger.debug("[SystemInitializer] AnswerVerifier created with AnswerRepairLoop")
-
-        # ------------------------------------------------------------------
         # 4. Tool Manager (depends on workspace)
         # ------------------------------------------------------------------
         tool_manager = ToolManager(str(self.workspace))
@@ -215,6 +202,37 @@ class SystemInitializer:
         for cap in create_all_capabilities():
             capability_registry.register(cap)
         capability_registry.start()
+
+        # The execution path uses this non-discoverable capability after the
+        # SafetyGate approves an action.  Its registered handler delegates to
+        # ToolManager, completing the target capability-to-tool chain without
+        # creating another capability owner.
+        from app.orchestrator.capability_registry import Capability, CapabilityMetadata
+
+        def dispatch_tool_action(inputs):
+            tool_name = inputs.get("tool")
+            tool_args = inputs.get("args", {})
+            if not isinstance(tool_name, str) or not tool_name:
+                return {"success": False, "message": "An approved action requires a tool name."}
+            if not isinstance(tool_args, dict):
+                return {"success": False, "message": "Tool arguments must be an object."}
+            tool_result = tool_manager.execute(tool_name, **tool_args)
+            return {
+                "success": tool_result.success,
+                "tool_result": tool_result,
+                "message": tool_result.error,
+            }
+
+        capability_registry.register(Capability(
+            CapabilityMetadata(
+                name="tool_dispatch",
+                description="Internal approved action dispatch to ToolManager",
+                auto_discoverable=False,
+                default_action="execute",
+                supported_actions=["execute"],
+            ),
+            handler=dispatch_tool_action,
+        ), registered_by="SystemInitializer")
         logger.debug("[SystemInitializer] CapabilityRegistry created and started")
 
         # ------------------------------------------------------------------
@@ -234,6 +252,7 @@ class SystemInitializer:
             unified_retrieval=memory_coordinator.unified_retrieval,
             intelligence=intelligence,
             llm_stack=llm_stack,
+            capability_registry=capability_registry,
         )
         logger.debug("[SystemInitializer] UnifiedRouter created with KnowledgeFirstResolver")
 
@@ -246,39 +265,19 @@ class SystemInitializer:
             memory=memory_coordinator,
             llm=priority_llm,
             chat_activity=chat_activity,
-            learning_pipeline=learning_pipeline,
             observability_hub=observability,
             safety_gate=safety_gate,
         )
         logger.debug("[SystemInitializer] ExecutionEngine created")
 
-        # ------------------------------------------------------------------
-        # 10. Conversation Control (depends on execution_engine, plan_manager, memory)
-        # ------------------------------------------------------------------
-        conversation_control = ConversationControlHandler(
-            executor=execution_engine,
-            plan_manager=execution_engine.plan_manager,
-            conversation_memory=memory_coordinator.conversation_memory,
-        )
-        execution_engine.set_conversation_control(conversation_control)
-        logger.debug("[SystemInitializer] ConversationControlHandler created")
+        # AnswerVerifier belongs to the execution/answer path.  It is created
+        # here with the LLM dependency and receives LearningPipeline only after
+        # step 12, preserving the target initialization order.
+        answer_verifier = AnswerVerifier(priority_llm=priority_llm)
+        logger.debug("[SystemInitializer] AnswerVerifier created with late-bound learning")
 
         # ------------------------------------------------------------------
-        # 11. Agent Facade (composes all above)
-        # ------------------------------------------------------------------
-        facade = AgentFacadeImpl(
-            router=unified_router,
-            execution=execution_engine,
-            control=conversation_control,
-            chat_activity=chat_activity,
-            priority_llm=priority_llm,
-            memory=memory_coordinator,
-            answer_verifier=answer_verifier,
-        )
-        logger.debug("[SystemInitializer] AgentFacadeImpl created")
-
-        # ------------------------------------------------------------------
-        # 12. Canonical Workflow Orchestrator
+        # 8. WorkflowOrchestrator
         # ------------------------------------------------------------------
         orchestrator = None
         if self.config.enable_orchestrator:
@@ -296,24 +295,68 @@ class SystemInitializer:
             logger.info("[SystemInitializer] WorkflowOrchestrator started")
 
         # ------------------------------------------------------------------
-        # 13. Canonical Autonomy Manager (depends on the shared learning and orchestration graph)
+        # 9. ConversationControl
+        # ------------------------------------------------------------------
+        conversation_control = ConversationControlHandler(
+            executor=execution_engine,
+            plan_manager=execution_engine.plan_manager,
+            conversation_memory=memory_coordinator.conversation_memory,
+            router=unified_router,
+            memory_coordinator=memory_coordinator,
+            intelligence=intelligence,
+            chat_activity=chat_activity,
+        )
+        execution_engine.set_conversation_control(conversation_control)
+        logger.debug("[SystemInitializer] ConversationControlHandler created")
+
+        # ------------------------------------------------------------------
+        # 10. AgentFacadeImpl
+        # ------------------------------------------------------------------
+        facade = AgentFacadeImpl(
+            router=unified_router,
+            execution=execution_engine,
+            control=conversation_control,
+            chat_activity=chat_activity,
+            priority_llm=priority_llm,
+            memory=memory_coordinator,
+            answer_verifier=answer_verifier,
+        )
+        logger.debug("[SystemInitializer] AgentFacadeImpl created")
+
+        # ------------------------------------------------------------------
+        # 11. AutonomyManager.  It is constructed before LearningPipeline and
+        # started only after the late-bound learning edge is attached.
         # ------------------------------------------------------------------
         autonomy = None
         if self.config.enable_autonomy:
             autonomy = AutonomyManager(
                 event_bus=event_bus,
                 observability=observability,
-                learning_pipeline=learning_pipeline,
+                learning_pipeline=None,
                 goal_storage=memory_coordinator.goal_storage,
                 workflow_orchestrator=orchestrator,
                 job_service=job_service,
             )
+            logger.debug("[SystemInitializer] AutonomyManager created with late-bound learning")
+
+        # ------------------------------------------------------------------
+        # 12. LearningPipeline and late-bound collaborators
+        # ------------------------------------------------------------------
+        learning_pipeline = create_learning_pipeline(
+            memory_coordinator=memory_coordinator,
+            event_bus=event_bus,
+        )
+        execution_engine.set_learning_pipeline(learning_pipeline)
+        answer_verifier.set_learning_pipeline(learning_pipeline)
+        if autonomy is not None:
+            autonomy.set_learning_pipeline(learning_pipeline)
             if not autonomy.start() or not autonomy.is_running():
                 raise RuntimeError("AutonomyManager failed to start")
             logger.info("[SystemInitializer] AutonomyManager started")
+        logger.debug("[SystemInitializer] LearningPipeline created and late-bound")
 
         # ------------------------------------------------------------------
-        # 14. Diagnostics (Q1) - depends on workspace, event_bus
+        # 13. Diagnostics (Q1)
         # ------------------------------------------------------------------
         diagnostic_engine = None
         if self.config.enable_diagnostics:
@@ -323,10 +366,11 @@ class SystemInitializer:
                 config=diagnostic_config,
                 event_bus=event_bus,
             )
+            execution_engine.set_diagnostics(diagnostic_engine)
             logger.debug("[SystemInitializer] DiagnosticEngine created")
 
         # ------------------------------------------------------------------
-        # 15. SafeSelfImprovement (Q2) - depends on event_bus, workspace
+        # 14. Safe Self-Improvement (Q2)
         # ------------------------------------------------------------------
         self_improvement = None
         if self.config.enable_self_improvement:

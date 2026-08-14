@@ -26,6 +26,8 @@ from app.memory.unified_retrieval import UnifiedRetrieval
 from app.intelligence.intelligence import Intelligence
 from app.core.llm_stack import LLMStack
 from app.core.logger import logger
+from app.capabilities.registration_bridge import CapabilityRegistrationBridge
+from app.orchestrator.capability_registry import CapabilityRegistry
 
 
 @dataclass
@@ -94,6 +96,7 @@ class UnifiedRouter:
         unified_retrieval: UnifiedRetrieval,
         intelligence: Intelligence,
         llm_stack: LLMStack,
+        capability_registry: Optional[CapabilityRegistry] = None,
     ):
         self._memory = memory
         self._tools = tools
@@ -104,6 +107,16 @@ class UnifiedRouter:
         from app.intent.classifier import IntentClassifier
         self._intent_classifier = IntentClassifier()
         self._capability_router = CapabilityRouter()
+        self._capability_registry = capability_registry
+        self._capability_bridge = (
+            CapabilityRegistrationBridge(
+                registry=capability_registry,
+                router=self._capability_router,
+                tool_manager=tools,
+            )
+            if capability_registry is not None
+            else None
+        )
         self._control_parser = ControlCommandParser()
 
         # KnowledgeFirstResolver is the sole production routing path. The
@@ -116,11 +129,15 @@ class UnifiedRouter:
             llm_stack=llm_stack,
         )
 
-        # Register built-in capabilities
+        # CapabilityRegistry remains the single source of registrations.
+        # Project pre-registered workflow capabilities before adding the
+        # query-facing built-ins through the same bridge.
+        if self._capability_bridge is not None:
+            self._capability_bridge.sync()
         self._register_builtin_capabilities()
 
     def _register_builtin_capabilities(self) -> None:
-        """Register built-in capabilities that can answer directly."""
+        """Register query-facing built-ins through the canonical registry."""
         from app.capabilities.handlers import (
             handle_system_status,
             handle_show_capabilities,
@@ -129,50 +146,32 @@ class UnifiedRouter:
             handle_show_tasks,
         )
 
-        # System status capability
-        self._capability_router.register_capability(
-            name="system_status",
-            handler=handle_system_status,
-            description="Show system status and health",
-            keywords=["status", "health", "system"],
-            intent_types=["system_status", "question"],
+        definitions = (
+            ("system_status", handle_system_status, "Show system status and health", ["status", "health", "system"], ["system_status", "question"]),
+            ("show_capabilities", handle_show_capabilities, "List available capabilities", ["capabilities", "what can you do", "features"], ["question", "system_status"]),
+            ("show_memory", handle_show_memory, "Show memory contents", ["memory", "what do you remember", "recall"], ["question", "system_status"]),
+            ("show_goals", handle_show_goals, "Show current goals", ["goals", "objectives", "targets"], ["question", "system_status"]),
+            ("show_tasks", handle_show_tasks, "Show active/planned tasks", ["tasks", "plan", "steps", "progress"], ["question", "system_status"]),
         )
-
-        # Show capabilities
-        self._capability_router.register_capability(
-            name="show_capabilities",
-            handler=handle_show_capabilities,
-            description="List available capabilities",
-            keywords=["capabilities", "what can you do", "features"],
-            intent_types=["question", "system_status"],
-        )
-
-        # Show memory
-        self._capability_router.register_capability(
-            name="show_memory",
-            handler=handle_show_memory,
-            description="Show memory contents",
-            keywords=["memory", "what do you remember", "recall"],
-            intent_types=["question", "system_status"],
-        )
-
-        # Show goals
-        self._capability_router.register_capability(
-            name="show_goals",
-            handler=handle_show_goals,
-            description="Show current goals",
-            keywords=["goals", "objectives", "targets"],
-            intent_types=["question", "system_status"],
-        )
-
-        # Show tasks
-        self._capability_router.register_capability(
-            name="show_tasks",
-            handler=handle_show_tasks,
-            description="Show active/planned tasks",
-            keywords=["tasks", "plan", "steps", "progress"],
-            intent_types=["question", "system_status"],
-        )
+        for name, handler, description, keywords, intent_types in definitions:
+            if self._capability_bridge is not None:
+                self._capability_bridge.register_query_capability(
+                    name=name,
+                    handler=handler,
+                    description=description,
+                    keywords=keywords,
+                    intent_types=intent_types,
+                )
+            else:
+                # Direct construction remains supported for focused unit tests,
+                # while production initialization always supplies the bridge.
+                self._capability_router.register_capability(
+                    name=name,
+                    handler=handler,
+                    description=description,
+                    keywords=keywords,
+                    intent_types=intent_types,
+                )
 
     def route(self, user_input: str, context: Optional[Dict[str, Any]] = None) -> RouteResult:
         """
@@ -236,8 +235,15 @@ class UnifiedRouter:
         raise RuntimeError(f"Unsupported knowledge-first routing action: {resolution.action}")
 
     def execute_capability(self, capability_name: str, query: str, **context) -> CapabilityResult:
-        """Execute a specific capability by name."""
-        return self._capability_router.route(query, capability_name=capability_name, **context)
+        """Execute a specific capability by name through the shared router path."""
+        return self._capability_router.execute_named(capability_name, query, **context)
+
+    def get_planning_context(self, task: str) -> Dict[str, Any]:
+        """Return knowledge and available capability context for UnifiedPlanner."""
+        return {
+            "knowledge": self._memory.retrieve_for_planning(task),
+            "capabilities": self.find_matching_capabilities(task),
+        }
 
     def find_matching_capabilities(self, query: str, intent_type: Optional[str] = None) -> List[Tuple[str, float]]:
         """Find all capabilities matching a query."""

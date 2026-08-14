@@ -49,7 +49,12 @@ class Planner(PlannerProtocol):
         self.engineering_lessons = engineering_lessons
         self.plan_manager = plan_manager or PlanManager()
 
-    def create_plan(self, task: str, name: str = "Generated Plan") -> Plan:
+    def create_plan(
+        self,
+        task: str,
+        name: str = "Generated Plan",
+        external_context: str = "",
+    ) -> Plan:
         logger.info("[Planner]")
         logger.info("Started")
 
@@ -58,8 +63,11 @@ class Planner(PlannerProtocol):
         max_steps = self._get_max_steps_for_horizon(horizon)
         logger.info(f"[Planner] Planning horizon: {horizon.value} (max steps: {max_steps})")
 
-        # Get relevant memory
-        memory_context = ""
+        # Get relevant memory. UnifiedPlanner supplies the target router
+        # preflight context here; legacy callers continue with an empty value.
+        memory_context = external_context.strip()
+        if memory_context:
+            memory_context += "\n\n"
         if self.memory is not None:
             # search for task keywords
             try:

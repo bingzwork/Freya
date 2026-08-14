@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 
 from app.core.priority_llm import LLMPriority, PriorityLLMProvider
 from app.core.protocols import ChatActivityProvider
-from app.core.tool_manager import ToolManager
+from app.core.tool_manager import ToolManager, ToolResult
 from app.conversational_control import ConversationControlHandler
 from app.editing.patch_engine import PatchEngine
 from app.memory.coordinator import MemoryCoordinator
@@ -80,11 +80,54 @@ class UnifiedPlanner:
         )
 
     def create_plan(self, task: str, context: str, allow_mutations: bool) -> Plan:
-        """Create a plan for the given task."""
-        plan = self._agent_planner.create_plan(task)
+        """Create a plan after requesting target knowledge and capability context."""
+        router_context = self._router.get_planning_context(task)
+        capability_names = ", ".join(name for name, _score in router_context["capabilities"]) or "none"
+        external_context = "\n".join(
+            part for part in (
+                context,
+                "UnifiedRouter knowledge context:\n" + str(router_context["knowledge"]),
+                "UnifiedRouter available capabilities: " + capability_names,
+            )
+            if part
+        )
+        plan = self._agent_planner.create_plan(task, external_context=external_context)
         if plan:
             return plan
         return None
+
+
+class _CapabilityToolDispatch:
+    """ToolManager-compatible dispatch adapter for the execution target edges.
+
+    Once the target runtime registers ``tool_dispatch``, every approved tool
+    action travels through UnifiedRouter -> CapabilityRouter -> handler ->
+    ToolManager.  Focused unit tests and minimal embeddings retain the supplied
+    ToolManager fallback when that canonical capability is not configured.
+    """
+
+    def __init__(self, router: UnifiedRouter, tool_manager: ToolManager):
+        self._router = router
+        self._tool_manager = tool_manager
+
+    def execute(self, name: str, **kwargs: Any) -> ToolResult:
+        if "tool_dispatch" not in self._router.get_capabilities():
+            return self._tool_manager.execute(name, **kwargs)
+        result = self._router.execute_capability(
+            "tool_dispatch",
+            query=name,
+            tool=name,
+            args=kwargs,
+            execution_source="UnifiedExecutor",
+        )
+        if not result.success:
+            return ToolResult(False, error=result.message or "Capability dispatch failed")
+        payload = result.data
+        if isinstance(payload, ToolResult):
+            return payload
+        if isinstance(payload, dict) and isinstance(payload.get("tool_result"), ToolResult):
+            return payload["tool_result"]
+        return ToolResult(True, output=payload)
 
 
 class UnifiedExecutor:
@@ -110,7 +153,7 @@ class UnifiedExecutor:
         from app.agent.executor import Executor as AgentExecutor
         self._agent_executor = AgentExecutor(
             llm,
-            tools,
+            _CapabilityToolDispatch(planner._router, tools),
             engineering_lessons=memory.engineering_lessons,
         )
         self._conversation_control: Optional[ConversationControlHandler] = None
@@ -273,6 +316,43 @@ class UnifiedExecutor:
         return self._plan_tasks
 
 
+class ExecutionSafeFailure:
+    """Terminal execution-failure adapter for the target recovery edges."""
+
+    def __init__(self, safety_gate: Any = None) -> None:
+        self._safety_gate = safety_gate
+        self._conversation_control: Optional[ConversationControlHandler] = None
+        self._diagnostics: Any = None
+
+    def set_conversation_control(self, control: ConversationControlHandler) -> None:
+        self._conversation_control = control
+
+    def set_diagnostics(self, diagnostics: Any) -> None:
+        self._diagnostics = diagnostics
+
+    def handle(self, *, task: str, error: str, state: ExecutionLifecycleState) -> None:
+        """Request compensation, report partial failure, and emit diagnostics."""
+        compensation = "not_configured"
+        if self._safety_gate is not None:
+            try:
+                self._safety_gate.check_and_enforce(
+                    f"Compensate partial execution: {task}",
+                    "execution_compensation",
+                    {"task": task, "error": error, "state": state.value},
+                )
+                compensation = "authorized"
+            except Exception as compensation_error:
+                compensation = f"blocked:{compensation_error}"
+
+        details = {"state": state.value, "compensation": compensation}
+        if self._conversation_control is not None:
+            self._conversation_control.report_partial_failure(task, error, details)
+        if self._diagnostics is not None and hasattr(self._diagnostics, "record_failure_pattern"):
+            self._diagnostics.record_failure_pattern(
+                {"task": task, "error": error, **details}
+            )
+
+
 class ExecutionEngine:
     """Single execution pipeline used by both facade and orchestrator."""
 
@@ -283,8 +363,8 @@ class ExecutionEngine:
         memory: MemoryCoordinator,
         llm: PriorityLLMProvider,
         chat_activity: ChatActivityProvider,
-        learning_pipeline: Any,
-        observability_hub: Any,
+        learning_pipeline: Any = None,
+        observability_hub: Any = None,
         safety_gate=None,
     ):
         self._router = router
@@ -293,6 +373,7 @@ class ExecutionEngine:
         self._llm = llm
         self._chat_activity = chat_activity
         self._safety_gate = safety_gate
+        self._execution_safe_failure = ExecutionSafeFailure(safety_gate)
         self._planner = UnifiedPlanner(llm=llm, memory=memory, router=router, tools=tools)
 
         verification_runner = VerificationRunner(tools.workspace if hasattr(tools, "workspace") else ".")
@@ -325,6 +406,15 @@ class ExecutionEngine:
     def set_conversation_control(self, control: ConversationControlHandler) -> None:
         self._conversation_control = control
         self._executor.set_conversation_control(control)
+        self._execution_safe_failure.set_conversation_control(control)
+
+    def set_diagnostics(self, diagnostics: Any) -> None:
+        """Late-bind Diagnostics after target-order construction."""
+        self._execution_safe_failure.set_diagnostics(diagnostics)
+
+    def set_learning_pipeline(self, learning_pipeline: Any) -> None:
+        """Late-bind LearningPipeline after target-order component construction."""
+        self._execution_verifier.set_learning_pipeline(learning_pipeline)
 
     def execute_plan(self, task: str, allow_mutations: bool = True) -> str:
         """Execute a plan through safety, execution, verification, and safe failure."""
@@ -515,6 +605,18 @@ class ExecutionEngine:
         self._last_outcome = record
 
     def _safe_failure_message(self, task: str, error: str) -> str:
+        # Some focused legacy tests construct a minimal engine via ``__new__``.
+        # Preserve their behavior while production instances receive the full
+        # explicit safe-failure collaborator during normal initialization.
+        safe_failure = getattr(self, "_execution_safe_failure", None)
+        if safe_failure is None:
+            safe_failure = ExecutionSafeFailure(getattr(self, "_safety_gate", None))
+            self._execution_safe_failure = safe_failure
+        safe_failure.handle(
+            task=task,
+            error=error,
+            state=self._lifecycle_state,
+        )
         return f"Task execution was not completed safely (state={self._lifecycle_state.value}): {error}"
 
     def _summarize_results(self, task: str, plan: Plan, results: List[Any]) -> str:
@@ -581,6 +683,7 @@ __all__ = [
     "ExecutionEngine",
     "ExecutionLifecycleState",
     "ExecutionRecord",
+    "ExecutionSafeFailure",
     "UnifiedExecutor",
     "UnifiedPlanner",
 ]
