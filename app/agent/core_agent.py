@@ -346,6 +346,11 @@ class FreyaAgent:
             # Semantic Memory - general programming knowledge base
             self.semantic_memory = create_semantic_memory(workspace)
 
+            # Experience Memory - durable execution and conversation outcomes.
+            # The legacy path uses it below for retrieval, consolidation,
+            # forgetting, validation, and conversation lifecycle support.
+            self.experience_memory = ExperienceMemory(workspace)
+
             # Unified Retrieval Layer - single interface for all memories
             self.unified_retrieval = create_unified_retrieval(self)
 
@@ -1076,7 +1081,6 @@ unless explicitly asked to do so."""
                 elif route_result.is_clarification:
                     # Ask for clarification
                     from app.intent.entity_extractor import get_missing_slots_prompt
-                    from app.intent import classify_intent
                     classification = classify_intent(task)
                     return get_missing_slots_prompt(classification.intent, classification.entities)
                 else:

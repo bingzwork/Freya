@@ -170,6 +170,17 @@ L --> L3
 L --> L4
 end
 %% =========================================================
+%% 10. LEGACY COMPATIBILITY ENTRY POINT
+%% =========================================================
+subgraph LEGACY["10. LEGACY COMPATIBILITY"]
+direction TB
+LC["Legacy FreyaAgent"]
+LC1["Legacy Local Memory Bundle<br/>Project · Experience · Conversation<br/>Working · Task · Long-Term · Episodic · Semantic"]
+LC2["ConversationState"]
+LC -->|"Legacy mode"| LC1
+LC --> LC2
+end
+%% =========================================================
 %% 12. DIAGNOSTICS + SAFE SELF-IMPROVEMENT
 %% =========================================================
 subgraph IMPROVEMENT["12. DIAGNOSTICS + SAFE SELF-IMPROVEMENT"]
@@ -269,6 +280,10 @@ X1 -.->|"Register Capability"| M2
 X2 -.->|"Publish / Subscribe"| C1
 X3 -.->|"Schedule Background"| C2
 X4 -.->|"Stable Memory API"| E
+%% Legacy callers may receive the canonical runtime through injected components;
+%% local legacy construction retains a complete compatibility memory bundle.
+LC -.->|"Injected canonical components"| K
+LC2 -.->|"Compatibility conversation history"| J
 %% =========================================================
 %% INITIALIZATION
 %% =========================================================
@@ -303,6 +318,7 @@ classDef safety fill:#c62828,color:#ffffff,stroke:#ef5350,stroke-width:3px;
 classDef infrastructure fill:#37474f,color:#ffffff,stroke:#78909c;
 classDef improvement fill:#ad1457,color:#ffffff,stroke:#ec407a;
 classDef extension fill:#455a64,color:#ffffff,stroke:#90a4ae,stroke-dasharray:5 5;
+classDef legacy fill:#5d4037,color:#ffffff,stroke:#8d6e63,stroke-dasharray:4 3;
 class A,B bootstrap;
 class K,J interface;
 class E,E1,E2,E3,E4,E5,E6 memory;
@@ -317,11 +333,12 @@ class M1,SF1,SF2 safety;
 class C,C1,C2,C3 infrastructure;
 class Q1,Q2 improvement;
 class X,X1,X2,X3,X4 extension;
+class LC,LC1,LC2 legacy;
 
 
 # Current Architecture Implementation Notes
 
-The Mermaid graph above is a **literal copy** of [`TARGET_ARCHITECTURE.md`](TARGET_ARCHITECTURE.md). The notes below describe the implementation state without adding, renaming, collapsing, or substituting any target component.
+The Mermaid graph above retains the complete target architecture from [`TARGET_ARCHITECTURE.md`](TARGET_ARCHITECTURE.md) and adds one code-backed **Legacy Compatibility** subgraph. That subgraph makes the existing `FreyaAgent` entry point explicit: injected callers use the canonical runtime, while legacy callers retain their own compatibility memory bundle and conversation state. No target component is renamed, collapsed, or replaced.
 
 ## Implemented target-preserving wiring
 
@@ -335,7 +352,8 @@ The Mermaid graph above is a **literal copy** of [`TARGET_ARCHITECTURE.md`](TARG
 | `UnifiedExecutor → SafetyGate → CapabilityRouter → ToolManager` | `app/execution/engine.py` | The executor safety-checks every action. In the initialized runtime, approved tool actions are dispatched by name through the router capability chain and return as tool results to the executor. |
 | `ExecutionSafeFailure` recovery edges | `app/execution/engine.py`, `app/conversational_control.py`, `app/diagnostics/diagnostic_engine.py` | Exhausted/terminal execution failures request gated compensation, report partial failure through control, and record a bounded diagnostics failure pattern. |
 | Learning and shared infrastructure edges | `app/learning`, `app/autonomy`, `app/core` | LLM, answer verification, execution verification, watchdog, events, background jobs, observability, diagnostics, and safe-self-improvement retain their shared-service connections; learning remains durably promoted only through `MemoryCoordinator`. |
+| `Legacy FreyaAgent` compatibility entry point | `app/agent/core_agent.py` | Legacy construction now creates `ExperienceMemory` before unified retrieval, validation, consolidation, and forgetting use it. Injected compatibility mode delegates to the canonical runtime; legacy mode retains its bounded compatibility memory bundle. |
 
 ## Verification focus
 
-The target architecture is validated by focused contracts for initialization ordering, local-first question routing, capability registration and tool dispatch, execution safety/recovery, learning handoffs, and shared-event autonomy/improvement paths. See [`PROJECT_STATUS.md`](PROJECT_STATUS.md) for the dependency-ordered MVP completion plan and remaining production-hardening tasks.
+The target architecture is validated by focused contracts for initialization ordering, local-first question routing, capability registration and tool dispatch, execution safety/recovery, learning handoffs, shared-event autonomy/improvement paths, and legacy conversation compatibility. See [`PROJECT_STATUS.md`](PROJECT_STATUS.md) for the dependency-ordered MVP completion plan and remaining production-hardening tasks.

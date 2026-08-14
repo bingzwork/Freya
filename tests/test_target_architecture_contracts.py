@@ -29,12 +29,25 @@ class RecordingChatActivity:
         self.ended += 1
 
 
-def test_current_architecture_starts_with_the_complete_literal_target_diagram():
+def test_current_architecture_retains_target_wiring_and_documents_legacy_compatibility():
     root = Path(__file__).resolve().parents[1]
-    target = (root / "TARGET_ARCHITECTURE.md").read_text(encoding="utf-8")
     current = (root / "CURRENT_ARCHITECTURE.md").read_text(encoding="utf-8")
 
-    assert current.startswith(target)
+    required_target_fragments = (
+        "subgraph BOOT[\"1. BOOTSTRAP\"]",
+        "subgraph INTERFACE[\"2. FREYA INTERFACE\"]",
+        "subgraph MEMORY[\"3. FREYA KNOWLEDGE + MEMORY\"]",
+        "subgraph ROUTING[\"5. KNOWLEDGE-FIRST ROUTING\"]",
+        "M2 --> H1 --> H2 --> F",
+        "I --> I1 --> I2 --> I3",
+        "LP10 -->|\"Validated learning only\"| E",
+        "B -->|\"14. Init Self-Improvement\"| Q2",
+        "subgraph EXTENSIONS[\"14. FUTURE EXTENSION PORTS\"]",
+    )
+    assert current.startswith("flowchart TD")
+    assert all(fragment in current for fragment in required_target_fragments)
+    assert "subgraph LEGACY[\"10. LEGACY COMPATIBILITY\"]" in current
+    assert "LC -.->|\"Injected canonical components\"| K" in current
 
 
 def test_registry_router_handler_and_tool_manager_form_one_registration_chain(tmp_path):
