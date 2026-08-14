@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from app.core.logger import logger
 
 
-# Routing confidence thresholds (see NATURAL_CONVERSATION.md "Routing Semantics").
+# Routing confidence thresholds used by the implemented classifier.
 ACCEPT_CONFIDENCE_THRESHOLD = 0.70
 LOW_CONFIDENCE_THRESHOLD = 0.40
 
@@ -439,8 +439,8 @@ class IntentClassifier:
 
         # No-signal fallback: when no pattern or keyword matched any intent,
         # default to CHAT (the General Conversation tier). Confidence stays
-        # low so callers see `is_low_confidence=True` and can apply the
-        # NATURAL_CONVERSATION.md low-confidence policy.
+        # low so callers see `is_low_confidence=True` and can choose an
+        # appropriate general-conversation response.
         if best_score == 0.0:
             best_intent_type = IntentType.CHAT
             best_keywords = []

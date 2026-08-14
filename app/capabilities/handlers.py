@@ -1022,14 +1022,12 @@ def _get_conversation_control():
 class ConversationalControlHandler:
     """Handles meta-commands (stop / cancel / undo / redo / status).
 
-    These capabilities short-circuit the normal conversation pipeline and
-    return control to the user. See NATURAL_CONVERSATION.md "Conversational
-    Control" for semantics.
+    These capability handlers preserve the capability API for callers that use
+    it. The canonical production path is `AgentFacadeImpl` through
+    `ConversationControlHandler`; it returns the handler's user-facing message
+    directly. Capability results retain control metadata for compatible callers
+    without exposing that metadata in normal replies.
 
-    Handlers emit a `control_command` data field so a future autonomous runloop
-    can pick up the signal without re-classifying the message. Today's runtime
-    invoke these handlers synchronously from `FreyaAgent.run`, so the signal
-    is also surfaced through the returned CapabilityResult message.
     """
 
     @staticmethod

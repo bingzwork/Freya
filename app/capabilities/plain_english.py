@@ -2,7 +2,7 @@
 
 This module provides utilities to enforce plain English responses across
 all user-facing outputs. It detects and replaces technical jargon with
-user-friendly alternatives per NATURAL_CONVERSATION.md "User Communication Principles".
+user-friendly alternatives.
 """
 
 import re
@@ -280,8 +280,8 @@ def to_plain_english(text: str, aggressive: bool = True) -> str:
 def enforce_plain_english(response: str, debug_mode: bool = False) -> str:
     """Enforce plain English on a response.
 
-    This is the main entry point for ensuring all user-facing responses
-    follow the communication principles in NATURAL_CONVERSATION.md.
+    This is the main entry point for ensuring user-facing responses use
+    plain language and omit internal implementation details.
 
     Args:
         response: The raw response text.

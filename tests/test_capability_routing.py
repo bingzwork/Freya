@@ -361,10 +361,10 @@ class TestIntentClassification:
 
 
 class TestConversationalControlCapabilities:
-    """Tests for the ConversationalControlHandler registered in app.capabilities.handlers.
+    """Tests for capability-router control adapters.
 
-    These capabilities short-circuit routing per NATURAL_CONVERSATION.md
-    "Conversational Control".
+    The canonical application routes control messages through `AgentFacadeImpl`;
+    these tests retain coverage for direct capability-router callers.
     """
 
     def test_control_capabilities_registered(self):
