@@ -392,6 +392,10 @@ class PriorityLLMProvider:
         stats['chat_active'] = self.is_chat_active()
         return stats
 
+    def get_provider_health(self) -> Dict[str, Any]:
+        """Return health observations from the active LLM provider path."""
+        return self._llm.get_provider_health()
+
     def shutdown(self) -> None:
         """Shutdown the provider."""
         self._shutdown_event.set()

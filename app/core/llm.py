@@ -72,6 +72,13 @@ class LLM:
         """Expose the last non-sensitive routing decisions for observability."""
         return self._provider_router.last_attempts
 
+    def get_provider_health(self) -> dict:
+        """Return current provider observations through the active provider router."""
+        return {
+            name: self._provider_router.get_health_status(name)
+            for name in self._provider_router.provider_order
+        }
+
     def ask(
         self,
         prompt: str,

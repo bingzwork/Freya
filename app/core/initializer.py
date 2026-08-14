@@ -20,7 +20,15 @@ from app.core.protocols import (
 # Infrastructure (no deps)
 from app.core.events import EventBus, set_event_bus
 from app.core.background_jobs import BackgroundJobService, set_job_service
-from app.core.observability import ObservabilityHub, ComponentInfo, ComponentType, set_observability_hub
+from app.core.observability import (
+    ObservabilityHub,
+    ComponentInfo,
+    ComponentType,
+    HealthCheck,
+    HealthResult,
+    HealthStatus,
+    set_observability_hub,
+)
 from app.core.config_hot_reload import ConfigHotReload, create_config_hot_reload
 from app.core.file_watcher import FileWatcher
 
@@ -332,6 +340,17 @@ class SystemInitializer:
         # ------------------------------------------------------------------
         # Finalize
         # ------------------------------------------------------------------
+        self._register_readiness_checks(
+            observability=observability,
+            job_service=job_service,
+            priority_llm=priority_llm,
+            facade=facade,
+            orchestrator=orchestrator,
+            autonomy=autonomy,
+        )
+        # Populate the existing observability state before exposing readiness.
+        observability.run_health_checks()
+
         infra = InfrastructureBundle(
             event_bus=event_bus,
             job_service=job_service,
@@ -385,6 +404,123 @@ class SystemInitializer:
             learning_pipeline=learning_pipeline,
             diagnostics=diagnostic_engine,
             self_improvement=self_improvement,
+        )
+
+    def _register_readiness_checks(
+        self,
+        *,
+        observability: ObservabilityHub,
+        job_service: BackgroundJobService,
+        priority_llm,
+        facade,
+        orchestrator,
+        autonomy,
+    ) -> None:
+        """Register required runtime dependencies with the shared health monitor."""
+        self._register_readiness_component(
+            observability,
+            name="agent_facade",
+            component_type=ComponentType.AGENT,
+            category="agent",
+            check=lambda: facade is not None,
+        )
+        self._register_readiness_component(
+            observability,
+            name="llm_providers",
+            component_type=ComponentType.EXTERNAL,
+            category="providers",
+            check=lambda: self._provider_readiness_result(priority_llm),
+        )
+        self._register_readiness_component(
+            observability,
+            name="background_job_service",
+            component_type=ComponentType.SERVICE,
+            category="background_service",
+            check=job_service.is_running,
+        )
+
+        if orchestrator is not None:
+            self._register_readiness_component(
+                observability,
+                name="workflow_orchestrator",
+                component_type=ComponentType.SERVICE,
+                category="background_service",
+                check=lambda: (
+                    orchestrator.get_system_status()["orchestrator"]["state"] == "running"
+                ),
+            )
+        if autonomy is not None:
+            self._register_readiness_component(
+                observability,
+                name="autonomy_manager",
+                component_type=ComponentType.SERVICE,
+                category="background_service",
+                check=autonomy.is_running,
+            )
+
+    @staticmethod
+    def _register_readiness_component(
+        observability: ObservabilityHub,
+        *,
+        name: str,
+        component_type: ComponentType,
+        category: str,
+        check,
+    ) -> None:
+        observability.register_component(ComponentInfo(
+            name=name,
+            component_type=component_type,
+            metadata={"readiness": {"category": category, "required": True}},
+        ))
+        observability.add_health_check(HealthCheck(
+            name=f"{name}.readiness",
+            component=name,
+            component_type=component_type,
+            check_func=check,
+            critical=True,
+        ))
+
+    @staticmethod
+    def _provider_readiness_result(priority_llm) -> HealthResult:
+        """Translate active provider observations into one readiness health result."""
+        provider_health = priority_llm.get_provider_health()
+        providers = {
+            name: {
+                "healthy": status.is_healthy,
+                "reachable": status.is_reachable,
+                "model_available": status.model_available,
+                "state": status.state.value,
+                "error": status.error_message,
+                "checked_at": status.checked_at,
+            }
+            for name, status in provider_health.items()
+        }
+        healthy_count = sum(1 for status in provider_health.values() if status.is_healthy)
+
+        if not providers:
+            return HealthResult(
+                name="llm_providers.readiness",
+                component="llm_providers",
+                status=HealthStatus.UNHEALTHY,
+                message="No LLM providers are configured",
+                metadata={"providers": providers},
+            )
+        if healthy_count == len(providers):
+            status = HealthStatus.HEALTHY
+            message = "All configured LLM providers are available"
+        elif healthy_count:
+            status = HealthStatus.DEGRADED
+            message = "At least one configured LLM provider is available"
+        else:
+            status = HealthStatus.UNHEALTHY
+            message = "No configured LLM provider is available"
+
+        return HealthResult(
+            name="llm_providers.readiness",
+            component="llm_providers",
+            status=status,
+            message=message,
+            metadata={"providers": providers},
         )
 
     def shutdown(self, system: InitializedSystem) -> None:

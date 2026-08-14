@@ -1,10 +1,10 @@
 # Completion Progress
 
-Overall Freya Functional Completion: 84.0%
-Completed Tasks: 13 / 17
-Remaining Tasks: 4 / 17
+Overall Freya Functional Completion: 88.0%
+Completed Tasks: 14 / 17
+Remaining Tasks: 3 / 17
 Last Updated: 2026-08-14
-Next Active Task: Task 14 — Add production health/readiness surface
+Next Active Task: Task 15 — Add configurable learning and repair policy
 
 > The percentage retains the documented capability-weighted operational method: functionality receives credit only when its production path is implemented, wired, reachable, safe where required, and supported by runtime evidence. The task counts are the rolling queue counts and do not replace that capability-weighted percentage.
 
@@ -14,56 +14,20 @@ Next Active Task: Task 14 — Add production health/readiness surface
 > Completed, working, and verified items have been removed from the execution queue.
 > Tasks are ordered by documented dependency and execution sequence, not simply by priority.
 >
-> **Verified operational completion:** 84.0% (the capability-weighted estimate reflects thirteen completed and verified tasks after Task 13; it supersedes the earlier 80.0% estimate).
+> **Verified operational completion:** 88.0% (the capability-weighted estimate reflects fourteen completed and verified tasks after Task 14; it supersedes the earlier 84.0% estimate).
 
 ---
 
 # Critical Execution Path
-1. 🔵 Task 14 — Add production health/readiness surface
+1. 🔵 Task 15 — Add configurable learning and repair policy
 
-Tasks 14–17 are parallel or independent work where the existing status document does not establish a prerequisite beyond the relationships stated in each task.
+Tasks 15–17 are parallel or independent work where the existing status document does not establish a prerequisite beyond the relationships stated in each task.
 
 
 ---
 
 # Active Work
 
-## Task 14 — Add production health/readiness surface
-
-**Size:** 🔵 BLUE — EASY / SMALL
-**Priority:** P1/P3
-**Execution Order:** 14
-
-**Location**
-
-- `main.py`
-- `app/core/observability.py`
-
-**Problem**
-
-No health/readiness endpoint exposes initialization state, provider availability, background-service state, or dependency readiness. The earlier status also identifies this as a P1 operational gap; the authoritative current section classifies the remaining implementation as P3.
-
-**Required Work**
-
-- Add a read-only health/readiness surface.
-- Drive it from the same observability state used at runtime.
-- Expose initialization, provider, background-service, and dependency readiness.
-
-**Dependencies**
-
-- Should follow repair of the underlying component health signals, especially Tasks 3 and 9.
-
-**Why This Order**
-
-The source document states that the endpoint should follow repair of the signals it reports.
-
-**Acceptance Criteria**
-
-- [ ] Readiness distinguishes a live process from a usable agent.
-- [ ] Provider and background-service state are represented.
-- [ ] The surface is read-only and backed by runtime observability.
-
----
 
 ## Task 15 — Add configurable learning and repair policy
 
@@ -184,8 +148,8 @@ The source document explicitly places this hygiene work after runtime consolidat
 
 These tasks do not have a documented prerequisite on the critical execution chain, or the source document explicitly allows them to proceed independently:
 
-- 🔵 **Task 15 — Add configurable learning and repair policy**. It can proceed after the execution-learning contract is fixed.
 - 🟡 **Task 16 — Resolve remaining memory and retrieval quality gaps**. Its cross-memory and coverage portions can proceed after the supported memory contract is established.
+- 🔵 **Task 17 — Resolve stale documentation and test contracts**. It follows the prior runtime-consolidation work.
 
 ---
 
@@ -203,17 +167,17 @@ No dependency has been added where the existing status document did not establis
 |---|---:|
 | 🔴 RED — Big / Complex | 0 |
 | 🟡 YELLOW — Medium | 1 |
-| 🔵 BLUE — Easy / Small | 3 |
-| **Total** | **4** |
+| 🔵 BLUE — Easy / Small | 2 |
+| **Total** | **3** |
 
 | Priority | Remaining work |
 |---|---|
 | **P0 — Critical** | No remaining P0 task on the active queue; the Task 3 autonomy blocker is complete. |
-| **P1 — High** | Task 14: production readiness surface |
+| **P1 — High** | No remaining P1 task on the active queue. |
 | **P2 — Medium** | Task 16: memory quality |
-| **P3 — Low** | Tasks 14–17: readiness completion, configurable policy, memory-quality tail work, stale contracts |
+| **P3 — Low** | Tasks 15–17: configurable policy, memory-quality tail work, and stale contracts |
 
-**Current verified completion:** 84.0%. Tasks 1–13 are recorded as complete and verified. The remaining active queue begins with Task 14’s production health/readiness surface.
+**Current verified completion:** 88.0%. Tasks 1–14 are recorded as complete and verified. The remaining active queue begins with Task 15’s configurable learning and repair policy.
 
 ---
 
@@ -227,7 +191,7 @@ No dependency has been added where the existing status document did not establis
 
 Freya reaches 100% only when a normal `FreyaApp` startup reliably composes one supported architecture; safely accepts or rejects actions; plans, executes, verifies, repairs, and persists outcomes; learns from those outcomes; uses persistent and retrievable knowledge across sessions; runs healthy autonomous background work; routes diagnostics and learning through controlled improvement safeguards; survives configured provider and tool failures; and demonstrates these chains through a clean, production-path test suite.
 
-The current verified operational completion is **84.0%**. The earlier 80.0% estimate is superseded by the current verified assessment and is not used as the completion baseline.
+The current verified operational completion is **88.0%**. The earlier 84.0% estimate is superseded by the current verified assessment and is not used as the completion baseline.
 
 ---
 
@@ -722,7 +686,7 @@ The supported restart boundary is `instance A → add_message() → new instance
 
 **Next Active Task**
 
-Task 14 — Add production health/readiness surface.
+Task 15 — Add configurable learning and repair policy.
 
 ---
 
@@ -747,5 +711,41 @@ Task 11 establishes `app.learning.pipeline.LearningPipeline` as the canonical pr
 - `app/autonomy/manager.py`
 - `tests/test_task11_autonomous_learning.py`
 - `PROJECT_STATUS.md`
+
+---
+
+## Task 14 — Add production health/readiness surface
+
+**Status:** COMPLETE
+
+**Implementation Summary**
+
+Task 14 adds a production liveness and readiness surface without introducing another monitoring subsystem. `FreyaApp.get_health_surface()` exposes liveness separately from readiness, and the supported CLI offers `python3 main.py --health` for the full JSON snapshot and `python3 main.py --readiness` for readiness-only JSON with a non-zero exit code when unready. These query modes are read-only: they do not initialize Freya, start services, trigger background jobs, probe providers, mutate configuration, or repair dependencies.
+
+`SystemInitializer` registers the agent facade, active configured LLM providers, shared background-job service, and enabled workflow/autonomy services as required dependencies with the existing `ObservabilityHub`. It evaluates those normal startup checks once, while the health surface only reports their latest observations. Provider status includes health, reachability, model availability, state, check time, and non-sensitive error detail. Required dependencies that are unknown or unhealthy make readiness `not_ready`; degraded dependencies result in `degraded` readiness when the agent remains usable; optional failures remain visible without incorrectly making the agent unready.
+
+**Tests and Verification Results**
+
+- `PYTHONPATH=. python3 -m pytest -q --basetemp=/tmp/freya-task14-focused tests/test_production_health_readiness.py`: **8 passed**. This covers live-but-unready startup, ready state, provider and background-service failure, optional failure handling, initializer-to-observability integration, and read-only API/CLI behavior.
+- `PYTHONPATH=. python3 -m pytest -q --basetemp=/tmp/freya-task14-affected tests/test_providers.py tests/test_provider_resilience.py tests/test_task3_autonomy.py tests/test_system_monitor_health_integration.py tests/test_monitoring.py`: completed successfully with no failures.
+- `PYTHONPATH=. python3 -m pytest -q --basetemp=/tmp/freya-task14-startup tests/test_integration_autonomous.py::test_diagnostics_events_and_monitoring_use_the_shared_runtime_infrastructure`: **1 passed**.
+- `PYTHONPATH=. python3 -m py_compile main.py app/core/observability.py app/core/initializer.py app/core/llm.py app/core/priority_llm.py app/core/background_jobs.py`: passed.
+- The final command, `timeout 600 env PYTHONPATH=. python3 -m pytest -q --basetemp=/tmp/freya-task14-full-suite`, exceeded the required ten-minute limit and was stopped once while its partial output had reached **90%**. It had already reported unrelated existing failures and collection/runtime errors; the full suite is not claimed as passing. The focused and directly affected results above remain the Task 14 verification evidence.
+
+**Files Changed**
+
+- `main.py`
+- `app/core/initializer.py`
+- `app/core/observability.py`
+- `app/core/llm.py`
+- `app/core/priority_llm.py`
+- `app/core/background_jobs.py`
+- `tests/test_production_health_readiness.py`
+- `docs/HEALTH_READINESS.md`
+- `PROJECT_STATUS.md`
+
+**Next Active Task**
+
+Task 15 — Add configurable learning and repair policy.
 
 ---

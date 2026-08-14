@@ -395,6 +395,14 @@ class BackgroundJobService:
         self._shutdown = False
         self._start_scheduler()
 
+    def is_running(self) -> bool:
+        """Return whether the scheduler thread is alive and accepting work."""
+        return bool(
+            not self._shutdown
+            and self._scheduler_thread
+            and self._scheduler_thread.is_alive()
+        )
+
     def _start_scheduler(self) -> None:
         """Start the background scheduler thread."""
         self._scheduler_thread = threading.Thread(

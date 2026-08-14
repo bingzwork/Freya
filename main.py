@@ -6,6 +6,7 @@ Provides interactive chat mode or single-shot execution.
 """
 
 import sys
+import json
 import signal
 import argparse
 from pathlib import Path
@@ -80,6 +81,23 @@ class FreyaApp:
         """Process a single input and return response (for scripting)."""
         return self.chat(user_input)
 
+    def get_health_surface(self) -> dict:
+        """Return the read-only production liveness and readiness surface."""
+        if self.system and self.system.infra and self.system.infra.observability:
+            return self.system.infra.observability.get_health_surface(
+                initialized=self._running,
+            )
+        return {
+            "liveness": {"status": "alive", "alive": True},
+            "readiness": {
+                "status": "not_ready",
+                "ready": False,
+                "initialization": {"completed": False},
+                "dependencies": [],
+                "reasons": ["initialization_incomplete"],
+            },
+        }
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Freya - Autonomous Software Engineering Agent")
@@ -121,6 +139,16 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Execute as engineering task (bypass router)",
     )
+    parser.add_argument(
+        "--health",
+        action="store_true",
+        help="Print the read-only liveness and readiness snapshot as JSON",
+    )
+    parser.add_argument(
+        "--readiness",
+        action="store_true",
+        help="Print the read-only readiness snapshot as JSON and fail when unready",
+    )
     return parser.parse_args()
 
 
@@ -148,6 +176,14 @@ def main() -> int:
     signal.signal(signal.SIGTERM, signal_handler)
 
     try:
+        if args.health:
+            print(json.dumps(app.get_health_surface(), indent=2, sort_keys=True))
+            return 0
+        if args.readiness:
+            readiness = app.get_health_surface()["readiness"]
+            print(json.dumps(readiness, indent=2, sort_keys=True))
+            return 0 if readiness["ready"] else 1
+
         app.start()
 
         if args.input:

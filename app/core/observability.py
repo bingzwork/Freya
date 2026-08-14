@@ -886,9 +886,9 @@ class ObservabilityHub:
         """Remove a health check."""
         return self._health.remove_health_check(name)
 
-    def run_health_checks(self) -> List[HealthResult]:
-        """Run all health checks."""
-        return self._health.run_all_checks()
+    def run_health_checks(self, force: bool = False) -> List[HealthResult]:
+        """Run all health checks through the shared monitor."""
+        return self._health.run_all_checks(force=force)
 
     def get_health(self, component: Optional[str] = None) -> Dict[str, Any]:
         """Get health status."""
@@ -896,6 +896,87 @@ class ObservabilityHub:
             result = self._health.get_component_health(component)
             return result or {"component": component, "status": "not_found"}
         return self._health.get_overall_health()
+
+    def get_readiness_status(self, initialized: bool) -> Dict[str, Any]:
+        """Return a read-only readiness snapshot from registered health state.
+
+        Runtime components opt into this view by registering ``metadata`` with a
+        ``readiness`` mapping.  This method never runs a check or changes state;
+        it reports the latest observations collected by ``HealthMonitor``.
+        """
+        with self._health._lock:
+            components = list(self._health._components.values())
+            results = list(self._health._results.values())
+
+        dependencies = []
+        required_unavailable = []
+        degraded = []
+        for component in components:
+            readiness = component.metadata.get("readiness", {})
+            if not readiness:
+                continue
+
+            checks = [result for result in results if result.component == component.name]
+            dependency = {
+                "name": component.name,
+                "category": readiness.get("category", component.component_type.value),
+                "required": bool(readiness.get("required", False)),
+                "status": component.status.value,
+                "checks": [
+                    {
+                        "name": result.name,
+                        "status": result.status.value,
+                        "message": result.message,
+                        "timestamp": result.timestamp,
+                        "metadata": dict(result.metadata),
+                    }
+                    for result in checks
+                ],
+            }
+            dependencies.append(dependency)
+
+            if dependency["required"] and component.status in {
+                HealthStatus.UNKNOWN,
+                HealthStatus.UNHEALTHY,
+            }:
+                required_unavailable.append(component.name)
+            elif component.status == HealthStatus.DEGRADED:
+                degraded.append(component.name)
+
+        if not initialized:
+            status = "not_ready"
+            ready = False
+            reasons = ["initialization_incomplete"]
+        elif required_unavailable:
+            status = "not_ready"
+            ready = False
+            reasons = [f"required_dependency_unavailable:{name}" for name in required_unavailable]
+        elif degraded:
+            status = "degraded"
+            ready = True
+            reasons = [f"dependency_degraded:{name}" for name in degraded]
+        else:
+            status = "ready"
+            ready = True
+            reasons = []
+
+        return {
+            "status": status,
+            "ready": ready,
+            "initialization": {"completed": initialized},
+            "dependencies": dependencies,
+            "reasons": reasons,
+        }
+
+    def get_health_surface(self, initialized: bool) -> Dict[str, Any]:
+        """Return the production liveness/readiness surface without side effects."""
+        return {
+            "liveness": {
+                "status": "alive",
+                "alive": True,
+            },
+            "readiness": self.get_readiness_status(initialized=initialized),
+        }
 
     # Metrics
 
