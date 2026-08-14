@@ -1065,10 +1065,13 @@ class FreyaAgent:
                     return result.get("message", "Done.")
                 elif route_result.is_direct_answer:
                     # Direct answer (chat, questions, capabilities)
+                    if route_result.answer is not None:
+                        return route_result.answer
+                    if route_result.capability_result is not None:
+                        return format_capability_result(route_result.capability_result)
                     if route_result.capability_name:
                         cap_result = self._router.execute_capability(route_result.capability_name, task)
-                        if cap_result.success:
-                            return cap_result.message
+                        return format_capability_result(cap_result)
                     # Use LLM for direct answer
                     system_prompt = """You are Freya, an expert software engineering assistant.
 Answer the user's question directly and concisely. Do not create plans or execute tasks

@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 
 from app.memory.unified_retrieval import UnifiedRetrieval, RetrievalQuery, RetrievalResult
 from app.intelligence.intelligence import Intelligence, AnswerabilityAssessment, ContextEvaluation, GoalContext
-from app.capabilities.router import CapabilityRouter, NoCapabilityError
+from app.capabilities.router import CapabilityResult, CapabilityRouter, NoCapabilityError
 from app.core.llm_stack import LLMStack
 from app.core.priority_llm import LLMPriority
 from app.core.logger import logger
@@ -42,6 +42,7 @@ class ResolutionResult:
     context_evaluation: Optional[ContextEvaluation] = None
     goal_context: Optional[GoalContext] = None
     answerability_assessment: Optional[AnswerabilityAssessment] = None
+    routing_metadata: Dict[str, Any] = field(default_factory=dict)
     reasoning: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -54,6 +55,7 @@ class ResolutionResult:
             "capability_confidence": self.capability_confidence,
             "llm_priority": self.llm_priority.name if self.llm_priority else None,
             "control_command": self.control_command,
+            "routing_metadata": self.routing_metadata,
             "reasoning": self.reasoning,
             "context_evaluation": self.context_evaluation.to_dict() if self.context_evaluation else None,
             "goal_context": self.goal_context.to_dict() if self.goal_context else None,
@@ -105,7 +107,25 @@ class KnowledgeFirstResolver:
         answerability = self._intelligence.assess_answerability(query, context)
         reasoning.extend(answerability.reasoning)
 
-        # Step 3: Check if Freya can answer directly
+        routing_metadata = self._research_routing_metadata(answerability)
+
+        # Step 3: Fresh, explicit, or insufficient external lookups use the
+        # existing registered ResearchCapability before a local answer or LLM
+        # fallback can produce stale or unsupported information.
+        if routing_metadata["needs_external_information"]:
+            reasoning.append(
+                "DECISION: External research required "
+                f"({routing_metadata['research_reason'] or 'knowledge requirement'})"
+            )
+            return self._route_to_research_capability(
+                query=query,
+                context=context,
+                answerability=answerability,
+                routing_metadata=routing_metadata,
+                reasoning=reasoning,
+            )
+
+        # Step 4: Check if Freya can answer directly
         if answerability.can_answer:
             reasoning.append("DECISION: Freya CAN answer from internal knowledge")
             answer = self._format_answer_from_results(query, answerability.context_evaluation.retrieved_results)
@@ -117,11 +137,12 @@ class KnowledgeFirstResolver:
                 context_evaluation=answerability.context_evaluation,
                 goal_context=answerability.goal_context,
                 answerability_assessment=answerability,
+                routing_metadata=routing_metadata,
                 reasoning=reasoning,
             )
 
-        # Step 4: Check if a local capability can handle this
-        reasoning.append("Step 3: Knowledge insufficient - checking CapabilityRouter...")
+        # Step 5: Check if a local capability can handle this
+        reasoning.append("Step 4: Knowledge insufficient - checking CapabilityRouter...")
         if intent_type is not None:
             intent_str = intent_type.value
         else:
@@ -133,7 +154,9 @@ class KnowledgeFirstResolver:
             best_name, best_conf = capability_matches[0]
             reasoning.append(f"  Found matching capability: {best_name} (confidence: {best_conf:.2f})")
             try:
-                cap_result = self._capability_router.route(query, intent_str, **(context or {}))
+                capability_context = dict(context or {})
+                capability_context.pop("intent_type", None)
+                cap_result = self._capability_router.route(query, intent_str, **capability_context)
                 if cap_result.success:
                     reasoning.append(f"  Capability executed successfully: {cap_result.message[:100] if cap_result.message else 'OK'}")
                     return ResolutionResult(
@@ -144,6 +167,7 @@ class KnowledgeFirstResolver:
                         context_evaluation=answerability.context_evaluation,
                         goal_context=answerability.goal_context,
                         answerability_assessment=answerability,
+                        routing_metadata=routing_metadata,
                         reasoning=reasoning,
                     )
                 else:
@@ -151,8 +175,8 @@ class KnowledgeFirstResolver:
             except NoCapabilityError:
                 reasoning.append("  NoCapabilityError raised during execution (should not happen after find_matching)")
 
-        # Step 5: No capability - fallback to LLM
-        reasoning.append("Step 4: No local capability available - preparing LLM fallback...")
+        # Step 6: No capability - fallback to LLM
+        reasoning.append("Step 5: No local capability available - preparing LLM fallback...")
         llm_decision = self._intelligence.decide_next_action(query, context)
         llm_priority = self._determine_llm_priority(intent_type)
         llm_context = dict(llm_decision.get("context_for_llm", {}) or {})
@@ -180,8 +204,93 @@ class KnowledgeFirstResolver:
             context_evaluation=answerability.context_evaluation,
             goal_context=answerability.goal_context,
             answerability_assessment=answerability,
+            routing_metadata=routing_metadata,
             reasoning=reasoning,
         )
+
+    def _research_routing_metadata(self, answerability: AnswerabilityAssessment) -> Dict[str, Any]:
+        """Normalize answerability research signals for routing and observability."""
+        return {
+            "needs_external_information": bool(
+                getattr(answerability, "needs_external_information", False)
+            ),
+            "requires_fresh_information": bool(
+                getattr(answerability, "requires_fresh_information", False)
+            ),
+            "explicit_research_request": bool(
+                getattr(answerability, "explicit_research_request", False)
+            ),
+            "local_knowledge_sufficient": bool(
+                getattr(answerability, "local_knowledge_sufficient", answerability.can_answer)
+            ),
+            "research_reason": getattr(answerability, "research_reason", None),
+        }
+
+    def _route_to_research_capability(
+        self,
+        *,
+        query: str,
+        context: Optional[Dict[str, Any]],
+        answerability: AnswerabilityAssessment,
+        routing_metadata: Dict[str, Any],
+        reasoning: List[str],
+    ) -> ResolutionResult:
+        """Invoke the one registered research capability through CapabilityRouter."""
+        research_context = dict(context or {})
+        research_context.update(
+            {
+                "capability_action": self._research_action_for(query, routing_metadata),
+                "topic": query,
+                "claim": self._claim_from_query(query),
+                "routing_metadata": routing_metadata,
+            }
+        )
+        try:
+            result = self._capability_router.execute_named(
+                "research_capability",
+                query,
+                **research_context,
+            )
+            if result.success:
+                reasoning.append("ResearchCapability completed through CapabilityRouter")
+            else:
+                reasoning.append("ResearchCapability returned a safe failure; local fallback is not fabricated")
+        except NoCapabilityError as error:
+            result = CapabilityResult(
+                success=False,
+                message="Current research is unavailable, so I could not verify that information.",
+                capability_name="research_capability",
+            )
+            reasoning.append(f"ResearchCapability is not registered: {error}")
+
+        return ResolutionResult(
+            action="capability",
+            capability_name="research_capability",
+            capability_confidence=1.0,
+            capability_result=result,
+            context_evaluation=answerability.context_evaluation,
+            goal_context=answerability.goal_context,
+            answerability_assessment=answerability,
+            routing_metadata=routing_metadata,
+            reasoning=reasoning,
+        )
+
+    @staticmethod
+    def _research_action_for(query: str, routing_metadata: Dict[str, Any]) -> str:
+        query_lower = query.lower()
+        if routing_metadata.get("explicit_research_request") and any(
+            phrase in query_lower for phrase in ("verify", "fact check", "fact-check")
+        ):
+            return "verify_claim"
+        return "research_topic"
+
+    @staticmethod
+    def _claim_from_query(query: str) -> str:
+        """Remove a leading verification directive while preserving the user claim."""
+        import re
+
+        claim = re.sub(r"^\s*(?:please\s+)?(?:verify|fact[ -]?check)\s+(?:whether\s+)?", "", query, flags=re.IGNORECASE)
+        return claim.strip() or query.strip()
 
     def _format_answer_from_results(self, query: str, results: List[RetrievalResult]) -> str:
         if not results:

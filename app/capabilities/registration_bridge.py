@@ -108,7 +108,11 @@ class CapabilityRegistrationBridge:
         tool_name = self._tool_name(capability.name)
 
         def tool_handler(*, context: dict[str, Any]) -> Any:
-            action = capability.metadata.default_action
+            action = context.get("capability_action") or capability.metadata.default_action
+            if not capability.supports_action(action):
+                raise ValueError(
+                    f"Capability '{capability.name}' does not support requested action '{action}'"
+                )
             return capability.execute(action, context)
 
         # Registering the same adapter name is intentional: it refreshes the

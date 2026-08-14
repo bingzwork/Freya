@@ -17,6 +17,7 @@ from app.core.priority_llm import PriorityLLMProvider, LLMPriority
 from app.memory.coordinator import MemoryCoordinator
 from app.verification.answer_verifier import AnswerVerifier
 from app.core.logger import logger
+from app.capabilities.formatter import format_capability_result
 
 
 class AgentFacadeImpl:
@@ -132,13 +133,12 @@ class AgentFacadeImpl:
         if route_result.answer is not None:
             return route_result.answer
 
-        if route_result.capability_result is not None and route_result.capability_result.success:
-            return route_result.capability_result.message
+        if route_result.capability_result is not None:
+            return format_capability_result(route_result.capability_result)
 
         if route_result.capability_name:
             cap_result = self._router.execute_capability(route_result.capability_name, user_input)
-            if cap_result.success:
-                return cap_result.message
+            return format_capability_result(cap_result)
 
         # Canonical fallback path: D2 → V1 → AR/SF1 → RESULT.
         system_prompt = """You are Freya, an expert software engineering assistant.

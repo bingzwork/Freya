@@ -60,6 +60,7 @@ class ResponseFormatter:
             "running_processes": self._format_running_processes,
             "system_health": self._format_system_health,
             "current_time": self._format_current_time,
+            "research_capability": self._format_research_capability,
         }
 
         formatter = formatters.get(result.capability_name, self._format_generic)
@@ -82,7 +83,10 @@ class ResponseFormatter:
         Returns:
             A formatted failure response.
         """
-        # Keep failure messages simple and user-friendly
+        # Keep failure messages simple and user-friendly.
+        if result.capability_name == "research_capability":
+            return "I couldn't retrieve enough reliable current evidence to answer that."
+
         message = result.message or "Unable to retrieve that information."
 
         # Hide implementation details
@@ -297,6 +301,57 @@ class ResponseFormatter:
         data = result.data or {}
         time_str = data.get("time", "unknown")
         return f"The current time is {time_str}."
+
+    def _format_research_capability(self, result: CapabilityResult) -> str:
+        """Present canonical research output without dropping provenance."""
+        payload = result.data if isinstance(result.data, dict) else {}
+        data = payload.get("data", payload) if isinstance(payload, dict) else {}
+        if not isinstance(data, dict):
+            return result.message or "I could not retrieve verifiable research results."
+
+        answer = data.get("answer")
+        if answer:
+            response = str(answer)
+            citations = data.get("citations") or []
+            source_lines = []
+            seen_urls = set()
+            for citation in citations:
+                if not isinstance(citation, dict):
+                    continue
+                url = citation.get("source_url")
+                if not url or url in seen_urls:
+                    continue
+                seen_urls.add(url)
+                title = citation.get("source_title") or url
+                source_lines.append(f"- {title}: {url}")
+            if source_lines:
+                response += "\n\nSources:\n" + "\n".join(source_lines[:5])
+            uncertainty = data.get("uncertainty") or []
+            if uncertainty:
+                response += "\n\nCaveats: " + " ".join(str(item) for item in uncertainty[:3])
+            return response
+
+        status = data.get("status")
+        if status:
+            claim = data.get("claim") or "The claim"
+            response = f"{claim}: {str(status).replace('_', ' ')}."
+            supporting_sources = data.get("supporting_sources") or []
+            if supporting_sources:
+                response += "\n\nSources:\n" + "\n".join(
+                    f"- {source}" for source in supporting_sources[:5]
+                )
+            return response
+
+        search_results = data.get("results") or payload.get("results") or []
+        if search_results:
+            lines = []
+            for item in search_results[:5]:
+                if isinstance(item, dict) and item.get("url"):
+                    lines.append(f"- {item.get('title') or item['url']}: {item['url']}")
+            if lines:
+                return "I found these relevant sources:\n" + "\n".join(lines)
+
+        return result.message or "I could not retrieve verifiable research results."
 
     def _format_generic(self, result: CapabilityResult) -> str:
         """Generic formatter for unknown capability types.

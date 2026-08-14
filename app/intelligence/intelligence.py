@@ -87,6 +87,11 @@ class AnswerabilityAssessment:
     goal_context: Optional[GoalContext] = None
     missing_information: List[str] = field(default_factory=list)
     recommended_action: str = "insufficient_knowledge"
+    needs_external_information: bool = False
+    requires_fresh_information: bool = False
+    explicit_research_request: bool = False
+    local_knowledge_sufficient: bool = False
+    research_reason: Optional[str] = None
     reasoning: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -95,6 +100,11 @@ class AnswerabilityAssessment:
             "can_answer": self.can_answer,
             "confidence": self.confidence,
             "recommended_action": self.recommended_action,
+            "needs_external_information": self.needs_external_information,
+            "requires_fresh_information": self.requires_fresh_information,
+            "explicit_research_request": self.explicit_research_request,
+            "local_knowledge_sufficient": self.local_knowledge_sufficient,
+            "research_reason": self.research_reason,
             "missing_information": self.missing_information,
             "reasoning": self.reasoning,
             "context_evaluation": self.context_evaluation.to_dict() if self.context_evaluation else None,
@@ -217,11 +227,125 @@ class Intelligence:
             missing_info.append("No relevant knowledge found in any memory system")
             reasoning.append("ASSESSMENT: No relevant knowledge - LLM fallback required")
 
-        return AnswerabilityAssessment(query=query, can_answer=can_answer, confidence=confidence, context_evaluation=context_eval, goal_context=goal_ctx, missing_information=missing_info, recommended_action=recommended_action, reasoning=reasoning)
+        research_metadata = self._assess_external_information_requirements(
+            query,
+            local_knowledge_sufficient=can_answer,
+            context=context,
+        )
+        reasoning.extend(research_metadata["reasoning"])
+        return AnswerabilityAssessment(
+            query=query,
+            can_answer=can_answer,
+            confidence=confidence,
+            context_evaluation=context_eval,
+            goal_context=goal_ctx,
+            missing_information=missing_info,
+            recommended_action=recommended_action,
+            needs_external_information=research_metadata["needs_external_information"],
+            requires_fresh_information=research_metadata["requires_fresh_information"],
+            explicit_research_request=research_metadata["explicit_research_request"],
+            local_knowledge_sufficient=can_answer,
+            research_reason=research_metadata["research_reason"],
+            reasoning=reasoning,
+        )
+
+    def _assess_external_information_requirements(
+        self,
+        query: str,
+        *,
+        local_knowledge_sufficient: bool,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Determine whether a conversational lookup needs canonical web research.
+
+        Freshness and explicit user direction are strong signals, but the final
+        decision also incorporates answerability and whether the message is an
+        information-seeking request.  This keeps stable explanations local while
+        allowing unknown entity and relationship questions to use research.
+        """
+        import re
+
+        normalized = " ".join(query.lower().strip().split())
+        request_context = context or {}
+        explicit_patterns = (
+            r"\bresearch\b",
+            r"\bsearch(?:\s+the\s+web)?\b",
+            r"\blook\s+(?:this\s+)?up\b",
+            r"\bverify\b",
+            r"\bfact[ -]?check\b",
+            r"\bcompare\s+(?:current\s+)?sources\b",
+            r"\bfind\s+(?:information|recent|current)\b",
+        )
+        fresh_patterns = (
+            r"\b(?:latest|newest|current|currently|today|recent|recently|news)\b",
+            r"\b(?:price|cost|market|trading)\b",
+            r"\bweather\b",
+            r"\b(?:score|result|schedule|release|update|updated)\b",
+            r"\b(?:last night|this week|this month|this year)\b",
+        )
+        explicit_research_request = any(re.search(pattern, normalized) for pattern in explicit_patterns)
+        requires_fresh_information = any(re.search(pattern, normalized) for pattern in fresh_patterns)
+
+        information_prefix = re.match(
+            r"^(?:what|who|when|where|which|why|how|tell me|find information|can you tell me)\b",
+            normalized,
+        )
+        intent_type = str(request_context.get("intent_type", "")).lower()
+        is_information_request = bool(information_prefix or "?" in query)
+        if intent_type in {"question", "chat"} and not is_information_request:
+            is_information_request = normalized.startswith(("find ", "verify ", "research ", "search ", "look up "))
+
+        named_entity_shape = bool(
+            re.search(r"\b[A-Z][A-Za-z0-9]*(?:[A-Z][A-Za-z0-9]*)+\b", query)
+            or re.search(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\b", query)
+        )
+        relationship_lookup = bool(re.match(r"^(?:who|when|where)\b", normalized)) or any(
+            phrase in normalized
+            for phrase in ("ceo", "founder", "headquarters", "president", "owner")
+        )
+        stable_explanation = bool(
+            re.match(r"^(?:what is|explain|define|how does|how do|why does|why is)\b", normalized)
+        ) and not (named_entity_shape or relationship_lookup or requires_fresh_information)
+        external_lookup_can_help = (
+            is_information_request
+            and not stable_explanation
+            and (relationship_lookup or named_entity_shape)
+        )
+
+        reasoning: List[str] = []
+        if explicit_research_request:
+            reasoning.append("Research routing: explicit external research request")
+            research_reason = "explicit external research request"
+        elif requires_fresh_information:
+            reasoning.append("Research routing: query requires fresh or time-sensitive information")
+            research_reason = "fresh or time-sensitive information requested"
+        elif not local_knowledge_sufficient and external_lookup_can_help:
+            reasoning.append("Research routing: local knowledge is insufficient for an entity or relationship lookup")
+            research_reason = "local knowledge is insufficient for an external lookup"
+        else:
+            research_reason = None
+            if local_knowledge_sufficient:
+                reasoning.append("Research routing: local knowledge is sufficient")
+            elif stable_explanation:
+                reasoning.append("Research routing: stable explanatory question remains on the local fallback path")
+            else:
+                reasoning.append("Research routing: no external-information requirement identified")
+
+        return {
+            "needs_external_information": bool(
+                explicit_research_request
+                or requires_fresh_information
+                or (not local_knowledge_sufficient and external_lookup_can_help)
+            ),
+            "requires_fresh_information": requires_fresh_information,
+            "explicit_research_request": explicit_research_request,
+            "research_reason": research_reason,
+            "reasoning": reasoning,
+        }
 
     def decide_next_action(self, query: str, context: Optional[Dict[str, Any]] = None):
         assessment = self.assess_answerability(query, context)
-        decision = {"query": query, "recommended_action": assessment.recommended_action, "confidence": assessment.confidence, "can_answer_directly": assessment.can_answer, "context_sufficient": assessment.context_evaluation.is_sufficient if assessment.context_evaluation else False, "goal_context": assessment.goal_context.to_dict() if assessment.goal_context else {}, "missing_information": assessment.missing_information, "reasoning": assessment.reasoning, "timestamp": datetime.now(timezone.utc).isoformat()}
+        decision = {"query": query, "recommended_action": assessment.recommended_action, "confidence": assessment.confidence, "can_answer_directly": assessment.can_answer, "context_sufficient": assessment.context_evaluation.is_sufficient if assessment.context_evaluation else False, "goal_context": assessment.goal_context.to_dict() if assessment.goal_context else {}, "missing_information": assessment.missing_information, "needs_external_information": assessment.needs_external_information, "requires_fresh_information": assessment.requires_fresh_information, "explicit_research_request": assessment.explicit_research_request, "local_knowledge_sufficient": assessment.local_knowledge_sufficient, "research_reason": assessment.research_reason, "reasoning": assessment.reasoning, "timestamp": datetime.now(timezone.utc).isoformat()}
         if assessment.recommended_action == "answer":
             decision["answer_source"] = "internal_knowledge"
             decision["knowledge_sources"] = list(assessment.context_evaluation.source_coverage.keys()) if assessment.context_evaluation else []

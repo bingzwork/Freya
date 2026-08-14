@@ -55,6 +55,7 @@ class RouteResult:
     llm_prompt: Optional[str] = None
     llm_priority: Any = None
     llm_context: Optional[Dict[str, Any]] = None
+    routing_metadata: Optional[Dict[str, Any]] = None
 
 
 class ControlCommandParser:
@@ -201,6 +202,7 @@ class UnifiedRouter:
             # surfaced to the caller rather than silently selecting a conflicting
             # legacy path.
             classification = self._intent_classifier.classify(user_input, route_context)
+            route_context["intent_type"] = classification.intent.value
             resolution = self._knowledge_first_resolver.resolve(
                 query=user_input,
                 context=route_context,
@@ -215,6 +217,7 @@ class UnifiedRouter:
                     reason=f"Knowledge-first answer: {', '.join(resolution.sources)}",
                     is_direct_answer=True,
                     answer=resolution.answer,
+                    routing_metadata=resolution.routing_metadata,
                 )
             if resolution.action == "capability":
                 return RouteResult(
@@ -225,6 +228,7 @@ class UnifiedRouter:
                     capability_name=resolution.capability_name,
                     capability_confidence=resolution.capability_confidence,
                     capability_result=resolution.capability_result,
+                    routing_metadata=resolution.routing_metadata,
                 )
             if resolution.action == "llm_fallback":
                 llm_context = dict(resolution.llm_context or {})
@@ -238,6 +242,7 @@ class UnifiedRouter:
                     llm_prompt=resolution.llm_prompt,
                     llm_priority=resolution.llm_priority,
                     llm_context=llm_context,
+                    routing_metadata=resolution.routing_metadata,
                 )
 
             # Resolver implementations must return one of the above actions.
