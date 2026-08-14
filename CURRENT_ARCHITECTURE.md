@@ -1,135 +1,137 @@
-# Current Freya Production Architecture
+# Current Freya Architecture
 
-*Verified against the current codebase on 2026-08-14.*
+*Reconciled with `TARGET_ARCHITECTURE.md` and the codebase at commit `470fd7a` on 2026-08-14.*
 
-This diagram documents the runtime assembled by `main.py` → `FreyaApp` → `SystemInitializer`. **Solid lines** are implemented production wiring. **Dashed red lines** mark active defects in otherwise instantiated paths; they are deliberately shown so the document does not present the target architecture as working.
+This document preserves the target architecture’s component names, ownership, and control-flow boundaries. It does not introduce replacement components or a parallel runtime design. The implementation status below distinguishes existing wiring from remaining MVP fixes.
+
+## Target-preserving runtime wiring
 
 ```mermaid
-flowchart TB
-    CLI["main.py / FreyaApp"] --> INIT["SystemInitializer"]
+flowchart TD
+    A["main.py"] --> B["SystemInitializer"]
+    B --> C["Infrastructure"]
+    B --> D["LLMStack"]
+    B --> E["MemoryCoordinator"]
+    B --> G["IntelligenceEngine"]
+    B --> M2["CapabilityRegistry"]
+    B --> H["UnifiedRouter"]
+    B --> I["ExecutionEngine"]
+    B --> M["WorkflowOrchestrator"]
+    B --> J["ConversationControl"]
+    B --> K["AgentFacadeImpl"]
+    B --> L["AutonomyManager"]
+    B --> LP["LearningPipeline"]
+    B --> Q1["Diagnostics"]
+    B --> Q2["Safe Self-Improvement"]
 
-    subgraph BOOT["Bootstrap and shared services"]
-        INIT --> INFRA["EventBus + BackgroundJobService + ObservabilityHub"]
-        INIT --> LLM["LLMStack: PriorityLLMProvider + ChatActivity"]
-        LLM --> OLLAMA["Configured Ollama provider"]
-        INIT --> MEM["MemoryCoordinator"]
-        MEM --> RETRIEVE["UnifiedRetrieval"]
-        MEM --> DURABLE["Conversation, goals, long-term, episodic, semantic, project, experience, lessons"]
-        MEM --> XREF["CrossMemoryReferences"]
-    end
+    J -->|"Question / Knowledge Request"| H
+    J -->|"Task / Action Request"| M
+    J -->|"Context / Memory Read"| E
+    J -->|"Intelligence Context"| G
+    J -->|"Chat Activity"| D
+    J -->|"Goal Updates"| E
 
-    subgraph CHAT["Supported conversation route"]
-        INIT --> FACADE["AgentFacadeImpl"]
-        FACADE --> ROUTER["UnifiedRouter"]
-        ROUTER --> CONTROL["ConversationControlHandler"]
-        ROUTER --> RESOLVE["KnowledgeFirstResolver"]
-        RESOLVE --> RETRIEVE
-        RESOLVE --> INTEL["Intelligence: answerability + goal context"]
-        INTEL --> LOCAL["Local-memory answer"]
-        LOCAL -. "answer payload is dropped before facade" .-> FACADE
-        RESOLVE --> CAP["Router-owned CapabilityRouter"]
-        CAP -. "context=None raises; router falls back" .-> LEGACY["Legacy intent/capability routing"]
-        RESOLVE --> FALLBACK["Prepared LLM fallback"]
-        FALLBACK -. "misclassified as engineering" .-> EXEC
-        FACADE --> VERIFY_ANSWER["AnswerVerifier / repair"]
-        VERIFY_ANSWER --> REPLY["User-visible answer"]
-        FACADE -. "no record_conversation() write" .-> DURABLE
-    end
+    H --> H0["KnowledgeFirstResolver"]
+    H0 -->|"Search Freya first"| E3["UnifiedRetrieval"]
+    E3 --> H5{"Can Freya Answer?"}
+    H5 -->|"Yes: grounded and confident"| RESULT["Freya Answer"]
+    H5 -->|"No / insufficient"| H6{"Local Capability Available?"}
+    H6 -->|"Yes"| H1["CapabilityRouter"]
+    H6 -->|"No"| D2["PriorityLLMProvider"]
 
-    subgraph EXECUTION["Task execution and workflow"]
-        INIT --> EXEC["ExecutionEngine"]
-        INIT --> SAFETY["SafetyGate"]
-        INIT --> ORCH["WorkflowOrchestrator (optional)"]
-        ORCH --> EXEC
-        EXEC --> PLAN["Plan → execute tools"]
-        PLAN --> SAFETY
-        SAFETY --> VERIFY_EXEC["VerificationRunner / ExecutionVerifier"]
-        VERIFY_EXEC -->|"failure"| REPAIR["RepairLoop"]
-        REPAIR --> PLAN
-        VERIFY_EXEC -->|"terminal outcome"| LEARN["LearningPipeline"]
-        EXEC --> REPLY
-    end
+    M2 --> H1
+    H1 --> H2["Capability Handlers"]
+    H2 --> F["ToolManager"]
 
-    subgraph LEARNING["Runtime learning and durable distillation"]
-        LEARN --> OBSERVE["Observe"] --> EVALUATE["Evaluate"] --> EXTRACT["Extract"] --> VALIDATE["Validate"] --> REMEMBER{"Worth Remembering?"}
-        REMEMBER -->|"No"| DISCARD["Discard / temporary only"]
-        REMEMBER -->|"Yes"| CLASSIFY["Classify: KNOWLEDGE · EXPERIENCE · SKILL"]
-        CLASSIFY --> KD["KnowledgeDistiller"]
-        CLASSIFY --> ED["ExperienceDistiller"]
-        CLASSIFY --> SD["SkillDistiller"]
-        ED -->|"reusable evidence"| SD
-        KD --> LEARNED["Better Knowledge & Skills\nnormalized DistilledLearning"]
-        ED --> LEARNED
-        SD --> LEARNED
-        LEARNED -->|"canonical coordinated write"| MEM
-        KD -->|"semantic knowledge"| SEM["SemanticMemory"]
-        ED -->|"observed experience"| EXP["ExperienceMemory"]
-        SD -->|"strategy / procedure"| LESSON["EngineeringLessons"]
-    end
+    D2 --> D1["Ollama / Local Model"]
+    D2 --> V1["AnswerVerifier"]
+    V1 -->|"Valid"| RESULT
+    V1 -->|"Invalid / Low Confidence"| AR["AnswerRepairLoop"]
+    AR -->|"Retries Exhausted"| SF1["AnswerSafeFailure"]
+    SF1 --> RESULT
 
-    subgraph AUTONOMY["Autonomy and background work"]
-        INIT --> AUTO["AutonomyManager (optional)"]
-        AUTO -->|"starts queue drain"| LEARN
-        AUTO --> WD["Watchdog"]
-        AUTO --> ORCH
-        INFRA --> AUTO
-        INFRA --> WD
-        WD -->|"observation candidate"| LEARN
-        XREF -. "derived memory.* events are still observed" .-> WD
-    end
+    M --> M1["SafetyGate"]
+    M --> I
+    I --> I1["UnifiedPlanner"]
+    I1 --> I2["UnifiedExecutor"]
+    I2 --> I3["ExecutionVerifier"]
+    I3 -->|"Passed"| DONE["Task Complete"]
+    I3 -->|"Failed / Partial"| I4["RepairLoop"]
+    I4 --> I1
+    I4 -->|"Retries Exhausted"| SF2["ExecutionSafeFailure"]
 
-    subgraph IMPROVEMENT["Diagnostics and self-improvement"]
-        INIT --> DIAG["DiagnosticEngine (optional)"]
-        INIT --> SSI["SafeSelfImprovementEngine (optional)"]
-        LEARN -->|"learning.improvement_candidate"| INFRA
-        DIAG -->|"diagnostics.completed"| INFRA
-        INFRA --> SSI
-        SSI --> RISK["RiskBasedExecutor"]
-        RISK --> PROMOTE["PatchPromotionManager"]
-        PROMOTE -. "calls absent evaluate()" .-> GATES["SafetyPromotionGates"]
-    end
+    D2 --> LP
+    V1 --> LP
+    I3 --> LP
+    L --> LP
+    Q1 --> Q2
+    LP --> Q2
+    Q2 --> M
 
-    classDef issue fill:#ffebee,stroke:#c62828,color:#7f0000,stroke-width:2px;
-    classDef optional fill:#e3f2fd,stroke:#1565c0,color:#0d47a1,stroke-dasharray: 5 5;
-    class LOCAL,FALLBACK,PROMOTE,GATES issue;
-    class ORCH,AUTO,DIAG,SSI optional;
+    LP --> LP1["Observe"] --> LP2["Evaluate"] --> LP3["Extract Learning"] --> LP4["Validate Learning"] --> LP5{"Worth Remembering?"}
+    LP5 -->|"No"| TEMP["Discard / Keep Temporary"]
+    LP5 -->|"Yes"| LP6["Classify: KNOWLEDGE · EXPERIENCE · SKILL"]
+    LP6 --> LP7["KnowledgeDistiller"]
+    LP6 --> LP8["ExperienceDistiller"]
+    LP6 --> LP9["SkillDistiller"]
+    LP7 --> LP10["Better Knowledge & Skills / normalized DistilledLearning"]
+    LP8 --> LP10
+    LP9 --> LP10
+    LP10 -->|"Validated learning only"| E
+
+    RESULT --> J
+    DONE --> J
+    I2 --> M1
+    M1 --> H1
+    F --> I2
+    SF2 --> M1
+    SF2 --> J
+    L --> C
+    C --> L
 ```
 
-## Runtime composition and actual return paths
+## Component responsibilities
 
-| Area | Current production relationship |
-|---|---|
-| **Bootstrap** | `SystemInitializer` binds the shared event bus, job service, observability hub, LLM stack, memory coordinator, learning pipeline, answer verifier, tools, intelligence, router, execution engine, conversation control, facade, and enabled optional subsystems. The workflow orchestrator is started before the autonomy manager. |
-| **Local-first resolution** | `KnowledgeFirstResolver` retrieves memory and asks `Intelligence` for answerability. It can construct an internal `ResolutionResult.answer`, a capability result, or an LLM fallback prompt. The router currently discards the answer/prompt payload when converting to `RouteResult`; this is an active production defect, not an omitted diagram edge. |
-| **Conversation output** | The facade sends direct answers through the priority provider and answer verifier, handles controls through `ConversationControlHandler`, and sends engineering routes to `ExecutionEngine`. The facade currently does not write supported user/assistant exchanges through `MemoryCoordinator.record_conversation()`. |
-| **Execution** | `ExecutionEngine` plans, safety-checks, executes, verifies, attempts repair on verification failure, records a terminal plan state, and hands terminal outcomes to `LearningPipeline` through `ExecutionVerifier`. `WorkflowOrchestrator` uses the same execution engine and safety gate. |
-| **Memory and learning** | `MemoryCoordinator` owns durable stores, unified retrieval, conversation memory, and cross-memory references. `LearningPipeline` now classifies only approved, validated items and emits normalized `DistilledLearning` through `MemoryCoordinator.store_learned()`. Knowledge uses `SemanticMemory`, observations use `ExperienceMemory`, and reusable strategies/procedures use `EngineeringLessons`; all remain available through normal unified retrieval. When autonomy is enabled, the autonomy manager starts the pipeline's background queue drain. |
-| **Autonomy** | `AutonomyManager` starts watchdog, self-initiated-work, and maintenance components and uses the shared job service and orchestrator. The watchdog observes `memory.*`; derived cross-reference writes are currently not all excluded, leaving a real feedback risk into learning. |
-| **Self-improvement** | `LearningPipeline` and diagnostics publish shared events. `SafeSelfImprovementEngine` receives them and auto-executes learning-origin candidates with its own risk executor and promotion manager; it does **not** route those candidates through `WorkflowOrchestrator`. The promotion manager's safety-gate call is currently incompatible with the instantiated gate API. |
-
-## Implemented runtime learning details
-
-The existing `LearningPipeline` remains the only runtime promotion path. After an item has passed extraction, validation, and `Worth Remembering?`, deterministic classification prefers explicit metadata and then stable category, candidate-type, structured-field, and lexical signals. This prevents a new parallel learning subsystem from bypassing the current pipeline.
-
-| Learning family | Existing implementation and store | Consolidation behavior |
+| Target component | Current code location | Responsibility |
 |---|---|---|
-| **KNOWLEDGE** | `KnowledgeDistiller` compacts reusable declarative content while retaining source, evidence, confidence, tags, and provenance. `MemoryCoordinator.store_learned()` writes it to `SemanticMemory`. | Existing semantic upsert merges equivalent `(category, title)` knowledge and reinforces evidence metadata. |
-| **EXPERIENCE** | `ExperienceDistiller` preserves bounded context, action, result, failure reason, successful repair, verification, outcome, confidence, and provenance. The coordinator writes it to `ExperienceMemory`. | Conservative deterministic equivalence reinforces a matching experience and merges evidence rather than appending a duplicate. |
-| **SKILL** | `SkillDistiller` records applicability, instructions, validation, and failure handling in the existing engineering-lessons store. A reusable experience can derive a skill. | Equivalent skills reinforce the existing lesson; a single-evidence skill is confidence-capped until it receives further support. |
+| `SystemInitializer` | `app/core/initializer.py` | Constructs the target runtime in dependency order. |
+| `AgentFacadeImpl` | `app/agent/facade_impl.py` | Public interface for chat, task execution, status, and shutdown. |
+| `ConversationControl` | `app/conversational_control.py` | Handles user control commands and active task state. |
+| `MemoryCoordinator` | `app/memory/coordinator.py` | Owns coordinated memory stores and canonical memory writes. |
+| `UnifiedRetrieval` | `app/memory/unified_retrieval.py` | Searches Freya’s internal memory sources through one retrieval contract. |
+| `IntelligenceEngine` | `app/intelligence/intelligence.py` | Provides reasoning, confidence/answerability, and context/goal awareness. |
+| `UnifiedRouter` | `app/routing/unified_router.py` | Routes questions through `KnowledgeFirstResolver`, capabilities, or fallback. |
+| `KnowledgeFirstResolver` | `app/routing/knowledge_first_resolver.py` | Searches local knowledge first and chooses answer, capability, or fallback. |
+| `CapabilityRegistry` | `app/orchestrator/capability_registry.py` | Registers callable capabilities and their declared actions. |
+| `CapabilityRouter` | `app/capabilities/router.py` | Selects matching capability handlers. |
+| `Capability Handlers` | `app/capabilities/handlers.py` and orchestrator capabilities | Execute registered local capabilities. |
+| `ToolManager` | `app/core/tool_manager.py` | Executes tools after routing and safety approval. |
+| `LLMStack` | `app/core/llm_stack.py` | Owns the local-model provider and chat activity provider. |
+| `PriorityLLMProvider` | `app/core/priority_llm.py` | Provides local-model fallback drafts. |
+| `AnswerVerifier` | `app/verification/answer_verifier.py` | Decides whether a fallback answer is safe to return or repair. |
+| `AnswerRepairLoop` / `AnswerSafeFailure` | `app/verification/answer_repair_loop.py` and verifier module | Retries invalid drafts within policy and discloses safe failure when exhausted. |
+| `WorkflowOrchestrator` | `app/orchestrator/workflow_orchestrator.py` | Coordinates workflow planning and execution behind the safety gate. |
+| `ExecutionEngine` | `app/execution/engine.py` | Plans, executes, verifies, repairs, and reports task outcomes. |
+| `UnifiedPlanner` / `UnifiedExecutor` | planner and execution modules | Build and dispatch approved execution work. |
+| `ExecutionVerifier` / `RepairLoop` | `app/verification/execution_verifier.py` and repair modules | Verify execution and perform bounded repair/replan. |
+| `LearningPipeline` | `app/learning/pipeline.py` | Promotes only validated learning through the target stages. |
+| `KnowledgeDistiller`, `ExperienceDistiller`, `SkillDistiller` | `app/learning/distillers.py` | Normalize the three target learning types. |
+| `AutonomyManager` / `Watchdog` | `app/autonomy` and self-observation modules | Submit autonomous work and observations through the existing workflow and learning paths. |
+| `Diagnostics` / `Safe Self-Improvement` | diagnostics and safe-self-improvement modules | Produce and evaluate improvement proposals behind target safety boundaries. |
+| `Infrastructure` | event, background-job, and observability modules | Supplies `EventBus`, `BackgroundJobService`, and `ObservabilityHub`. |
 
-Explicitly unverified answer-verification output is rejected during validation and cannot enter `MemoryCoordinator`. The three durable destinations are already aggregated by `UnifiedRetrieval`, so no retrieval architecture was added or replaced.
+## Target flow status
 
-## Deliberately omitted from the active diagram
+The target local-first question path is implemented through `AgentFacadeImpl` → `ConversationControl` → `UnifiedRouter` → `KnowledgeFirstResolver` → `UnifiedRetrieval`. When internal knowledge is sufficient, the resolver returns `Freya Answer`. When it is insufficient, the resolver checks the existing capability path before preparing a `PriorityLLMProvider` fallback.
 
-The legacy `FreyaAgent`, `long_term_autonomy`, and experimental/legacy retrieval subsystems exist in the repository but are not created by `SystemInitializer` or reached by the supported `FreyaApp` path. They are therefore not represented as current production architecture.
+The fallback now carries the retrieval evidence already collected by `UnifiedRetrieval` into `AnswerVerifier` through the existing route context. The verifier requires evidence grounding on this target fallback path, and invalid or low-confidence output continues through `AnswerRepairLoop` and `AnswerSafeFailure`; no new verifier or router has been introduced.
 
-## Verified initialization order
+The target action path remains `WorkflowOrchestrator` → `SafetyGate` → `ExecutionEngine` → `UnifiedPlanner` → `UnifiedExecutor` → `ExecutionVerifier`, with bounded `RepairLoop` behavior and `ExecutionSafeFailure` for exhausted retries. The target learning path remains the sole promotion route: `Observe` → `Evaluate` → `Extract Learning` → `Validate Learning` → `Worth Remembering?` → classification and distillation → validated write through `MemoryCoordinator`.
 
-1. Shared infrastructure: event bus, job service, observability, optional hot reload, and optional file watcher.
-2. `LLMStack`, followed by memory coordinator, learning pipeline, and answer verifier.
-3. Tool manager, intelligence, separate orchestrator capability registry, and safety gate.
-4. Router, execution engine, conversation control, and facade.
-5. Optional workflow orchestrator, optional autonomy manager, diagnostics, and safe self-improvement engine.
-6. Readiness checks are registered and immediately evaluated before the initialized system is returned.
+## Known target-aligned limitations
 
-> **Current limitations shown above are implementation defects, not future design proposals.** Their required remediation and verification are defined in [`PROJECT_STATUS.md`](PROJECT_STATUS.md).
+The current implementation still requires MVP hardening in capability registration consistency, claim-level rather than lexical answer grounding, end-to-end acceptance coverage, execution compensation, autonomy event deduplication, and safe self-improvement integration. These are implementation fixes within the existing target components and edges, not reasons to redesign the architecture.
+
+The legacy `FreyaAgent`, older autonomy modules, and experimental retrieval implementations remain in the repository but are not part of the target’s canonical initialized path. They are not represented as replacement architecture here.
+
+See [`PROJECT_STATUS.md`](PROJECT_STATUS.md) for the prioritized fix list.

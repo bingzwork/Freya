@@ -13,6 +13,8 @@ which is used by ExecutionEngine for plan verification.
 
 from typing import Optional
 from dataclasses import dataclass
+from datetime import datetime, timezone
+import re
 
 from app.core.config import RepairPolicyConfig
 from app.core.logger import logger
@@ -96,8 +98,9 @@ class AnswerVerifier:
 
         answer = answer.strip()
 
-        # Basic validation checks
-        if self._is_valid_answer(answer, prompt):
+        # The target fallback path supplies local retrieval evidence. Require
+        # grounding there; preserve quality-only behavior for legacy direct use.
+        if self._is_valid_answer(answer, prompt) and self._is_grounded_in_local_evidence(answer, context):
             # Valid answer: return it to the user
             # Also check if it has learning value for the pipeline (optional)
             if self._has_learning_value(answer, prompt):
@@ -137,6 +140,26 @@ class AnswerVerifier:
 
             # Return None to indicate no valid answer
             return None
+
+    def _is_grounded_in_local_evidence(self, answer: str, context: Optional[dict]) -> bool:
+        """Check a fallback draft against evidence from UnifiedRetrieval."""
+        if not context or not context.get("knowledge_first"):
+            return True
+        evidence = context.get("retrieved_results") or context.get("evidence") or []
+        if not evidence:
+            return False
+        evidence_text = " ".join(
+            str(item.get("content", item) if isinstance(item, dict) else item)
+            for item in evidence
+        ).lower()
+        answer_tokens = {
+            token for token in re.findall(r"[a-z0-9]{4,}", answer.lower())
+            if token not in {"that", "this", "with", "from", "your", "about", "have", "will", "they", "them"}
+        }
+        evidence_tokens = set(re.findall(r"[a-z0-9]{4,}", evidence_text))
+        if not answer_tokens or not evidence_tokens:
+            return False
+        return len(answer_tokens & evidence_tokens) / max(1, len(answer_tokens)) >= 0.12
 
     def _is_valid_answer(self, answer: str, prompt: str) -> bool:
         """
@@ -272,9 +295,7 @@ class AnswerVerifier:
 
         # Prepare context
         verification_context = {
-            "verification_timestamp": logger._core.handlers[0].formatter.formatTime(
-                logger._core.handlers[0].formatter.formatTime
-            ) if logger._core.handlers else "unknown",
+            "verification_timestamp": datetime.now(timezone.utc).isoformat(),
             "source": "AnswerVerifier",
             "verification_stage": "fallback_answer_evaluation"
         }

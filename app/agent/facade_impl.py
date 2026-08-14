@@ -148,7 +148,10 @@ unless explicitly asked to do so."""
         verified = self._answer_verifier.verify_fallback_answer(
             answer=raw_answer,
             prompt=user_input,
-            context={"route_reason": route_result.reason},
+            context={
+                "route_reason": route_result.reason,
+                **(route_result.llm_context or {}),
+            },
         )
         if verified is not None:
             return verified

@@ -155,7 +155,21 @@ class KnowledgeFirstResolver:
         reasoning.append("Step 4: No local capability available - preparing LLM fallback...")
         llm_decision = self._intelligence.decide_next_action(query, context)
         llm_priority = self._determine_llm_priority(intent_type)
-        llm_context = llm_decision.get("context_for_llm", {})
+        llm_context = dict(llm_decision.get("context_for_llm", {}) or {})
+        # Preserve the evidence already retrieved by the target knowledge-first
+        # path for AnswerVerifier; no new routing component is introduced.
+        evidence_results = answerability.context_evaluation.retrieved_results if answerability.context_evaluation else retrieved_results
+        llm_context["retrieved_results"] = [
+            result.to_dict() if hasattr(result, "to_dict") else {
+                "content": getattr(result, "content", str(result)),
+                "source": getattr(result, "source", "unknown"),
+                "source_id": getattr(result, "source_id", "unknown"),
+                "score": getattr(result, "score", 0.0),
+            }
+            for result in evidence_results
+        ]
+        llm_context["knowledge_first"] = True
+        llm_context["knowledge_sufficient"] = False
         llm_prompt = self._build_llm_prompt(query, answerability, llm_context)
         reasoning.append(f"  LLM fallback prepared with priority: {llm_priority.name}")
         return ResolutionResult(
@@ -243,7 +257,7 @@ class KnowledgeFirstResolver:
 User Query: {query}
 
 Based on the above context from Freya's internal knowledge systems, provide a helpful answer.
-If the context is insufficient, acknowledge the limitation and provide your best general response.
+Use only claims supported by the supplied evidence. If the evidence is insufficient, explicitly state that the answer is unverified rather than presenting unsupported details as established knowledge.
 """
         return prompt
 
