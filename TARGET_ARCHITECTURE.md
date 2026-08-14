@@ -190,6 +190,11 @@ LP2["Evaluate"]
 LP3["Extract Learning"]
 LP4["Validate Learning"]
 LP5{"Worth Remembering?"}
+LP6["Classify\nKNOWLEDGE · EXPERIENCE · SKILL"]
+LP7["KnowledgeDistiller"]
+LP8["ExperienceDistiller"]
+LP9["SkillDistiller"]
+LP10["Better Knowledge & Skills\nnormalized DistilledLearning"]
 
 
 TEMP["Discard / Keep Temporary"]
@@ -203,6 +208,14 @@ LP4 --> LP5
 
 
 LP5 -->|"No"| TEMP
+LP5 -->|"Yes"| LP6
+LP6 -->|"KNOWLEDGE"| LP7
+LP6 -->|"EXPERIENCE"| LP8
+LP6 -->|"SKILL"| LP9
+LP8 -->|"Reusable experience evidence"| LP9
+LP7 --> LP10
+LP8 --> LP10
+LP9 --> LP10
 end
 
 
@@ -257,7 +270,7 @@ SF1 -->|"Low-Confidence Disclosure"| RESULT
 SF1 -->|"Log Knowledge Gap"| LP
 
 
-LP5 -->|"Yes"| E
+%% Approved learning is classified and distilled before its canonical coordinator write.
 
 
 %% Planner asks Freya knowledge first
@@ -416,7 +429,7 @@ SF1 -->|"Log Knowledge Gap"| LP
 
 
 %% --- Learning to Memory ---
-LP5 -->|"Yes, Store"| E
+LP10 -->|"Canonical coordinated write"| E
 LP -->|"Learning Events"| C1
 
 
@@ -584,7 +597,7 @@ class M2,H1,H2,F capability;
 class D,D1,D2,D3 llm;
 
 
-class LP,LP1,LP2,LP3,LP4,LP5,TEMP learning;
+class LP,LP1,LP2,LP3,LP4,LP5,LP6,LP7,LP8,LP9,LP10,TEMP learning;
 
 
 class I,I1,I2,I3,I4,V1,DONE,AR execution;
@@ -603,4 +616,5 @@ class Q1,Q2 improvement;
 
 
 class X,X1,X2,X3,X4 extension;
-<<<END_EXTERNAL_UNTRUSTED_CONTENT id="fixed-architecture">>
+<<<END_EXTERNAL_UNTRUSTED_CONTENT id="fixed-architecture">
+>

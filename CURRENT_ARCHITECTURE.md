@@ -50,6 +50,23 @@ flowchart TB
         EXEC --> REPLY
     end
 
+    subgraph LEARNING["Runtime learning and durable distillation"]
+        LEARN --> OBSERVE["Observe"] --> EVALUATE["Evaluate"] --> EXTRACT["Extract"] --> VALIDATE["Validate"] --> REMEMBER{"Worth Remembering?"}
+        REMEMBER -->|"No"| DISCARD["Discard / temporary only"]
+        REMEMBER -->|"Yes"| CLASSIFY["Classify: KNOWLEDGE · EXPERIENCE · SKILL"]
+        CLASSIFY --> KD["KnowledgeDistiller"]
+        CLASSIFY --> ED["ExperienceDistiller"]
+        CLASSIFY --> SD["SkillDistiller"]
+        ED -->|"reusable evidence"| SD
+        KD --> LEARNED["Better Knowledge & Skills\nnormalized DistilledLearning"]
+        ED --> LEARNED
+        SD --> LEARNED
+        LEARNED -->|"canonical coordinated write"| MEM
+        KD -->|"semantic knowledge"| SEM["SemanticMemory"]
+        ED -->|"observed experience"| EXP["ExperienceMemory"]
+        SD -->|"strategy / procedure"| LESSON["EngineeringLessons"]
+    end
+
     subgraph AUTONOMY["Autonomy and background work"]
         INIT --> AUTO["AutonomyManager (optional)"]
         AUTO -->|"starts queue drain"| LEARN
@@ -86,9 +103,21 @@ flowchart TB
 | **Local-first resolution** | `KnowledgeFirstResolver` retrieves memory and asks `Intelligence` for answerability. It can construct an internal `ResolutionResult.answer`, a capability result, or an LLM fallback prompt. The router currently discards the answer/prompt payload when converting to `RouteResult`; this is an active production defect, not an omitted diagram edge. |
 | **Conversation output** | The facade sends direct answers through the priority provider and answer verifier, handles controls through `ConversationControlHandler`, and sends engineering routes to `ExecutionEngine`. The facade currently does not write supported user/assistant exchanges through `MemoryCoordinator.record_conversation()`. |
 | **Execution** | `ExecutionEngine` plans, safety-checks, executes, verifies, attempts repair on verification failure, records a terminal plan state, and hands terminal outcomes to `LearningPipeline` through `ExecutionVerifier`. `WorkflowOrchestrator` uses the same execution engine and safety gate. |
-| **Memory and learning** | `MemoryCoordinator` owns durable stores, unified retrieval, conversation memory, and cross-memory references. `LearningPipeline` persists accepted items through the coordinator. When autonomy is enabled, the autonomy manager starts the pipeline's background queue drain. |
+| **Memory and learning** | `MemoryCoordinator` owns durable stores, unified retrieval, conversation memory, and cross-memory references. `LearningPipeline` now classifies only approved, validated items and emits normalized `DistilledLearning` through `MemoryCoordinator.store_learned()`. Knowledge uses `SemanticMemory`, observations use `ExperienceMemory`, and reusable strategies/procedures use `EngineeringLessons`; all remain available through normal unified retrieval. When autonomy is enabled, the autonomy manager starts the pipeline's background queue drain. |
 | **Autonomy** | `AutonomyManager` starts watchdog, self-initiated-work, and maintenance components and uses the shared job service and orchestrator. The watchdog observes `memory.*`; derived cross-reference writes are currently not all excluded, leaving a real feedback risk into learning. |
 | **Self-improvement** | `LearningPipeline` and diagnostics publish shared events. `SafeSelfImprovementEngine` receives them and auto-executes learning-origin candidates with its own risk executor and promotion manager; it does **not** route those candidates through `WorkflowOrchestrator`. The promotion manager's safety-gate call is currently incompatible with the instantiated gate API. |
+
+## Implemented runtime learning details
+
+The existing `LearningPipeline` remains the only runtime promotion path. After an item has passed extraction, validation, and `Worth Remembering?`, deterministic classification prefers explicit metadata and then stable category, candidate-type, structured-field, and lexical signals. This prevents a new parallel learning subsystem from bypassing the current pipeline.
+
+| Learning family | Existing implementation and store | Consolidation behavior |
+|---|---|---|
+| **KNOWLEDGE** | `KnowledgeDistiller` compacts reusable declarative content while retaining source, evidence, confidence, tags, and provenance. `MemoryCoordinator.store_learned()` writes it to `SemanticMemory`. | Existing semantic upsert merges equivalent `(category, title)` knowledge and reinforces evidence metadata. |
+| **EXPERIENCE** | `ExperienceDistiller` preserves bounded context, action, result, failure reason, successful repair, verification, outcome, confidence, and provenance. The coordinator writes it to `ExperienceMemory`. | Conservative deterministic equivalence reinforces a matching experience and merges evidence rather than appending a duplicate. |
+| **SKILL** | `SkillDistiller` records applicability, instructions, validation, and failure handling in the existing engineering-lessons store. A reusable experience can derive a skill. | Equivalent skills reinforce the existing lesson; a single-evidence skill is confidence-capped until it receives further support. |
+
+Explicitly unverified answer-verification output is rejected during validation and cannot enter `MemoryCoordinator`. The three durable destinations are already aggregated by `UnifiedRetrieval`, so no retrieval architecture was added or replaced.
 
 ## Deliberately omitted from the active diagram
 
