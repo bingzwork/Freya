@@ -21,7 +21,7 @@ from app.safe_self_improvement.models import (
     ExecutionResult,
     RollbackReason,
 )
-from app.core.safety_gates import SafetyPromotionGates, PromotionDecision
+from app.core.safety_gates import SafetyPromotionGates, PromotionDecision, PromotionContext
 from app.core.logger import logger
 
 
@@ -271,11 +271,26 @@ class PatchPromotionManager:
         verification = execution_result.verification_results
         details["execution_verification"] = verification
 
-        # Run safety gates
-        gate_result = self.safety_gates.evaluate(candidate, execution_result)
+        # Run the authoritative safety gate API. Malformed evidence is a
+        # rejection, never an implicit approval.
+        operation_id = str(getattr(candidate, "candidate_id", None) or getattr(candidate, "id", None) or uuid.uuid4())
+        description = str(getattr(candidate, "description", None) or getattr(candidate, "title", None) or "Self-improvement candidate")
+        payload = getattr(candidate, "patch", None) or getattr(candidate, "changes", None) or candidate
+        confidence = float(getattr(candidate, "confidence", 0.0) or 0.0)
+        context = PromotionContext(
+            operation_id=operation_id,
+            operation_type="self_improvement",
+            description=description,
+            source="SafeSelfImprovement",
+            payload=payload,
+            metadata={"execution_verification": verification},
+            confidence=max(0.0, min(1.0, confidence)),
+            rollback_possible=True,
+        )
+        gate_result = self.safety_gates.evaluate_promotion(context)
         details["safety_gates"] = gate_result.to_dict() if gate_result else {}
 
-        passed = gate_result.decision == PromotionDecision.APPROVED if gate_result else True
+        passed = gate_result.decision == PromotionDecision.APPROVED if gate_result else False
 
         return {"stage": "verification", "passed": passed, "details": details}
 

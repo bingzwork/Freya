@@ -140,13 +140,7 @@ class MaintenanceManager:
         if self.config.use_background_job_service and self._job_service:
             self._schedule_periodic_check()
             
-        # Also start local thread as backup
-        self._check_thread = threading.Thread(
-            target=self._check_loop,
-            daemon=True,
-            name="MaintenanceChecker"
-        )
-        self._check_thread.start()
+        # Periodic maintenance is owned exclusively by BackgroundJobService.
 
     def stop(self) -> None:
         """Stop the maintenance manager."""
@@ -163,8 +157,6 @@ class MaintenanceManager:
             except Exception:
                 pass
                 
-        if hasattr(self, '_check_thread') and self._check_thread.is_alive():
-            self._check_thread.join(timeout=5.0)
 
     def _ensure_dependencies(self) -> None:
         """Require the dependencies supplied by the production initializer."""

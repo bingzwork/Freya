@@ -133,7 +133,7 @@ class KnowledgeFirstResolver:
             best_name, best_conf = capability_matches[0]
             reasoning.append(f"  Found matching capability: {best_name} (confidence: {best_conf:.2f})")
             try:
-                cap_result = self._capability_router.route(query, intent_str, **context)
+                cap_result = self._capability_router.route(query, intent_str, **(context or {}))
                 if cap_result.success:
                     reasoning.append(f"  Capability executed successfully: {cap_result.message[:100] if cap_result.message else 'OK'}")
                     return ResolutionResult(

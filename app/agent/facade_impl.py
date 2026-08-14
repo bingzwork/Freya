@@ -43,24 +43,24 @@ class AgentFacadeImpl:
         self._start_time = time.time()
 
     def chat(self, user_input: str) -> str:
-        """Handle a chat message from the user."""
+        """Handle a chat message through the canonical route and memory paths."""
         self._chat_activity.chat_started()
         try:
-            # Route through unified router
             route_result = self._router.route(user_input)
-
             if route_result.is_control:
-                return self._handle_control(route_result.control_command)
+                response = self._handle_control(route_result.control_command)
             elif route_result.is_direct_answer:
-                return self._answer_directly(user_input, route_result)
+                response = self._answer_directly(user_input, route_result)
             elif route_result.is_clarification:
-                return self._ask_clarification(user_input, route_result)
+                response = self._ask_clarification(user_input, route_result)
             elif route_result.is_engineering:
-                return self._execute_engineering_task(user_input, route_result)
+                response = self._execute_engineering_task(user_input, route_result)
             else:
-                # Default to direct answer
-                return self._answer_directly(user_input, route_result)
+                response = self._answer_directly(user_input, route_result)
 
+            self._memory.record_conversation({"role": "user", "content": user_input})
+            self._memory.record_conversation({"role": "assistant", "content": response})
+            return response
         finally:
             self._chat_activity.chat_ended()
 
@@ -121,54 +121,40 @@ class AgentFacadeImpl:
         return result.get("message", "Done.")
 
     def _answer_directly(self, user_input: str, route_result: RouteResult) -> str:
-        """Answer directly using LLM (for chat, questions, capabilities)."""
-        # Check if a capability matched
+        """Answer through local knowledge, capability handling, or verified fallback."""
+        if route_result.answer is not None:
+            return route_result.answer
+
+        if route_result.capability_result is not None and route_result.capability_result.success:
+            return route_result.capability_result.message
+
         if route_result.capability_name:
             cap_result = self._router.execute_capability(route_result.capability_name, user_input)
             if cap_result.success:
                 return cap_result.message
-            # Fall through to LLM if capability failed
 
-        # Use AnswerVerifier for LLM fallback if available (knowledge-first → capability → LLM fallback with verification)
-        # This implements: D2 → "Fallback Answer" → V1 (AnswerVerifier) → "Valid Answer" → RESULT
-        if self._answer_verifier:
-            system_prompt = """You are Freya, an expert software engineering assistant.
-Answer the user's question directly and concisely. Do not create plans or execute tasks
-unless explicitly asked to do so."""
-
-            # Get raw LLM answer
-            raw_answer = self._priority_llm.ask(
-                prompt=user_input,
-                system=system_prompt,
-                priority=LLMPriority.CHAT,
-            )
-
-            # Verify through AnswerVerifier (V1) which includes AnswerRepairLoop (AR) → D2 retry
-            verified = self._answer_verifier.verify_fallback_answer(
-                answer=raw_answer,
-                prompt=user_input,
-                context={"route_reason": route_result.reason}
-            )
-
-            if verified is not None:
-                return verified
-
-            # If AnswerVerifier returns None (no valid answer even after repair),
-            # AnswerSafeFailure (SF1) would have returned a low-confidence disclosure
-            # but verify_fallback_answer returns None in that case too
-            # Fall back to a generic message
-            return "I couldn't generate a reliable answer for that. My internal knowledge doesn't contain sufficient detail, and the local model fallback couldn't produce a verified response."
-
-        # Legacy path without AnswerVerifier (backward compatibility)
+        # Canonical fallback path: D2 → V1 → AR/SF1 → RESULT.
         system_prompt = """You are Freya, an expert software engineering assistant.
 Answer the user's question directly and concisely. Do not create plans or execute tasks
 unless explicitly asked to do so."""
-
-        return self._priority_llm.ask(
-            prompt=user_input,
+        raw_answer = self._priority_llm.ask(
+            prompt=route_result.llm_prompt or user_input,
             system=system_prompt,
-            priority=LLMPriority.CHAT,
+            priority=route_result.llm_priority or LLMPriority.CHAT,
         )
+        if self._answer_verifier is None:
+            return "I couldn't generate a reliable answer for that. Answer verification is not configured."
+
+        verified = self._answer_verifier.verify_fallback_answer(
+            answer=raw_answer,
+            prompt=user_input,
+            context={"route_reason": route_result.reason},
+        )
+        if verified is not None:
+            return verified
+
+        # AnswerSafeFailure: never return an unverified draft.
+        return "I couldn't generate a reliable answer for that. My internal knowledge doesn't contain sufficient detail, and the local model fallback couldn't produce a verified response."
 
     def _ask_clarification(self, user_input: str, route_result: RouteResult) -> str:
         """Ask for clarification when intent is ambiguous."""

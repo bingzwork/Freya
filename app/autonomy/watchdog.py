@@ -73,13 +73,7 @@ class Watchdog:
         if self.config.use_background_job_service and self._job_service:
             self._schedule_periodic_health_check()
             
-        # Also start a local monitoring thread as backup
-        self._monitor_thread = threading.Thread(
-            target=self._monitor_loop,
-            daemon=True,
-            name="WatchdogMonitor"
-        )
-        self._monitor_thread.start()
+        # Periodic monitoring is owned exclusively by BackgroundJobService.
 
     def stop(self) -> None:
         """Stop the watchdog."""
@@ -104,8 +98,6 @@ class Watchdog:
             except Exception:
                 pass
                 
-        if hasattr(self, '_monitor_thread') and self._monitor_thread.is_alive():
-            self._monitor_thread.join(timeout=5.0)
 
     def _subscribe_to_events(self) -> None:
         """Subscribe to relevant EventBus events."""
@@ -295,18 +287,14 @@ class Watchdog:
                     context=candidate_data["context"],
                     tags=candidate_data["tags"],
                 )
-                # Queue through the canonical pipeline when available. The
-                # pipeline drains this queue on the shared BackgroundJobService;
-                # retain direct asynchronous execution only for legacy injected
-                # test doubles that do not expose the queue contract.
-                if hasattr(self._learning_pipeline, "submit"):
+                # In production, queue through the shared background service.
+                # When that service is explicitly disabled, preserve the
+                # synchronous LearningPipeline.run contract; do not create a
+                # private scheduler or worker thread here.
+                if self.config.use_background_job_service and hasattr(self._learning_pipeline, "submit"):
                     self._learning_pipeline.submit(candidate)
                 else:
-                    threading.Thread(
-                        target=lambda: self._learning_pipeline.run(candidate),
-                        daemon=True,
-                        name=f"Watchdog-LearningPipeline-{observation.id[:8]}"
-                    ).start()
+                    self._learning_pipeline.run(candidate)
             except Exception:
                 pass
                 
