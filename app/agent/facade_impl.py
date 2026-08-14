@@ -135,21 +135,31 @@ class AgentFacadeImpl:
         system_prompt = """You are Freya, an expert software engineering assistant.
 Answer the user's question directly and concisely. Do not create plans or execute tasks
 unless explicitly asked to do so."""
-        raw_answer = self._priority_llm.ask(
+        fallback_context = {
+            "route_reason": route_result.reason,
+            **(route_result.llm_context or {}),
+        }
+        outcome = self._priority_llm.ask_outcome(
             prompt=route_result.llm_prompt or user_input,
             system=system_prompt,
             priority=route_result.llm_priority or LLMPriority.CHAT,
         )
         if self._answer_verifier is None:
             return "I couldn't generate a reliable answer for that. Answer verification is not configured."
+        if not outcome.is_success:
+            return self._answer_verifier.handle_provider_failure(
+                prompt=user_input,
+                context=fallback_context,
+                reason=f"{outcome.kind.value}: {outcome.reason}",
+            ) or (
+                "I couldn't generate a reliable answer for that. The local model "
+                "provider did not return a verified response."
+            )
 
         verified = self._answer_verifier.verify_fallback_answer(
-            answer=raw_answer,
+            answer=outcome.content or "",
             prompt=user_input,
-            context={
-                "route_reason": route_result.reason,
-                **(route_result.llm_context or {}),
-            },
+            context=fallback_context,
         )
         if verified is not None:
             return verified

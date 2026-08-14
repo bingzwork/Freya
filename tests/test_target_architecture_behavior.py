@@ -72,3 +72,57 @@ def test_target_resolver_preserves_retrieved_evidence_for_verifier():
     assert result.action == "llm_fallback"
     assert result.llm_context["knowledge_first"] is True
     assert result.llm_context["retrieved_results"][0]["source_id"] == "lesson-1"
+
+
+def test_target_fallback_requires_each_claim_to_have_local_evidence():
+    pipeline = RecordingLearningPipeline()
+    verifier = AnswerVerifier(learning_pipeline=pipeline)
+    answer = (
+        "Freya uses the local memory coordinator to retrieve engineering lessons. "
+        "Freya was released in April 2027."
+    )
+
+    assert verifier.verify_fallback_answer(
+        answer=answer,
+        prompt="How does Freya retrieve lessons?",
+        context={
+            "knowledge_first": True,
+            "retrieved_results": [
+                {
+                    "source_id": "memory-design",
+                    "content": "The local memory coordinator retrieves engineering lessons.",
+                }
+            ],
+        },
+    ) is None
+
+    assert pipeline.candidates
+    evidence = pipeline.candidates[-1].raw_observation["claim_verification"]
+    assert any("memory-design" in item for item in evidence)
+    assert any("released in April 2027" in item for item in evidence)
+
+
+def test_target_fallback_accepts_multiple_claims_when_each_is_evidenced():
+    verifier = AnswerVerifier(learning_pipeline=RecordingLearningPipeline())
+    answer = (
+        "Freya uses the local memory coordinator to retrieve engineering lessons. "
+        "The local model is used only after internal memory is insufficient."
+    )
+
+    assert verifier.verify_fallback_answer(
+        answer=answer,
+        prompt="How does Freya retrieve lessons and when is the local model used?",
+        context={
+            "knowledge_first": True,
+            "retrieved_results": [
+                {
+                    "source_id": "memory-design",
+                    "content": "The local memory coordinator retrieves engineering lessons.",
+                },
+                {
+                    "source_id": "fallback-policy",
+                    "content": "The local model is used only after internal memory is insufficient.",
+                },
+            ],
+        },
+    ) == answer

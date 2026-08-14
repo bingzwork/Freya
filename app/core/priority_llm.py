@@ -54,6 +54,30 @@ class LLMPriority(Enum):
         }.get(s.lower(), cls.BACKGROUND)
 
 
+class LLMOutcomeKind(Enum):
+    """Bounded canonical-fallback outcomes from the priority provider."""
+
+    SUCCESS = "success"
+    TIMEOUT = "timeout"
+    UNAVAILABLE = "unavailable"
+    MALFORMED_OUTPUT = "malformed_output"
+    SHUTDOWN = "shutdown"
+
+
+@dataclass(frozen=True)
+class LLMOutcome:
+    """A safe result envelope for the canonical fallback path."""
+
+    kind: LLMOutcomeKind
+    content: Optional[str] = None
+    reason: str = ""
+    request_id: str = ""
+
+    @property
+    def is_success(self) -> bool:
+        return self.kind is LLMOutcomeKind.SUCCESS and bool(self.content and self.content.strip())
+
+
 @dataclass
 class LLMRequest:
     """A request for LLM inference."""
@@ -69,6 +93,7 @@ class LLMRequest:
     completed_at: Optional[float] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
     timeout: Optional[float] = None
+    cancelled: bool = False
 
     def __lt__(self, other: 'LLMRequest') -> bool:
         # Higher priority first, then FIFO within same priority
@@ -171,7 +196,8 @@ class PriorityLLMProvider:
                 continue
 
             # Execute the request
-            self._execute_request(request)
+            if not request.cancelled:
+                self._execute_request(request)
 
     def _should_yield_for_chat(self, request: LLMRequest) -> bool:
         """Check if this request should yield to chat."""
@@ -225,11 +251,7 @@ class PriorityLLMProvider:
                 except Exception as e:
                     logger.error(f"[PriorityLLM] Callback error: {e}")
 
-            if request.future and not request.future.done():
-                if request.loop:
-                    request.loop.call_soon_threadsafe(request.future.set_result, result)
-                else:
-                    request.future.set_result(result)
+            self._resolve_future(request, result)
 
             _priority_trace(f"7 RESPONSE_RETURNED_TO_AGENT priority={request.priority.name} request_id={request.request_id[:8]}")
 
@@ -249,11 +271,31 @@ class PriorityLLMProvider:
                 self._current_request = None
                 request.completed_at = time.time()
 
-            if request.future and not request.future.done():
-                if request.loop:
-                    request.loop.call_soon_threadsafe(request.future.set_exception, e)
-                else:
-                    request.future.set_exception(e)
+            self._reject_future(request, e)
+
+    @staticmethod
+    def _resolve_future(request: LLMRequest, result: Any) -> None:
+        """Resolve a waiting request without writing to a closed caller loop."""
+        if request.cancelled or not request.future or request.future.done():
+            return
+        if request.loop:
+            if request.loop.is_closed():
+                return
+            request.loop.call_soon_threadsafe(request.future.set_result, result)
+        else:
+            request.future.set_result(result)
+
+    @staticmethod
+    def _reject_future(request: LLMRequest, error: Exception) -> None:
+        """Reject a waiting request without writing to a closed caller loop."""
+        if request.cancelled or not request.future or request.future.done():
+            return
+        if request.loop:
+            if request.loop.is_closed():
+                return
+            request.loop.call_soon_threadsafe(request.future.set_exception, error)
+        else:
+            request.future.set_exception(error)
 
     def ask(
         self,
@@ -294,6 +336,86 @@ class PriorityLLMProvider:
             return loop.run_until_complete(asyncio.wait_for(future, timeout=timeout or 300.0))
         finally:
             loop.close()
+
+    def ask_outcome(
+        self,
+        prompt: str,
+        system: Optional[str] = None,
+        priority: LLMPriority = LLMPriority.BACKGROUND,
+        timeout: Optional[float] = None,
+    ) -> LLMOutcome:
+        """Return a bounded, structured outcome for the canonical fallback path.
+
+        Unlike the legacy :meth:`ask` interface, this method never exposes a
+        raw provider exception or unvalidated response to a caller.  The caller
+        must explicitly inspect ``is_success`` before submitting content to an
+        answer verifier.
+        """
+        if self._shutdown_event.is_set():
+            return LLMOutcome(LLMOutcomeKind.SHUTDOWN, reason="Priority LLM provider is shut down.")
+
+        loop = asyncio.new_event_loop()
+        future = asyncio.Future(loop=loop)
+        request = LLMRequest(
+            prompt=prompt,
+            system_prompt=system or ENHANCED_SYSTEM_PROMPT,
+            priority=priority,
+            future=future,
+            loop=loop,
+            timeout=timeout,
+        )
+        self._enqueue_request(request)
+        wait_seconds = max(0.01, timeout if timeout is not None else 30.0)
+        try:
+            response = loop.run_until_complete(asyncio.wait_for(future, timeout=wait_seconds))
+        except asyncio.TimeoutError:
+            self._cancel_request(request)
+            return LLMOutcome(
+                LLMOutcomeKind.TIMEOUT,
+                reason=f"Provider did not complete within {wait_seconds:.2f} seconds.",
+                request_id=request.request_id,
+            )
+        except Exception as error:
+            return LLMOutcome(
+                self._classify_failure(error),
+                reason=str(error) or type(error).__name__,
+                request_id=request.request_id,
+            )
+        finally:
+            loop.close()
+
+        if not isinstance(response, str) or not response.strip():
+            return LLMOutcome(
+                LLMOutcomeKind.MALFORMED_OUTPUT,
+                reason="Provider returned an empty or non-text response.",
+                request_id=request.request_id,
+            )
+        return LLMOutcome(
+            LLMOutcomeKind.SUCCESS,
+            content=response.strip(),
+            request_id=request.request_id,
+        )
+
+    @staticmethod
+    def _classify_failure(error: Exception) -> LLMOutcomeKind:
+        """Map provider errors to the public bounded fallback taxonomy."""
+        if isinstance(error, (TimeoutError, asyncio.TimeoutError)):
+            return LLMOutcomeKind.TIMEOUT
+        error_name = type(error).__name__.lower()
+        error_text = str(error).lower()
+        if "timeout" in error_name or "timed out" in error_text or "timeout" in error_text:
+            return LLMOutcomeKind.TIMEOUT
+        return LLMOutcomeKind.UNAVAILABLE
+
+    def _cancel_request(self, request: LLMRequest) -> None:
+        """Prevent a timed-out queued request from later touching its closed loop."""
+        request.cancelled = True
+        with self._queue_condition:
+            try:
+                self._request_queue.remove(request)
+            except ValueError:
+                pass
+            self._queue_condition.notify_all()
 
     async def ask_async(
         self,

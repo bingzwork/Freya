@@ -122,11 +122,13 @@ unless explicitly asked to do so."""
                 priority=LLMPriority.CHAT,
             )
 
-            # Verify the new answer
+            # Verify the new answer without creating a nested repair loop.
+            repair_context = dict(context or {})
+            repair_context["_repair_attempt"] = True
             verified = self._answer_verifier.verify_fallback_answer(
                 answer=new_answer,
                 prompt=prompt,
-                context=context
+                context=repair_context,
             )
 
             if verified is not None:

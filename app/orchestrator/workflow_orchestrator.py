@@ -399,6 +399,53 @@ class WorkflowOrchestrator:
         )
         return self.execute_workflow(spec, async_mode)
 
+    def execute_safe_self_improvement(self, candidate, execute, approval_status: str):
+        """Safety-gate one approved improvement before its bounded executor runs.
+
+        This small adapter keeps candidate-specific mutation logic in the
+        existing safe-self-improvement engine while making the orchestrator the
+        mandatory workflow and SafetyGate boundary for every applied proposal.
+        """
+        if self._state != OrchestratorState.RUNNING:
+            raise RuntimeError(f"Orchestrator not running (state: {self._state})")
+
+        candidate_id = getattr(candidate, "id", "unknown")
+        candidate_title = getattr(candidate, "title", "safe self-improvement")
+        metadata = getattr(candidate, "metadata", {}) or {}
+        context = {
+            "candidate_id": candidate_id,
+            "title": candidate_title,
+            "description": getattr(candidate, "description", ""),
+            "approval_status": approval_status,
+            "modification_count": len(getattr(candidate, "modifications", []) or []),
+            "source": getattr(candidate, "source", "unknown"),
+            "metadata": metadata,
+        }
+        self._publish_event("workflow.self_improvement.requested", context)
+        self._safety_gate.check_and_enforce(
+            f"Apply safe self-improvement: {candidate_title}",
+            "safe_self_improvement",
+            context,
+        )
+        self._publish_event("workflow.self_improvement.approved", context)
+
+        try:
+            result = execute()
+        except Exception as error:
+            self._publish_event("workflow.self_improvement.failed", {
+                **context,
+                "error": str(error),
+            })
+            raise
+
+        self._publish_event("workflow.self_improvement.completed", {
+            **context,
+            "success": bool(getattr(result, "success", False)),
+            "verification": getattr(result, "verification_results", {}),
+            "rollback_performed": bool(getattr(result, "rollback_performed", False)),
+        })
+        return result
+
     def get_workflow_status(self, workflow_id: str) -> Optional[WorkflowStatus]:
         if self._task_executor:
             exec_state = self._task_executor.get_status(workflow_id)

@@ -378,6 +378,7 @@ class SystemInitializer:
             self_improvement = create_self_improvement_engine(
                 config=ssi_config,
                 event_bus=event_bus,
+                workflow_orchestrator=orchestrator,
             )
             logger.debug("[SystemInitializer] SafeSelfImprovementEngine created")
 
@@ -574,6 +575,10 @@ class SystemInitializer:
         if system.autonomy:
             system.autonomy.stop()
             logger.debug("[SystemInitializer] AutonomyManager stopped")
+
+        if system.self_improvement:
+            system.self_improvement.shutdown()
+            logger.debug("[SystemInitializer] SafeSelfImprovementEngine stopped")
 
         if system.orchestrator:
             system.orchestrator.stop()

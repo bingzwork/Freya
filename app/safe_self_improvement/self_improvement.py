@@ -88,6 +88,7 @@ class SafeSelfImprovementEngine:
         promotion_manager: Optional[PatchPromotionManager] = None,
         policy_engine: Optional[PolicyEngine] = None,
         event_bus: Optional[EventBus] = None,
+        workflow_orchestrator=None,
     ):
         self.config = config or SafeSelfImprovementConfig()
         self._lock = threading.RLock()
@@ -121,6 +122,7 @@ class SafeSelfImprovementEngine:
         if event_bus is None:
             raise ValueError("SafeSelfImprovementEngine requires an injected EventBus")
         self._event_bus = event_bus
+        self._workflow_orchestrator = workflow_orchestrator
         self._subscriptions = []
 
         self._callbacks: Dict[str, List[Callable]] = {
@@ -150,6 +152,7 @@ class SafeSelfImprovementEngine:
         self,
         candidate: ImprovementCandidate,
         auto_execute: bool = False,
+        _approved_request: Optional[ApprovalRequest] = None,
     ) -> ImprovementSubmissionResult:
         """
         Submit an improvement candidate for processing.
@@ -217,9 +220,10 @@ class SafeSelfImprovementEngine:
                 },
             )
 
-        # 6. Check if approval needed
-        approval_request = None
-        if policy_evaluation["requires_approval"] or risk_assessment.requires_approval:
+        # 6. Check if approval needed.  An already approved request may re-enter
+        # here from approve_candidate(), but it must not create a second gate.
+        approval_request = _approved_request
+        if approval_request is None and (policy_evaluation["requires_approval"] or risk_assessment.requires_approval):
             # Check auto-approval eligibility
             approval_request = self.approval_gates.request_approval(
                 candidate,
@@ -277,9 +281,69 @@ class SafeSelfImprovementEngine:
 
             self._trigger_callbacks("on_executing", candidate)
 
-            execution_result = self.risk_executor.execute(
-                candidate,
-                approval_status=approval_request.status.value if approval_request else "not_required",
+            approval_status = approval_request.status.value if approval_request else "not_required"
+            self._event_bus.emit(
+                "self_improvement.workflow_requested",
+                {
+                    "candidate_id": candidate.id,
+                    "approval_status": approval_status,
+                    "checkpoint_id": checkpoint.id if checkpoint else None,
+                },
+                source="SafeSelfImprovementEngine",
+            )
+            if self._workflow_orchestrator is None:
+                execution_result = ExecutionResult(
+                    candidate_id=candidate.id,
+                    success=False,
+                    error="No WorkflowOrchestrator is bound; improvement was not applied.",
+                    metadata={"workflow_required": True},
+                )
+                self._event_bus.emit(
+                    "self_improvement.rejected",
+                    {"candidate_id": candidate.id, "reason": execution_result.error},
+                    source="SafeSelfImprovementEngine",
+                )
+            else:
+                try:
+                    execution_result = self._workflow_orchestrator.execute_safe_self_improvement(
+                        candidate,
+                        execute=lambda: self.risk_executor.execute(
+                            candidate,
+                            approval_status=approval_status,
+                        ),
+                        approval_status=approval_status,
+                    )
+                except Exception as error:
+                    execution_result = ExecutionResult(
+                        candidate_id=candidate.id,
+                        success=False,
+                        error=f"Workflow safety gate rejected or failed: {error}",
+                        metadata={"workflow_required": True},
+                    )
+                    self._event_bus.emit(
+                        "self_improvement.rejected",
+                        {"candidate_id": candidate.id, "reason": execution_result.error},
+                        source="SafeSelfImprovementEngine",
+                    )
+
+            self._event_bus.emit(
+                "self_improvement.applied",
+                {
+                    "candidate_id": candidate.id,
+                    "success": execution_result.success,
+                    "verification": execution_result.verification_results,
+                },
+                source="SafeSelfImprovementEngine",
+            )
+            verification = execution_result.verification_results.get("verification", {})
+            self._event_bus.emit(
+                "self_improvement.verified",
+                {
+                    "candidate_id": candidate.id,
+                    "passed": verification.get("passed", execution_result.success),
+                    "verification": verification,
+                },
+                source="SafeSelfImprovementEngine",
             )
 
             # Handle execution result
@@ -296,6 +360,11 @@ class SafeSelfImprovementEngine:
                     )
                     execution_result.rollback_performed = True
                     self._trigger_callbacks("on_rolled_back", rollback_result)
+                    self._event_bus.emit(
+                        "self_improvement.rolled_back",
+                        {"candidate_id": candidate.id, "reason": RollbackReason.VERIFICATION_FAILED.value},
+                        source="SafeSelfImprovementEngine",
+                    )
                     self._stats["rolled_back"] += 1
                 elif checkpoint and self.config.auto_rollback_on_test_failure:
                     # Check test failures
@@ -308,6 +377,11 @@ class SafeSelfImprovementEngine:
                         )
                         execution_result.rollback_performed = True
                         self._trigger_callbacks("on_rolled_back", rollback_result)
+                        self._event_bus.emit(
+                            "self_improvement.rolled_back",
+                            {"candidate_id": candidate.id, "reason": RollbackReason.TESTS_FAILED.value},
+                            source="SafeSelfImprovementEngine",
+                        )
                         self._stats["rolled_back"] += 1
 
             with self._lock:
@@ -405,8 +479,14 @@ class SafeSelfImprovementEngine:
         if not success:
             return False, msg
 
-        # Execute
-        submission_result = self.submit_improvement(candidate, auto_execute=True)
+        # Re-enter the normal validation path with this exact approved request;
+        # the execution branch will hand off to WorkflowOrchestrator rather than
+        # directly applying mutations.
+        submission_result = self.submit_improvement(
+            candidate,
+            auto_execute=True,
+            _approved_request=approval_request,
+        )
         return True, "Approved and executed" if submission_result.accepted else f"Approved but execution failed: {submission_result.error}"
 
     def reject_candidate(self, candidate_id: str, rejected_by: str, reason: str = "") -> tuple[bool, str]:
@@ -514,6 +594,10 @@ class SafeSelfImprovementEngine:
         with self._lock:
             self._state = EngineState.IDLE
 
+    def set_workflow_orchestrator(self, workflow_orchestrator) -> None:
+        """Late-bind the canonical workflow boundary after ordered startup."""
+        self._workflow_orchestrator = workflow_orchestrator
+
     def shutdown(self) -> None:
         """Shutdown the engine."""
         with self._lock:
@@ -588,6 +672,11 @@ class SafeSelfImprovementEngine:
 def create_self_improvement_engine(
     config: Optional[SafeSelfImprovementConfig] = None,
     event_bus: Optional[EventBus] = None,
+    workflow_orchestrator=None,
 ) -> SafeSelfImprovementEngine:
-    """Create a SafeSelfImprovementEngine with the supplied EventBus."""
-    return SafeSelfImprovementEngine(config=config, event_bus=event_bus)
+    """Create a SafeSelfImprovementEngine with shared runtime collaborators."""
+    return SafeSelfImprovementEngine(
+        config=config,
+        event_bus=event_bus,
+        workflow_orchestrator=workflow_orchestrator,
+    )

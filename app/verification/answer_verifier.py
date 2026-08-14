@@ -11,8 +11,8 @@ This is specifically for LLM fallback answers, separate from ExecutionVerifier
 which is used by ExecutionEngine for plan verification.
 """
 
-from typing import Optional
-from dataclasses import dataclass
+from typing import Any, Optional
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import re
 
@@ -30,6 +30,15 @@ class VerificationResult:
     answer: Optional[str] = None  # The validated answer to return to user
     learning_candidate: Optional[LearningCandidate] = None  # Learning candidate to send to pipeline
     reason: str = ""  # Explanation of the verification decision
+    rejection_evidence: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class GroundingCheck:
+    """Claim-level assessment against local retrieval evidence."""
+
+    is_grounded: bool
+    evidence: list[str] = field(default_factory=list)
 
 
 class AnswerVerifier:
@@ -115,67 +124,177 @@ class AnswerVerifier:
         answer = answer.strip()
 
         # The target fallback path supplies local retrieval evidence. Require
-        # grounding there; preserve quality-only behavior for legacy direct use.
-        if self._is_valid_answer(answer, prompt) and self._is_grounded_in_local_evidence(answer, context):
+        # every material claim to have a supporting evidence record there; retain
+        # quality-only behaviour for legacy direct use with no knowledge context.
+        grounding = self._check_claims_against_local_evidence(answer, context)
+        if self._is_valid_answer(answer, prompt) and grounding.is_grounded:
             # Valid answer: return it to the user
             # Also check if it has learning value for the pipeline (optional)
             if self._has_learning_value(answer, prompt):
                 learning_candidate = self._create_learning_candidate(
-                    answer, prompt, context, is_valid_answer=True
+                    answer, prompt, context, is_valid_answer=True,
+                    rejection_evidence=grounding.evidence,
                 )
                 self._submit_learning_candidate(learning_candidate)
             return answer
-        else:
-            # Not a valid answer - attempt repair if repair loop is available
-            if self._repair_loop:
-                logger.debug(f"[AnswerVerifier] Answer failed verification, attempting repair...")
-                repaired = self._repair_loop.attempt_repair(
+
+        rejection_context = dict(context or {})
+        rejection_context["claim_verification"] = grounding.evidence
+        failure_reason = "; ".join(grounding.evidence) or "Answer did not meet quality thresholds"
+
+        # Not a valid answer - attempt repair only for the original fallback.
+        # Repair attempts re-enter this verifier with a marker so a failed repair
+        # returns to the bounded outer loop instead of recursively starting one.
+        if self._repair_loop and not rejection_context.get("_repair_attempt"):
+            logger.debug("[AnswerVerifier] Answer failed verification, attempting repair...")
+            repaired = self._repair_loop.attempt_repair(
+                original_answer=answer,
+                prompt=prompt,
+                context=rejection_context,
+                failure_reason=failure_reason,
+            )
+            if repaired:
+                return repaired
+
+            # Repair exhausted - handle safe failure with the claim evidence.
+            if self._safe_failure:
+                return self._safe_failure.handle_exhausted_retries(
                     original_answer=answer,
                     prompt=prompt,
-                    context=context,
-                    failure_reason="Answer did not meet quality thresholds"
+                    context=rejection_context,
+                    attempts=self._repair_loop._max_attempts,
                 )
-                if repaired:
-                    return repaired
 
-                # Repair exhausted - handle safe failure
-                if self._safe_failure:
-                    return self._safe_failure.handle_exhausted_retries(
-                        original_answer=answer,
-                        prompt=prompt,
-                        context=context,
-                        attempts=self._repair_loop._max_attempts
-                    )
+        # No repair loop or repair failed - send to learning pipeline as candidate
+        if self._has_learning_value(answer, prompt):
+            learning_candidate = self._create_learning_candidate(
+                answer,
+                prompt,
+                rejection_context,
+                is_valid_answer=False,
+                rejection_evidence=grounding.evidence,
+            )
+            self._submit_learning_candidate(learning_candidate)
 
-            # No repair loop or repair failed - send to learning pipeline as candidate
-            if self._has_learning_value(answer, prompt):
-                learning_candidate = self._create_learning_candidate(
-                    answer, prompt, context, is_valid_answer=False
-                )
-                self._submit_learning_candidate(learning_candidate)
+        # Return None to indicate no valid answer
+        return None
 
-            # Return None to indicate no valid answer
-            return None
+    def handle_provider_failure(
+        self,
+        prompt: str,
+        context: Optional[dict] = None,
+        reason: str = "Local model provider unavailable.",
+    ) -> Optional[str]:
+        """Convert a bounded provider failure into the normal safe-failure path."""
+        failure_context = dict(context or {})
+        failure_context["provider_outcome"] = reason
+        if self._safe_failure is not None:
+            return self._safe_failure.handle_exhausted_retries(
+                original_answer="",
+                prompt=prompt,
+                context=failure_context,
+                attempts=0,
+            )
+        logger.warning("[AnswerVerifier] Provider failure before learning pipeline binding: %s", reason)
+        return None
 
     def _is_grounded_in_local_evidence(self, answer: str, context: Optional[dict]) -> bool:
-        """Check a fallback draft against evidence from UnifiedRetrieval."""
+        """Compatibility predicate for callers that only need a grounded/not-grounded value."""
+        return self._check_claims_against_local_evidence(answer, context).is_grounded
+
+    def _check_claims_against_local_evidence(
+        self,
+        answer: str,
+        context: Optional[dict],
+    ) -> GroundingCheck:
+        """Require each answer claim to be supported by one local evidence record.
+
+        The former whole-answer token ratio allowed a single familiar word to
+        validate unrelated statements.  This compact deterministic check keeps
+        the local-only policy while recording the supporting evidence source or
+        the exact rejected claim for repair and learning.
+        """
         if not context or not context.get("knowledge_first"):
-            return True
-        evidence = context.get("retrieved_results") or context.get("evidence") or []
-        if not evidence:
-            return False
-        evidence_text = " ".join(
-            str(item.get("content", item) if isinstance(item, dict) else item)
-            for item in evidence
-        ).lower()
-        answer_tokens = {
-            token for token in re.findall(r"[a-z0-9]{4,}", answer.lower())
-            if token not in {"that", "this", "with", "from", "your", "about", "have", "will", "they", "them"}
+            return GroundingCheck(True, ["No knowledge-first evidence required for legacy direct use."])
+
+        raw_evidence = context.get("retrieved_results") or context.get("evidence") or []
+        evidence_records = self._normalise_evidence(raw_evidence)
+        if not evidence_records:
+            return GroundingCheck(False, ["Rejected: no local retrieval evidence was supplied."])
+
+        claims = self._material_claims(answer)
+        if not claims:
+            return GroundingCheck(False, ["Rejected: the fallback answer contains no verifiable claim."])
+
+        findings: list[str] = []
+        unsupported: list[str] = []
+        for claim in claims:
+            supporting_source = self._find_supporting_evidence(claim, evidence_records)
+            if supporting_source is None:
+                unsupported.append(claim)
+                continue
+            findings.append(f"Supported claim '{claim}' by {supporting_source}.")
+
+        if unsupported:
+            findings.extend(f"Rejected unsupported claim '{claim}'." for claim in unsupported)
+            return GroundingCheck(False, findings)
+        return GroundingCheck(True, findings)
+
+    @staticmethod
+    def _normalise_evidence(evidence: list[Any]) -> list[tuple[str, str]]:
+        """Return non-empty (source, content) tuples from router evidence shapes."""
+        records: list[tuple[str, str]] = []
+        for index, item in enumerate(evidence, start=1):
+            if isinstance(item, dict):
+                content = item.get("content") or item.get("text") or ""
+                source = item.get("source_id") or item.get("source") or f"evidence-{index}"
+            else:
+                content = getattr(item, "content", item)
+                source = getattr(item, "source_id", None) or getattr(item, "source", None) or f"evidence-{index}"
+            content_text = str(content).strip()
+            if content_text:
+                records.append((str(source), content_text))
+        return records
+
+    @staticmethod
+    def _material_claims(answer: str) -> list[str]:
+        """Split prose into independently checkable, non-trivial claims."""
+        candidates = re.split(r"(?<=[.!?])\s+|[\n;]+", answer.strip())
+        return [
+            candidate.strip(" -•\t")
+            for candidate in candidates
+            if len(re.findall(r"[a-z0-9]{3,}", candidate.lower())) >= 2
+        ]
+
+    @staticmethod
+    def _find_supporting_evidence(
+        claim: str,
+        evidence_records: list[tuple[str, str]],
+    ) -> Optional[str]:
+        """Return the evidence source that covers a claim, if one exists."""
+        ignored = {
+            "that", "this", "with", "from", "your", "about", "have", "will", "they", "them",
+            "which", "where", "when", "into", "their", "there", "would", "could", "should",
         }
-        evidence_tokens = set(re.findall(r"[a-z0-9]{4,}", evidence_text))
-        if not answer_tokens or not evidence_tokens:
-            return False
-        return len(answer_tokens & evidence_tokens) / max(1, len(answer_tokens)) >= 0.12
+        claim_normalised = re.sub(r"\s+", " ", claim.lower()).strip(" .!?")
+        claim_tokens = {
+            token for token in re.findall(r"[a-z0-9]{3,}", claim_normalised)
+            if token not in ignored
+        }
+        if not claim_tokens:
+            return None
+
+        for source, evidence_text in evidence_records:
+            evidence_normalised = re.sub(r"\s+", " ", evidence_text.lower())
+            if claim_normalised in evidence_normalised:
+                return source
+            evidence_tokens = set(re.findall(r"[a-z0-9]{3,}", evidence_normalised))
+            matched_tokens = claim_tokens & evidence_tokens
+            required_matches = 1 if len(claim_tokens) <= 2 else 2
+            coverage = len(matched_tokens) / len(claim_tokens)
+            if len(matched_tokens) >= required_matches and coverage >= 0.60:
+                return source
+        return None
 
     def _is_valid_answer(self, answer: str, prompt: str) -> bool:
         """
@@ -284,7 +403,8 @@ class AnswerVerifier:
         answer: str,
         prompt: str,
         context: Optional[dict],
-        is_valid_answer: bool
+        is_valid_answer: bool,
+        rejection_evidence: Optional[list[str]] = None,
     ) -> LearningCandidate:
         """
         Create a learning candidate from an answer.
@@ -306,7 +426,8 @@ class AnswerVerifier:
             "prompt": prompt,
             "is_valid_answer": is_valid_answer,
             "answer_length": len(answer),
-            "word_count": len(answer.split())
+            "word_count": len(answer.split()),
+            "claim_verification": rejection_evidence or [],
         }
 
         # Prepare context
