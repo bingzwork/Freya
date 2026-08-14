@@ -1,10 +1,10 @@
 # Completion Progress
 
-Overall Freya Functional Completion: 60.0%
-Completed Tasks: 7 / 17
-Remaining Tasks: 10 / 17
+Overall Freya Functional Completion: 65.0%
+Completed Tasks: 8 / 17
+Remaining Tasks: 9 / 17
 Last Updated: 2026-08-14
-Next Active Task: Task 8 — Implement provider resilience
+Next Active Task: Task 9 — Repair monitoring and hardware-health evidence
 
 > The percentage retains the documented capability-weighted operational method: functionality receives credit only when its production path is implemented, wired, reachable, safe where required, and supported by runtime evidence. The task counts are the rolling queue counts and do not replace that capability-weighted percentage.
 
@@ -14,17 +14,15 @@ Next Active Task: Task 8 — Implement provider resilience
 > Completed, working, and verified items have been removed from the execution queue.
 > Tasks are ordered by documented dependency and execution sequence, not simply by priority.
 >
-> **Verified operational completion:** 60.0% (the capability-weighted estimate reflects seven completed and verified critical-path tasks; it supersedes the earlier 76.6% estimate).
+> **Verified operational completion:** 65.0% (the capability-weighted estimate reflects eight completed and verified critical-path tasks; it supersedes the earlier 76.6% estimate).
 
 ---
 
 # Critical Execution Path
 
-1. 🔴 Task 8 — Implement provider resilience
+1. 🟡 Task 9 — Repair monitoring and hardware-health evidence
    ↓
-2. 🟡 Task 9 — Repair monitoring and hardware-health evidence
-   ↓
-3. 🟡 Task 10 — Enforce workflow capability and safety behavior
+2. 🟡 Task 10 — Enforce workflow capability and safety behavior
 
 Tasks 10–17 are parallel or independent work where the existing status document does not establish a prerequisite beyond the relationships stated in each task.
 
@@ -33,47 +31,6 @@ Tasks 10–17 are parallel or independent work where the existing status documen
 # Active Work
 
 
-
-## Task 8 — Implement provider resilience
-
-**Size:** 🔴 RED — BIG / COMPLEX
-**Priority:** P1
-**Execution Order:** 8
-
-**Location**
-
-- `app/providers/factory.py`: lines 227–231
-
-**Problem**
-
-The provider factory registers only `OllamaProvider`; `local` is merely an alias. There is no real multi-provider routing, failover, health-aware selection, or graceful capability degradation beyond one local service.
-
-**Required Work**
-
-- Implement the intended provider-abstraction contract.
-- Add provider health checks.
-- Add configured fallback ordering.
-- Classify timeout and provider errors.
-- Implement safe no-provider behavior.
-- Test outage and fallback scenarios.
-
-**Dependencies**
-
-- Can proceed independently.
-- The final contract should be consumed by execution resilience and tested in Task 7.
-
-**Why This Order**
-
-The source document explicitly marks provider resilience as independently actionable, while placing it after runtime, execution, and learning-path repairs in the path to 100%.
-
-**Acceptance Criteria**
-
-- [ ] More than one provider can be selected under the supported contract.
-- [ ] Health-aware fallback and timeout/error classification work.
-- [ ] No-provider behavior is safe and observable.
-- [ ] Provider outage tests pass.
-
----
 
 ## Task 9 — Repair monitoring and hardware-health evidence
 
@@ -425,7 +382,6 @@ The source document explicitly places this hygiene work after runtime consolidat
 
 These tasks do not have a documented prerequisite on the critical execution chain, or the source document explicitly allows them to proceed independently:
 
-- 🟡 **Task 8 — Implement provider resilience**. It can proceed independently, although execution resilience should consume its final contract.
 - 🟡 **Task 9 — Repair monitoring and hardware-health evidence**. It can proceed independently, but autonomy should not act on health observations until it is complete.
 - 🟡 **Task 13 — Repair conversation/vector persistence and recall**. It can proceed after the supported retrieval stack is selected.
 - 🔵 **Task 15 — Add configurable learning and repair policy**. It can proceed after the execution-learning contract is fixed.
@@ -445,19 +401,19 @@ No dependency has been added where the existing status document did not establis
 
 | Size | Remaining tasks |
 |---|---:|
-| 🔴 RED — Big / Complex | 2 |
+| 🔴 RED — Big / Complex | 1 |
 | 🟡 YELLOW — Medium | 5 |
 | 🔵 BLUE — Easy / Small | 3 |
-| **Total** | **10** |
+| **Total** | **9** |
 
 | Priority | Remaining work |
 |---|---|
 | **P0 — Critical** | No remaining P0 task on the active queue; the Task 3 autonomy blocker is complete. |
-| **P1 — High** | Tasks 8, 11, 14: provider resilience, autonomous learning, readiness surface |
+| **P1 — High** | Tasks 11, 14: autonomous learning, readiness surface |
 | **P2 — Medium** | Tasks 9–10, 12–13, 16: monitoring, workflow capability/safety, legacy migration, vector recall, memory quality |
 | **P3 — Low** | Tasks 14–17: readiness completion, configurable policy, memory-quality tail work, stale contracts |
 
-**Current verified completion:** 60.0%. Tasks 1–7 are recorded as complete and verified. The remaining active queue begins with Task 8’s provider-resilience work.
+**Current verified completion:** 65.0%. Tasks 1–8 are recorded as complete and verified. The remaining active queue begins with Task 9’s monitoring and hardware-health evidence work.
 
 ---
 
@@ -472,7 +428,7 @@ No dependency has been added where the existing status document did not establis
 
 Freya reaches 100% only when a normal `FreyaApp` startup reliably composes one supported architecture; safely accepts or rejects actions; plans, executes, verifies, repairs, and persists outcomes; learns from those outcomes; uses persistent and retrievable knowledge across sessions; runs healthy autonomous background work; routes diagnostics and learning through controlled improvement safeguards; survives configured provider and tool failures; and demonstrates these chains through a clean, production-path test suite.
 
-The current verified operational completion is **60.0%**. The earlier 76.6% estimate is superseded by the current verified assessment and is not used as the completion baseline.
+The current verified operational completion is **65.0%**. The earlier 76.6% estimate is superseded by the current verified assessment and is not used as the completion baseline.
 
 ---
 
@@ -774,3 +730,44 @@ Task 7 replaced the obsolete direct-construction autonomy integration suite with
 **Implementation Scope**
 
 The former `tests/test_integration_autonomous.py` targeted legacy `FreyaAgent` / `CentralOrchestrator` construction. It was migrated rather than retained: Task 7 evidence now starts from the canonical production application graph. No broad skips, xfails, discovery exclusions, or test-only production graph were added.
+
+
+---
+
+## Task 8 — Implement Provider Resilience
+
+**Status:** COMPLETE
+
+**Implementation Summary**
+
+Task 8 establishes `LLM → ResilientLLMProvider → ProviderFactory → BaseLLMProvider` as the runtime provider path used by the legacy agent, priority queue, and LLM stack. The priority queue now forwards a request timeout to the concrete provider layer, while the resilience router owns provider fallback only and does not add unbounded retries.
+
+**Provider Contract and Configuration**
+
+`BaseLLMProvider` now exposes stable request, health, result, and failure contracts. `ProviderFactory` retains `OllamaProvider` as the bundled production implementation and retains `local` only as a compatibility alias resolving to `ollama`; aliases are no longer represented as a second concrete provider. The factory can register additional concrete `BaseLLMProvider` implementations, and `PROVIDER_ORDER` or the backward-compatible `DEFAULT_PROVIDER` plus `FALLBACK_PROVIDERS` configuration supplies one canonical, deduplicated provider order.
+
+**Health, Fallback, and Safe Failure Behavior**
+
+The resilience router records bounded health observations, skips unhealthy or failed-to-initialize providers, attempts healthy providers in deterministic configured order, and preserves the original prompt, system context, messages, and timeout across a fallback. Timeouts, connection/unavailability, authentication/configuration, model-not-found, rate-limit, response, and internal failures now have stable classifications. Recoverable provider-level failures proceed to the next configured provider; non-recoverable failures propagate; exhausted providers raise `ProvidersExhaustedError`; and an empty configuration raises `NoProviderConfiguredError`. No provider failure is converted into a fabricated successful response.
+
+**Tests and Verification Results**
+
+- `python3 -m py_compile app/providers/base.py app/providers/factory.py app/providers/resilient.py app/providers/ollama.py app/core/llm.py app/core/priority_llm.py app/core/config_hot_reload.py`: passed.
+- `python3 -m pytest -q tests/test_provider_resilience.py tests/test_providers.py tests/test_llm.py tests/test_llm_stack.py`: **87 passed**, covering healthy preferred selection, unhealthy-provider skipping, timeout and connection fallback, configured attempt order, all-provider outage and timeout terminal failures, no-provider handling, single-provider compatibility, `local` alias compatibility, dynamic second-provider registration, and priority-path timeout propagation.
+- `git diff --check`: passed.
+- Broader legacy agent tests were run after installing their declared collection dependencies; they retain pre-existing `FreyaAgent.experience_memory` and interactive-permission fixture failures outside Task 8 scope. No changes were made to mask those failures.
+
+**Files Changed**
+
+- `.env.example`
+- `app/core/config_hot_reload.py`
+- `app/core/llm.py`
+- `app/core/priority_llm.py`
+- `app/providers/__init__.py`
+- `app/providers/base.py`
+- `app/providers/factory.py`
+- `app/providers/resilient.py`
+- `tests/test_llm.py`
+- `tests/test_llm_stack.py`
+- `tests/test_provider_resilience.py`
+- `tests/test_providers.py`

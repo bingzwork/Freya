@@ -68,6 +68,7 @@ class LLMRequest:
     started_at: Optional[float] = None
     completed_at: Optional[float] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+    timeout: Optional[float] = None
 
     def __lt__(self, other: 'LLMRequest') -> bool:
         # Higher priority first, then FIFO within same priority
@@ -205,7 +206,11 @@ class PriorityLLMProvider:
             _priority_trace(f"5 PROVIDER_REQUEST_STARTED priority={request.priority.name} request_id={request.request_id[:8]}")
 
             # Execute the actual LLM call
-            result = self._llm.ask(request.prompt, request.system_prompt)
+            result = self._llm.ask(
+                request.prompt,
+                request.system_prompt,
+                timeout=request.timeout,
+            )
 
             _priority_trace(f"6 PROVIDER_RESPONSE_RECEIVED priority={request.priority.name} request_id={request.request_id[:8]}")
 
@@ -279,6 +284,7 @@ class PriorityLLMProvider:
             priority=priority,
             future=future,
             loop=loop,
+            timeout=timeout,
         )
 
         self._enqueue_request(request)
@@ -315,6 +321,7 @@ class PriorityLLMProvider:
             system_prompt=system or ENHANCED_SYSTEM_PROMPT,
             priority=priority,
             future=future,
+            timeout=timeout,
         )
 
         self._enqueue_request(request)

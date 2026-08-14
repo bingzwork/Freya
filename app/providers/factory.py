@@ -1,79 +1,117 @@
-"""Provider Factory.
-
-This module provides a factory for creating LLM provider instances based on configuration.
-It supports dynamic provider selection and fallback mechanisms.
-"""
+"""Factory and configuration helpers for concrete LLM providers."""
 
 import os
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Type
 
-from app.providers.base import BaseLLMProvider, ProviderConfig, ProviderError
-from app.providers.ollama import OllamaProvider
 from app.core.logger import logger
+from app.providers.base import BaseLLMProvider, ProviderConfig, ProviderConfigurationError, ProviderError
+from app.providers.ollama import OllamaProvider
 
 
 class ProviderFactory:
-    """Factory for creating LLM provider instances.
+    """Register and construct concrete providers without coupling callers to one vendor."""
 
-    This factory manages provider registration, selection, and instantiation.
-    It supports multiple providers and allows for easy extension.
-    """
-
-    # Mapping of provider names to their classes
     _providers: Dict[str, Type[BaseLLMProvider]] = {}
-
-    # Default provider name
+    _aliases: Dict[str, str] = {}
     _default_provider: str = "ollama"
 
     @classmethod
     def register_provider(cls, name: str, provider_class: Type[BaseLLMProvider]) -> None:
-        """Register a provider class with the factory.
+        """Register a concrete provider implementation under a stable identity."""
+        normalized = name.strip().lower()
+        if not normalized:
+            raise ProviderConfigurationError("Provider name cannot be empty", provider_name="factory")
+        if not issubclass(provider_class, BaseLLMProvider):
+            raise ProviderConfigurationError(
+                f"Provider '{normalized}' must implement BaseLLMProvider",
+                provider_name="factory",
+            )
+        cls._providers[normalized] = provider_class
+        logger.info(f"[ProviderFactory] Registered provider: {normalized}")
 
-        Args:
-            name: The name to register the provider under.
-            provider_class: The provider class to register.
-        """
-        cls._providers[name.lower()] = provider_class
-        logger.info(f"[ProviderFactory] Registered provider: {name}")
+    @classmethod
+    def register_alias(cls, alias: str, provider_name: str) -> None:
+        """Register a compatibility alias without treating it as another provider."""
+        normalized_alias = alias.strip().lower()
+        canonical = cls.resolve_provider_name(provider_name)
+        if not normalized_alias:
+            raise ProviderConfigurationError("Provider alias cannot be empty", provider_name="factory")
+        if canonical not in cls._providers:
+            raise ProviderConfigurationError(
+                f"Cannot alias unknown provider '{provider_name}'",
+                provider_name="factory",
+            )
+        cls._aliases[normalized_alias] = canonical
+        logger.info(f"[ProviderFactory] Registered provider alias: {normalized_alias} -> {canonical}")
 
     @classmethod
     def unregister_provider(cls, name: str) -> None:
-        """Unregister a provider.
+        """Remove a concrete provider and aliases that target it."""
+        normalized = name.lower()
+        canonical = cls.resolve_provider_name(normalized)
+        if canonical in cls._providers:
+            del cls._providers[canonical]
+            cls._aliases = {alias: target for alias, target in cls._aliases.items() if target != canonical}
+            logger.info(f"[ProviderFactory] Unregistered provider: {canonical}")
 
-        Args:
-            name: The name of the provider to unregister.
-        """
-        if name.lower() in cls._providers:
-            del cls._providers[name.lower()]
-            logger.info(f"[ProviderFactory] Unregistered provider: {name}")
+    @classmethod
+    def resolve_provider_name(cls, name: str) -> str:
+        """Resolve a provider name through compatibility aliases."""
+        normalized = name.strip().lower()
+        return cls._aliases.get(normalized, normalized)
 
     @classmethod
     def get_registered_providers(cls) -> List[str]:
-        """Get the list of registered provider names.
-
-        Returns:
-            List of registered provider names.
-        """
+        """Return registered concrete providers in deterministic registration order."""
         return list(cls._providers.keys())
 
     @classmethod
-    def set_default_provider(cls, name: str) -> None:
-        """Set the default provider name.
+    def get_provider_aliases(cls) -> Dict[str, str]:
+        """Return a copy of compatibility aliases for diagnostics."""
+        return dict(cls._aliases)
 
-        Args:
-            name: The name of the default provider.
-        """
-        cls._default_provider = name.lower()
-        logger.info(f"[ProviderFactory] Default provider set to: {name}")
+    @classmethod
+    def set_default_provider(cls, name: str) -> None:
+        """Set the process default provider, resolving compatibility aliases."""
+        cls._default_provider = cls.resolve_provider_name(name)
+        logger.info(f"[ProviderFactory] Default provider set to: {cls._default_provider}")
 
     @classmethod
     def get_default_provider(cls) -> str:
-        """Get the default provider name.
+        """Return the configured default provider, with ``DEFAULT_PROVIDER`` support."""
+        configured = os.getenv("DEFAULT_PROVIDER")
+        return cls.resolve_provider_name(configured) if configured else cls._default_provider
 
-        Returns:
-            The default provider name.
+    @classmethod
+    def get_configured_provider_order(
+        cls,
+        provider_names: Optional[Sequence[str]] = None,
+    ) -> List[str]:
+        """Return the single deterministic priority order for provider routing.
+
+        Explicit ``provider_names`` take precedence.  Otherwise ``PROVIDER_ORDER``
+        is used when present; legacy single-provider configuration remains supported
+        through ``DEFAULT_PROVIDER`` followed by optional ``FALLBACK_PROVIDERS``.
+        Aliases are canonicalized and duplicates are removed without changing order.
         """
-        return cls._default_provider
+        if provider_names is not None:
+            candidates: Iterable[str] = provider_names
+        else:
+            configured_order = os.getenv("PROVIDER_ORDER", "").strip()
+            if configured_order:
+                candidates = configured_order.split(",")
+            else:
+                fallback = os.getenv("FALLBACK_PROVIDERS", "").split(",")
+                candidates = [cls.get_default_provider(), *fallback]
+
+        ordered: List[str] = []
+        for name in candidates:
+            if not name or not name.strip():
+                continue
+            canonical = cls.resolve_provider_name(name)
+            if canonical not in ordered:
+                ordered.append(canonical)
+        return ordered
 
     @classmethod
     def create(
@@ -82,92 +120,57 @@ class ProviderFactory:
         model: Optional[str] = None,
         base_url: Optional[str] = None,
         timeout: Optional[float] = None,
-        **kwargs
+        **kwargs: Any,
     ) -> BaseLLMProvider:
-        """Create a provider instance.
+        """Construct one concrete provider from explicit or environment configuration."""
+        requested_name = provider_name or cls.get_default_provider()
+        effective_provider = cls.resolve_provider_name(requested_name)
 
-        Args:
-            provider_name: The name of the provider to create. If None, uses the default.
-            model: The model to use. If None, uses the provider's default or environment config.
-            base_url: The base URL for the provider. If None, uses the provider's default.
-            timeout: The timeout for requests. If None, uses the provider's default.
-            **kwargs: Additional configuration for the provider.
-
-        Returns:
-            An instance of the requested provider.
-
-        Raises:
-            ProviderError: If the provider cannot be created.
-        """
-        effective_provider = provider_name or cls._default_provider
-
-        # Normalize provider name
-        effective_provider = effective_provider.lower()
-
-        # Check if provider is registered
         if effective_provider not in cls._providers:
-            available = ", ".join(cls._providers.keys())
-            raise ProviderError(
-                message=f"Unknown provider: '{effective_provider}'. Available providers: {available}",
+            available = ", ".join(cls._providers.keys()) or "none"
+            raise ProviderConfigurationError(
+                message=f"Unknown provider: '{requested_name}'. Available providers: {available}",
                 provider_name="factory",
                 details={"available_providers": list(cls._providers.keys())},
             )
 
-        provider_class = cls._providers[effective_provider]
-
-        # Build configuration
         config = cls._build_config(
             provider_name=effective_provider,
             model=model,
             base_url=base_url,
             timeout=timeout,
-            **kwargs
+            **kwargs,
         )
-
         logger.info(
-            f"[ProviderFactory] Creating {effective_provider} provider "
-            f"(model: {config.model}, base_url: {config.base_url})"
+            f"[ProviderFactory] Creating provider={effective_provider} "
+            f"model={config.model or 'default'}"
         )
 
         try:
-            provider = provider_class(config)
-            logger.info(f"[ProviderFactory] Successfully created {effective_provider} provider")
-            return provider
-        except Exception as e:
-            logger.error(f"[ProviderFactory] Failed to create {effective_provider} provider: {str(e)}")
-            raise ProviderError(
-                message=f"Failed to create provider '{effective_provider}': {str(e)}",
-                provider_name="factory",
-                details={"error": str(e), "type": type(e).__name__},
+            return cls._providers[effective_provider](config)
+        except ProviderError:
+            raise
+        except Exception as exc:
+            logger.error(
+                f"[ProviderFactory] Provider initialization failed for {effective_provider}: {exc}"
             )
+            raise ProviderConfigurationError(
+                message=f"Failed to create provider '{effective_provider}': {exc}",
+                provider_name=effective_provider,
+                details={"error_type": type(exc).__name__},
+            ) from exc
 
     @classmethod
     def create_from_config(cls, config: Dict[str, Any]) -> BaseLLMProvider:
-        """Create a provider instance from a configuration dictionary.
-
-        Args:
-            config: Configuration dictionary containing provider settings.
-
-        Returns:
-            An instance of the configured provider.
-
-        Raises:
-            ProviderError: If the provider cannot be created.
-        """
-        provider_name = config.get("provider", cls._default_provider)
-        model = config.get("model")
-        base_url = config.get("base_url")
-        timeout = config.get("timeout")
-
-        # Extract provider-specific config
-        extra = {k: v for k, v in config.items() if k not in ["provider", "model", "base_url", "timeout"]}
-
+        """Construct one concrete provider from a configuration mapping."""
+        provider_name = config.get("provider", cls.get_default_provider())
+        known_keys = {"provider", "model", "base_url", "timeout"}
         return cls.create(
             provider_name=provider_name,
-            model=model,
-            base_url=base_url,
-            timeout=timeout,
-            **extra
+            model=config.get("model"),
+            base_url=config.get("base_url"),
+            timeout=config.get("timeout"),
+            **{key: value for key, value in config.items() if key not in known_keys},
         )
 
     @classmethod
@@ -177,71 +180,44 @@ class ProviderFactory:
         model: Optional[str] = None,
         base_url: Optional[str] = None,
         timeout: Optional[float] = None,
-        **kwargs
+        **kwargs: Any,
     ) -> ProviderConfig:
-        """Build a ProviderConfig from the given parameters.
-
-        Also reads from environment variables as fallback.
-        Performs defensive validation to ensure required configuration is present.
-
-        Args:
-            provider_name: The provider name.
-            model: The model to use.
-            base_url: The base URL.
-            timeout: The timeout.
-            **kwargs: Additional configuration.
-
-        Returns:
-            A ProviderConfig instance.
-
-        Raises:
-            ProviderError: If required configuration is missing.
-        """
-        # Get values from environment as fallback
+        """Build normalized provider configuration from arguments and environment."""
         env_prefix = f"{provider_name.upper()}_"
-
-        effective_model = model or os.getenv(f"{env_prefix}MODEL") or kwargs.get("model")
+        effective_model = model or os.getenv(f"{env_prefix}MODEL") or kwargs.get("model") or ""
         effective_base_url = base_url or os.getenv(f"{env_prefix}BASE_URL") or kwargs.get("base_url")
-        effective_timeout = timeout or float(os.getenv(f"{env_prefix}TIMEOUT", "120"))
-
-        # Default base_url for Ollama/local providers if not configured
-        if provider_name in ["ollama", "local"] and effective_base_url is None:
-            effective_base_url = "http://localhost:11434"
-            logger.debug(
-                f"[ProviderFactory] Using default base_url for {provider_name}: "
-                f"{effective_base_url}"
+        raw_timeout: Any = timeout if timeout is not None else os.getenv(f"{env_prefix}TIMEOUT", "120")
+        try:
+            effective_timeout = float(raw_timeout)
+        except (TypeError, ValueError) as exc:
+            raise ProviderConfigurationError(
+                f"Invalid timeout for provider '{provider_name}'",
+                provider_name=provider_name,
+            ) from exc
+        if effective_timeout <= 0:
+            raise ProviderConfigurationError(
+                f"Timeout for provider '{provider_name}' must be positive",
+                provider_name=provider_name,
             )
 
-        # Remove known keys from kwargs
-        extra = {k: v for k, v in kwargs.items() if k not in ["model", "base_url", "timeout"]}
+        if provider_name == "ollama" and effective_base_url is None:
+            effective_base_url = "http://localhost:11434"
 
+        extra = {key: value for key, value in kwargs.items() if key not in {"model", "base_url", "timeout"}}
         return ProviderConfig(
             provider_name=provider_name,
-            model=effective_model if effective_model else "",
+            model=effective_model,
             base_url=effective_base_url,
+            api_key=kwargs.get("api_key") or os.getenv(f"{env_prefix}API_KEY"),
             timeout=effective_timeout,
             extra=extra,
         )
 
 
-# Register built-in providers
 ProviderFactory.register_provider("ollama", OllamaProvider)
-
-# Aliases for convenience
-ProviderFactory.register_provider("local", OllamaProvider)  # alias for local Ollama
+ProviderFactory.register_alias("local", "ollama")
 
 
-def get_provider(
-    provider_name: Optional[str] = None,
-    **kwargs
-) -> BaseLLMProvider:
-    """Convenience function to get a provider instance.
-
-    Args:
-        provider_name: The name of the provider. If None, uses the default.
-        **kwargs: Additional configuration for the provider.
-
-    Returns:
-        A provider instance.
-    """
+def get_provider(provider_name: Optional[str] = None, **kwargs: Any) -> BaseLLMProvider:
+    """Convenience function for constructing a concrete provider."""
     return ProviderFactory.create(provider_name=provider_name, **kwargs)

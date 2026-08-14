@@ -647,7 +647,7 @@ class TestProviderHealthChecker:
 
             assert isinstance(result, AggregateHealthStatus)
             assert "ollama" in result.results
-            assert "local" in result.results
+            assert "local" not in result.results
 
     def test_check_default_provider(self):
         """Test checking the default provider."""

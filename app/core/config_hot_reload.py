@@ -49,8 +49,9 @@ class ConfigValidator:
         "WORKSPACE": lambda v: isinstance(v, str) and len(v) > 0,
         "MEMORY_PATH": lambda v: isinstance(v, str) and len(v) > 0,
         "VECTOR_PATH": lambda v: isinstance(v, str) and len(v) > 0,
-        "DEFAULT_PROVIDER": lambda v: isinstance(v, str) and v in
-            ("ollama", "claude", "openai", "gemini", "deepseek", "azure"),
+        "DEFAULT_PROVIDER": lambda v: isinstance(v, str) and len(v.strip()) > 0,
+        "PROVIDER_ORDER": lambda v: isinstance(v, str),
+        "FALLBACK_PROVIDERS": lambda v: isinstance(v, str),
         "OLLAMA_BASE_URL": lambda v: isinstance(v, str) and v.startswith(("http://", "https://")),
         "OLLAMA_MODEL": lambda v: isinstance(v, str) and len(v) > 0,
         "OLLAMA_TIMEOUT": lambda v: _try_parse_number(v) is not None and _try_parse_number(v) > 0,
@@ -516,7 +517,10 @@ def _on_agent_config_reload(agent, config: Config, changes: List[ConfigChange]) 
     # This is where specific components would re-initialize if needed
     for change in changes:
         key = change.key
-        if key in ("MODEL", "DEFAULT_PROVIDER", "OLLAMA_MODEL", "CLAUDE_MODEL", "OPENAI_MODEL"):
+        if key in (
+            "MODEL", "DEFAULT_PROVIDER", "PROVIDER_ORDER", "FALLBACK_PROVIDERS",
+            "OLLAMA_MODEL", "CLAUDE_MODEL", "OPENAI_MODEL",
+        ):
             # Model changed - notify LLM components
             if hasattr(agent, 'llm') and agent.llm:
                 logger.info(f"Model config changed: {key} = {change.new_value}")

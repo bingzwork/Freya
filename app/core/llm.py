@@ -1,62 +1,88 @@
-# Optional import for ollama
-try:
-    import ollama
-    OLLAMA_AVAILABLE = True
-except ImportError:
-    OLLAMA_AVAILABLE = False
-    # Create a mock ollama module for when it's not available
-    class _MockOllama:
-        def __getattr__(self, name):
-            # Return a mock function that returns a default response
-            return lambda *args, **kwargs: {"message": {"content": "[LLM response not available - ollama not installed]"}}
+"""Primary runtime adapter for provider-backed Freya inference."""
 
-    ollama = _MockOllama()
+import os
+from typing import Mapping, Optional, Sequence
 
+from app.core.logger import logger
 from app.identity import create_enhanced_system_prompt
+from app.providers.factory import ProviderFactory
+from app.providers.resilient import ResilientLLMProvider
 
-# Canonical Freya system prompt. Used as the default system message for every
-# LLM call so the persona, environment, and behaviour guidance live in exactly
-# one place. Per-call prompts should not restate these traits.
+
 FREYA_SYSTEM_PROMPT = (
     "You are Freya, an autonomous AI software engineer.\n"
     "Engine focus: Windows-first, Python-first, PowerShell-first.\n"
-    "Aware of: the current Git state, the active Ollama model, and the default LLM provider.\n"
+    "Aware of: the current Git state, the active model, and the configured LLM provider.\n"
     "Behave like an engineer: think briefly, act deliberately, and produce well-formed plans and clean, minimal code. "
     "Reason from the context in front of you. Prefer the smallest correct change. "
     "Skip hedging, filler, invented tools, and any step you cannot justify."
 )
 
-# Enhanced system prompt with identity injection
 ENHANCED_SYSTEM_PROMPT = create_enhanced_system_prompt(FREYA_SYSTEM_PROMPT)
 
 
 class LLM:
+    """Return text responses from the configured resilient provider path.
 
-    def __init__(self, model="qwen3:8b"):
-        self.model = model
-        from app.core.logger import logger
-        logger.info(f"[LLM] Initialized with provider=ollama, model={self.model}")
+    ``LLM`` remains the compatibility surface consumed by the legacy agent,
+    priority scheduler, and LLM stack.  The provider router owns health-aware
+    ordering, bounded concrete-provider requests, and fallback decisions.
+    """
 
-    def ask(self, prompt, system=ENHANCED_SYSTEM_PROMPT):
-        if not OLLAMA_AVAILABLE:
-            # Return a informative message when ollama is not available
-            return "[LLM response not available - ollama not installed]\n\nOriginal prompt: {}\n\nSystem prompt: {}".format(
-                prompt[:100] + ("..." if len(prompt) > 100 else ""),
-                system[:100] + ("..." if len(system) > 100 else "")
+    def __init__(
+        self,
+        model: Optional[str] = None,
+        *,
+        provider_names: Optional[Sequence[str]] = None,
+        provider_options: Optional[Mapping[str, Mapping[str, object]]] = None,
+        provider_router: Optional[ResilientLLMProvider] = None,
+    ) -> None:
+        self._model = model or os.getenv("MODEL") or "qwen3:8b"
+        if provider_router is None:
+            options = {name: dict(values) for name, values in (provider_options or {}).items()}
+            if model is not None:
+                for name in ProviderFactory.get_configured_provider_order(provider_names):
+                    options.setdefault(name, {})["model"] = model
+            provider_router = ResilientLLMProvider(
+                provider_names,
+                provider_options=options,
             )
-
-        response = ollama.chat(
-            model=self.model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": system,
-                },
-                {
-                    "role": "user",
-                    "content": prompt,
-                },
-            ],
+        self._provider_router = provider_router
+        logger.info(
+            f"[LLM] Initialized provider order={','.join(self._provider_router.provider_order) or 'none'} "
+            f"model={self._model}"
         )
 
-        return response["message"]["content"]
+    @property
+    def model(self) -> str:
+        """Return the configured model until a provider response identifies the active model."""
+        return self._model
+
+    @model.setter
+    def model(self, value: str) -> None:
+        self._model = value
+
+    @property
+    def provider_order(self) -> list[str]:
+        """Expose canonical provider order for diagnostics without vendor coupling."""
+        return self._provider_router.provider_order
+
+    @property
+    def last_provider_attempts(self):
+        """Expose the last non-sensitive routing decisions for observability."""
+        return self._provider_router.last_attempts
+
+    def ask(
+        self,
+        prompt: str,
+        system: str = ENHANCED_SYSTEM_PROMPT,
+        timeout: Optional[float] = None,
+    ) -> str:
+        """Perform one inference request or propagate the safe provider failure."""
+        response = self._provider_router.ask(
+            prompt,
+            system=system,
+            timeout=timeout,
+        )
+        self._model = response.model
+        return response.content

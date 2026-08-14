@@ -1,172 +1,139 @@
-"""Tests for the LLMStack module."""
+"""Tests for LLMStack integration with the provider-backed LLM adapter."""
 
-import pytest
-from unittest.mock import patch, MagicMock
-
-from app.core.llm_stack import LLMStack
+from app.core.llm import LLM
+from app.core.llm_stack import LLMStack, get_llm_stack, set_llm_stack
 from app.core.priority_llm import LLMPriority
+from app.providers.base import BaseLLMProvider, ProviderConfig, ProviderHealthStatus, ProviderResponse
+from app.providers.resilient import ResilientLLMProvider
 
 
-class MockOllama:
-    """Mock ollama module for testing."""
+class StackStubProvider(BaseLLMProvider):
+    provider_name = "stack-stub"
+
     def __init__(self):
+        super().__init__(ProviderConfig(provider_name=self.provider_name, model="stack-model", timeout=1.0))
         self.calls = []
 
-    def chat(self, model, messages):
-        self.calls.append({"model": model, "messages": messages})
-        return {"message": {"content": "Test response"}}
+    def ask(self, prompt, system=None, messages=None, timeout=None, **kwargs):
+        self.calls.append({"prompt": prompt, "system": system, "timeout": timeout})
+        return ProviderResponse(content="Stack response", model=self.model, provider=self.provider_name)
+
+    def check_health(self):
+        return ProviderHealthStatus(
+            provider_name=self.provider_name,
+            is_healthy=True,
+            is_reachable=True,
+            model_available=True,
+            model_name=self.model,
+        )
+
+    def list_models(self):
+        return [self.model]
+
+
+def make_stack(model="stack-model"):
+    provider = StackStubProvider()
+    llm = LLM(
+        model=model,
+        provider_router=ResilientLLMProvider([provider.provider_name], providers={provider.provider_name: provider}),
+    )
+    return LLMStack(base_llm=llm), provider
 
 
 class TestLLMStack:
-    """Test the LLMStack class."""
-
     def test_llm_stack_init_default_model(self):
-        """Test LLMStack initialization with default model."""
-        with patch("app.core.llm.OLLAMA_AVAILABLE", True):
-            with patch("app.core.llm.ollama", MockOllama()):
-                stack = LLMStack()
-                assert stack.model == "qwen3:8b"
+        stack, _ = make_stack()
+        try:
+            assert stack.model == "stack-model"
+        finally:
+            stack.shutdown()
 
     def test_llm_stack_init_custom_model(self):
-        """Test LLMStack initialization with custom model."""
-        with patch("app.core.llm.OLLAMA_AVAILABLE", True):
-            with patch("app.core.llm.ollama", MockOllama()):
-                stack = LLMStack(model="llama3:8b")
-                assert stack.model == "llama3:8b"
+        stack, _ = make_stack(model="custom-model")
+        try:
+            assert stack.model == "custom-model"
+        finally:
+            stack.shutdown()
 
     def test_llm_stack_has_priority_llm(self):
-        """Test LLMStack has priority_llm property."""
-        with patch("app.core.llm.OLLAMA_AVAILABLE", True):
-            with patch("app.core.llm.ollama", MockOllama()):
-                stack = LLMStack()
-                assert hasattr(stack, "priority_llm")
-                assert stack.priority_llm is not None
+        stack, _ = make_stack()
+        try:
+            assert stack.priority_llm is not None
+        finally:
+            stack.shutdown()
 
     def test_llm_stack_has_chat_activity(self):
-        """Test LLMStack has chat_activity property."""
-        with patch("app.core.llm.OLLAMA_AVAILABLE", True):
-            with patch("app.core.llm.ollama", MockOllama()):
-                stack = LLMStack()
-                assert hasattr(stack, "chat_activity")
-                assert stack.chat_activity is not None
+        stack, _ = make_stack()
+        try:
+            assert stack.chat_activity is not None
+        finally:
+            stack.shutdown()
 
-    def test_ask_without_ollama(self):
-        """Test ask() when ollama is not available."""
-        with patch("app.core.llm.OLLAMA_AVAILABLE", False):
-            stack = LLMStack()
-            response = stack.ask("Hello", system="Test")
-            assert "[LLM response not available - ollama not installed]" in response
-            assert "Hello" in response
-            assert "Test" in response
-
-    def test_ask_with_ollama(self):
-        """Test ask() with mocked ollama."""
-        mock_ollama = MockOllama()
-        with patch("app.core.llm.ollama", mock_ollama):
-            with patch("app.core.llm.OLLAMA_AVAILABLE", True):
-                stack = LLMStack(model="test-model")
-                response = stack.ask("Test prompt", system="Test system")
-
-                assert response == "Test response"
-                assert len(mock_ollama.calls) == 1
-                call = mock_ollama.calls[0]
-                assert call["model"] == "test-model"
-                assert len(call["messages"]) == 2
-                assert call["messages"][0]["role"] == "system"
-                assert call["messages"][0]["content"] == "Test system"
-                assert call["messages"][1]["role"] == "user"
-                assert call["messages"][1]["content"] == "Test prompt"
-
-    def test_ask_with_custom_system(self):
-        """Test ask() with custom system prompt."""
-        mock_ollama = MockOllama()
-        with patch("app.core.llm.ollama", mock_ollama):
-            with patch("app.core.llm.OLLAMA_AVAILABLE", True):
-                stack = LLMStack()
-                response = stack.ask("User message", system="Custom system")
-
-                assert response == "Test response"
-                call = mock_ollama.calls[0]
-                assert call["messages"][0]["content"] == "Custom system"
+    def test_ask_uses_provider_backed_runtime(self):
+        stack, provider = make_stack()
+        try:
+            assert stack.ask("Hello", system="Test", timeout=3.0) == "Stack response"
+            assert provider.calls == [{"prompt": "Hello", "system": "Test", "timeout": 3.0}]
+        finally:
+            stack.shutdown()
 
     def test_ask_priority_chat(self):
-        """Test ask() with CHAT priority."""
-        mock_ollama = MockOllama()
-        with patch("app.core.llm.ollama", mock_ollama):
-            with patch("app.core.llm.OLLAMA_AVAILABLE", True):
-                stack = LLMStack()
-                response = stack.ask("Chat message", priority=LLMPriority.CHAT)
-
-                assert response == "Test response"
+        stack, provider = make_stack()
+        try:
+            assert stack.ask("Chat message", priority=LLMPriority.CHAT) == "Stack response"
+            assert provider.calls[0]["prompt"] == "Chat message"
+        finally:
+            stack.shutdown()
 
     def test_chat_activity_delegation(self):
-        """Test chat activity methods delegate correctly."""
-        with patch("app.core.llm.OLLAMA_AVAILABLE", True):
-            with patch("app.core.llm.ollama", MockOllama()):
-                stack = LLMStack()
-
-                # These should not raise
-                stack.chat_started()
-                assert stack.is_chat_active() is True
-
-                stack.chat_ended()
-                assert stack.is_chat_active() is False
-
-                stack.chat_activity_heartbeat()
-                assert stack.is_chat_active() is True
+        stack, _ = make_stack()
+        try:
+            stack.chat_started()
+            assert stack.is_chat_active() is True
+            stack.chat_ended()
+            assert stack.is_chat_active() is False
+            stack.chat_activity_heartbeat()
+            assert stack.is_chat_active() is True
+        finally:
+            stack.shutdown()
 
     def test_get_stats(self):
-        """Test get_stats returns combined stats."""
-        with patch("app.core.llm.OLLAMA_AVAILABLE", True):
-            with patch("app.core.llm.ollama", MockOllama()):
-                stack = LLMStack()
-                stats = stack.get_stats()
-
-                assert "model" in stats
-                assert stats["model"] == "qwen3:8b"
-                assert "chat_active" in stats
-                assert "total_requests" in stats
+        stack, _ = make_stack()
+        try:
+            stats = stack.get_stats()
+            assert stats["model"] == "stack-model"
+            assert "chat_active" in stats
+            assert "total_requests" in stats
+        finally:
+            stack.shutdown()
 
     def test_shutdown(self):
-        """Test shutdown calls priority_llm shutdown."""
-        with patch("app.core.llm.OLLAMA_AVAILABLE", True):
-            with patch("app.core.llm.ollama", MockOllama()):
-                stack = LLMStack()
-                # Should not raise
-                stack.shutdown()
+        stack, _ = make_stack()
+        stack.shutdown()
 
 
 class TestLLMStackGlobal:
-    """Test global LLMStack functions."""
-
     def test_get_llm_stack_singleton(self):
-        """Test get_llm_stack returns singleton."""
-        with patch("app.core.llm.OLLAMA_AVAILABLE", True):
-            with patch("app.core.llm.ollama", MockOllama()):
-                from app.core.llm_stack import get_llm_stack, set_llm_stack
-
-                # Reset global
-                set_llm_stack(None)
-
-                stack1 = get_llm_stack()
-                stack2 = get_llm_stack()
-
-                assert stack1 is stack2
+        set_llm_stack(None)
+        stack1 = get_llm_stack()
+        stack2 = get_llm_stack()
+        try:
+            assert stack1 is stack2
+        finally:
+            stack1.shutdown()
+            set_llm_stack(None)
 
     def test_set_llm_stack(self):
-        """Test set_llm_stack overrides global."""
-        with patch("app.core.llm.OLLAMA_AVAILABLE", True):
-            with patch("app.core.llm.ollama", MockOllama()):
-                from app.core.llm_stack import get_llm_stack, set_llm_stack
-
-                # Reset global
-                set_llm_stack(None)
-
-                stack1 = get_llm_stack()
-                custom_stack = LLMStack(model="custom-model")
-                set_llm_stack(custom_stack)
-                stack2 = get_llm_stack()
-
-                assert stack2 is custom_stack
-                assert stack2.model == "custom-model"
-                assert stack1 is not stack2
+        set_llm_stack(None)
+        stack1, _ = make_stack()
+        custom_stack, _ = make_stack(model="custom-model")
+        try:
+            set_llm_stack(stack1)
+            set_llm_stack(custom_stack)
+            assert get_llm_stack() is custom_stack
+            assert custom_stack.model == "custom-model"
+            assert stack1 is not custom_stack
+        finally:
+            stack1.shutdown()
+            custom_stack.shutdown()
+            set_llm_stack(None)
