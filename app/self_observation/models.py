@@ -186,16 +186,18 @@ class RuntimeAwarenessState:
     tool_success_rates: Dict[str, float] = field(default_factory=dict)
 
     # Resource consumption
-    cpu_usage: float = 0.0
-    memory_usage_mb: float = 0.0
-    disk_io_mb_s: float = 0.0
-    network_io_mb_s: float = 0.0
+    # ``None`` means the source did not provide a valid measurement.  It is
+    # intentionally different from a measured value of zero.
+    cpu_usage: Optional[float] = None
+    memory_usage_mb: Optional[float] = None
+    disk_io_mb_s: Optional[float] = None
+    network_io_mb_s: Optional[float] = None
 
     # GPU resource consumption
     gpu_devices: List[Dict[str, Any]] = field(default_factory=list)
-    gpu_utilization_percent: float = 0.0
-    gpu_memory_used_mb: float = 0.0
-    gpu_memory_total_mb: float = 0.0
+    gpu_utilization_percent: Optional[float] = None
+    gpu_memory_used_mb: Optional[float] = None
+    gpu_memory_total_mb: Optional[float] = None
     gpu_temperature_celsius: Optional[float] = None
 
     # System health
@@ -222,7 +224,7 @@ class RuntimeAwarenessState:
 
     # Overall execution context
     execution_mode: str = "normal"
-    session_duration_seconds: float = 0.0
+    session_duration_seconds: Optional[float] = None
     total_decisions_made: int = 0
     total_tasks_completed: int = 0
     total_failures: int = 0

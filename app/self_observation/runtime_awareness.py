@@ -270,7 +270,8 @@ class RuntimeAwareness:
         logger.debug(
             f"Runtime awareness updated: activity={state.current_activity}, "
             f"tasks={len(state.running_tasks)}, goals={len(state.active_goals)}, "
-            f"cpu={state.cpu_usage:.1f}%, mem={state.memory_usage_mb:.0f}MB"
+            f"cpu={state.cpu_usage if state.cpu_usage is not None else 'unavailable'}%, "
+            f"mem={state.memory_usage_mb if state.memory_usage_mb is not None else 'unavailable'}MB"
         )
 
         return state
@@ -350,25 +351,66 @@ class RuntimeAwareness:
             caps = self._orchestrator.capability_registry.list_capabilities(active_only=True)
             state.active_tools = [c.name for c in caps]
 
-            # Get tool stats if available
+            # Report a success rate only when the capability exposes real
+            # execution counters.  Never turn missing telemetry into success.
             for cap in caps:
-                if hasattr(cap, 'execution_count'):
-                    state.tool_success_rates[cap.name] = 1.0  # placeholder
+                executions = getattr(cap, "execution_count", None)
+                successes = getattr(cap, "success_count", None)
+                failures = getattr(cap, "failure_count", None)
+                if all(isinstance(value, (int, float)) for value in (executions, successes, failures)) and executions > 0:
+                    state.tool_success_rates[cap.name] = successes / executions
+                elif isinstance(successes, (int, float)) and isinstance(failures, (int, float)) and successes + failures > 0:
+                    state.tool_success_rates[cap.name] = successes / (successes + failures)
 
     def _gather_resource_consumption(self, state: RuntimeAwarenessState) -> None:
         """Gather resource consumption from ObservabilityHub, WorldModel, and GPU monitor."""
-        # Get system metrics
-        system_metrics = self._observability.get_system_metrics()
-        state.cpu_usage = system_metrics.get("system.cpu.percent", 0.0)
-        state.memory_usage_mb = system_metrics.get("system.process.memory_mb", 0.0)
-        state.disk_io_mb_s = system_metrics.get("system.disk.read_mb_s", 0.0) + system_metrics.get("system.disk.write_mb_s", 0.0)
-        state.network_io_mb_s = system_metrics.get("system.network.sent_mb_s", 0.0) + system_metrics.get("system.network.recv_mb_s", 0.0)
+        # ObservabilityHub is the authoritative live system source.  Invalid
+        # or absent values remain unavailable instead of becoming fake zeroes.
+        measurements: Dict[str, Any] = {}
+        try:
+            candidate = self._observability.get_system_metrics()
+            if isinstance(candidate, dict):
+                measurements = candidate
+        except Exception as exc:
+            logger.warning("Unable to collect system metrics: %s", exc)
 
-        # Get more detailed metrics from WorldModel
+        def numeric(name: str) -> Optional[float]:
+            value = measurements.get(name)
+            return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+        state.cpu_usage = numeric("system.cpu.percent")
+        state.memory_usage_mb = numeric("system.process.memory_mb")
+        disk_read = numeric("system.disk.read_mb_s")
+        disk_write = numeric("system.disk.write_mb_s")
+        net_sent = numeric("system.network.sent_mb_s")
+        net_recv = numeric("system.network.recv_mb_s")
+        state.disk_io_mb_s = disk_read + disk_write if disk_read is not None and disk_write is not None else None
+        state.network_io_mb_s = net_sent + net_recv if net_sent is not None and net_recv is not None else None
+        state.metadata.setdefault("measurements", {}).update({
+            "cpu_usage": "measured" if state.cpu_usage is not None else "unavailable",
+            "memory_usage_mb": "measured" if state.memory_usage_mb is not None else "unavailable",
+            "disk_io_mb_s": "measured" if state.disk_io_mb_s is not None else "unavailable",
+            "network_io_mb_s": "measured" if state.network_io_mb_s is not None else "unavailable",
+        })
+
+        # A world-model snapshot may supplement missing live telemetry, but it
+        # must never overwrite an authoritative current measurement.
         if self._world_model:
-            snapshot = self._world_model.get_snapshot()
-            state.cpu_usage = snapshot.resources.cpu_percent
-            state.memory_usage_mb = snapshot.resources.memory_used_gb * 1024
+            try:
+                snapshot = self._world_model.get_snapshot()
+                resources = getattr(snapshot, "resources", None)
+                if state.cpu_usage is None:
+                    value = getattr(resources, "cpu_percent", None)
+                    if isinstance(value, (int, float)) and not isinstance(value, bool):
+                        state.cpu_usage = float(value)
+                        state.metadata["measurements"]["cpu_usage"] = "derived"
+                if state.memory_usage_mb is None:
+                    value = getattr(resources, "memory_used_gb", None)
+                    if isinstance(value, (int, float)) and not isinstance(value, bool):
+                        state.memory_usage_mb = float(value) * 1024
+                        state.metadata["measurements"]["memory_usage_mb"] = "derived"
+            except Exception as exc:
+                logger.warning("Unable to read world-model resource snapshot: %s", exc)
 
         # Get GPU metrics if available
         self._gather_gpu_metrics(state)
@@ -414,10 +456,17 @@ class RuntimeAwareness:
                         state.gpu_memory_used_mb = total_mem_used
                         state.gpu_memory_total_mb = total_mem_total
                         state.gpu_temperature_celsius = max_temp
+                        state.metadata.setdefault("measurements", {}).update({
+                            "gpu_utilization_percent": "measured",
+                            "gpu_memory_used_mb": "measured",
+                            "gpu_memory_total_mb": "measured",
+                            "gpu_temperature_celsius": "measured" if max_temp is not None else "unavailable",
+                        })
 
-        except Exception:
-            # GPU monitoring not available or error
-            pass
+        except Exception as exc:
+            # GPU monitoring is optional; retain an explicit unavailable state.
+            state.metadata.setdefault("measurements", {})["gpu"] = "unavailable"
+            logger.debug("GPU monitoring unavailable: %s", exc)
 
     def _gather_system_health(self, state: RuntimeAwarenessState) -> None:
         """Gather system health from ObservabilityHub."""
@@ -435,8 +484,22 @@ class RuntimeAwareness:
         """Gather memory state from UnifiedRetrieval and GoalStorage."""
         # Working memory - from unified retrieval
         if self._memory_retrieval:
-            # Could get working memory stats
-            state.working_memory_size = 0  # placeholder
+            stats = None
+            for method_name in ("get_stats", "get_statistics", "get_memory_stats"):
+                method = getattr(self._memory_retrieval, method_name, None)
+                if callable(method):
+                    try:
+                        candidate = method()
+                        if isinstance(candidate, dict):
+                            stats = candidate
+                            break
+                    except Exception as exc:
+                        logger.debug("Working-memory statistics unavailable: %s", exc)
+            if stats is not None:
+                size = stats.get("size", stats.get("count", stats.get("total")))
+                if isinstance(size, int) and size >= 0:
+                    state.working_memory_size = size
+            state.metadata.setdefault("measurements", {})["working_memory_size"] = "measured" if stats is not None else "unavailable"
 
         # Long-term memory
         if self._goal_storage:
@@ -444,7 +507,20 @@ class RuntimeAwareness:
 
         # Consolidation status - from autonomous learning
         if self._autonomous_learning:
-            state.consolidation_status = "idle"  # placeholder
+            status = None
+            for attr in ("consolidation_status", "get_consolidation_status"):
+                value = getattr(self._autonomous_learning, attr, None)
+                try:
+                    value = value() if callable(value) else value
+                except Exception:
+                    value = None
+                if isinstance(value, str) and value:
+                    status = value
+                    break
+            if status is not None:
+                state.consolidation_status = status
+            else:
+                state.metadata.setdefault("measurements", {})["consolidation_status"] = "unavailable"
 
     def _gather_pending_work(self, state: RuntimeAwarenessState) -> None:
         """Gather pending work from various sources."""
@@ -453,12 +529,20 @@ class RuntimeAwareness:
             wf_stats = self._orchestrator.workflow_composer.get_stats()
             state.pending_workflows = wf_stats.get("by_status", {}).get("pending", 0)
 
-        # Pending decisions - could check decision manager
-        state.pending_decisions = 0  # placeholder
-
-        # Pending approvals from safety gate
+        # Pending decisions and approvals are exposed only by authoritative
+        # APIs; absence of an API means unknown, not zero.
+        if self._decision_manager:
+            getter = getattr(self._decision_manager, "get_pending_decisions", None)
+            if callable(getter):
+                pending = getter()
+                if isinstance(pending, (list, tuple, set, dict)):
+                    state.pending_decisions = len(pending)
         if self._orchestrator and self._orchestrator.safety_gate:
-            state.pending_approvals = 0  # placeholder
+            getter = getattr(self._orchestrator.safety_gate, "get_pending_approvals", None)
+            if callable(getter):
+                pending = getter()
+                if isinstance(pending, (list, tuple, set, dict)):
+                    state.pending_approvals = len(pending)
 
         # Background jobs
         from app.core.background_jobs import get_job_service
@@ -519,6 +603,8 @@ class RuntimeAwareness:
                     metrics["awareness.gpu_temperature_celsius"] = state.gpu_temperature_celsius
 
             for key, value in metrics.items():
+                if not isinstance(value, (int, float)) or isinstance(value, bool):
+                    continue
                 if key not in self._metric_cache:
                     self._metric_cache[key] = []
                 self._metric_cache[key].append((now, value))
@@ -666,15 +752,15 @@ class RuntimeAwareness:
             "current_goal": s.current_goal.get("name") if s.current_goal else None,
             "reasoning_phase": s.reasoning_phase,
             "active_tools": len(s.active_tools),
-            "cpu_usage": f"{s.cpu_usage:.1f}%",
-            "memory_mb": f"{s.memory_usage_mb:.0f}",
+            "cpu_usage": f"{s.cpu_usage:.1f}%" if s.cpu_usage is not None else "unavailable",
+            "memory_mb": f"{s.memory_usage_mb:.0f}" if s.memory_usage_mb is not None else "unavailable",
             "system_health": s.system_health_status,
             "pending_workflows": s.pending_workflows,
             "pending_approvals": s.pending_approvals,
             "background_jobs": s.background_jobs,
             "autonomous_activities": len(s.autonomous_activities),
             "execution_mode": s.execution_mode,
-            "session_duration": f"{s.session_duration_seconds/60:.1f}m",
+            "session_duration": f"{s.session_duration_seconds/60:.1f}m" if s.session_duration_seconds is not None else "unavailable",
             "total_decisions": s.total_decisions_made,
             "total_tasks": s.total_tasks_completed,
             "total_failures": s.total_failures,

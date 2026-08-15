@@ -170,6 +170,14 @@ class TestRuntimeAwareness:
             failure_recovery=mock_failure_recovery,
             config=config,
         )
+        awareness._observability.get_system_metrics = Mock(return_value={
+            "system.cpu.percent": 45.0,
+            "system.process.memory_mb": 2048.0,
+            "system.disk.read_mb_s": 1.5,
+            "system.disk.write_mb_s": 2.5,
+            "system.network.sent_mb_s": 3.0,
+            "system.network.recv_mb_s": 4.0,
+        })
         yield awareness
         awareness.stop()
 
@@ -209,7 +217,10 @@ class TestRuntimeAwareness:
 
         # Check resource consumption
         assert state.cpu_usage == 45.0
-        assert state.memory_usage_mb == 2560.0  # 2.5 GB * 1024
+        assert state.memory_usage_mb == 2048.0
+        assert state.metadata["measurements"]["cpu_usage"] == "measured"
+        assert state.disk_io_mb_s == 4.0
+        assert state.network_io_mb_s == 7.0
 
         # Check goals
         assert len(state.active_goals) == 2
@@ -228,6 +239,18 @@ class TestRuntimeAwareness:
         assert state.total_decisions_made == 10
         assert state.total_tasks_completed == 6  # 5 completed + 1 failed
 
+    def test_unavailable_measurements_are_not_reported_as_zero(self, awareness):
+        awareness._world_model = None
+        awareness._observability.get_system_metrics = Mock(return_value={
+            "system.cpu.percent": "malformed",
+            "system.process.memory_mb": None,
+        })
+        state = awareness.update_awareness()
+        assert state.cpu_usage is None
+        assert state.memory_usage_mb is None
+        assert state.metadata["measurements"]["cpu_usage"] == "unavailable"
+        assert awareness.get_summary()["cpu_usage"] == "unavailable"
+
     def test_get_summary(self, awareness, mock_orchestrator, mock_world_model):
         """Test getting human-readable summary."""
         awareness.start()
@@ -240,7 +263,7 @@ class TestRuntimeAwareness:
         assert summary["active_goals"] == 2
         assert summary["current_goal"] == "Test Goal"
         assert summary["cpu_usage"] == "45.0%"
-        assert summary["memory_mb"] == "2560"
+        assert summary["memory_mb"] == "2048"
         assert summary["pending_workflows"] == 2
         assert summary["execution_mode"] == "autonomous"
 
