@@ -6,7 +6,7 @@ by that path rather than an obsolete documentation contract or legacy agent
 construction.
 """
 
-from unittest.mock import MagicMock
+from unittest.mock import ANY, MagicMock
 
 import pytest
 
@@ -128,7 +128,7 @@ def facade_with_mocked_components():
         )
         for trigger, command, _method_name, _expected_text in CONTROL_CASES
     }
-    router.route.side_effect = route_by_trigger.__getitem__
+    control.route_question.side_effect = lambda trigger, **_: route_by_trigger[trigger]
 
     facade = AgentFacadeImpl(
         router=router,
@@ -155,10 +155,17 @@ def test_canonical_facade_returns_control_reply_without_internal_jargon(
     reply = facade.chat(trigger)
 
     assert reply == expected_text
-    router.route.assert_called_once_with(trigger)
+    control.route_question.assert_called_once_with(trigger, correlation_id=ANY)
     getattr(control, method_name).assert_called_once_with()
+    control.record_question_exchange.assert_called_once_with(
+        trigger,
+        expected_text,
+        correlation_id=ANY,
+    )
+    control.finish_question.assert_called_once_with()
+    router.route.assert_not_called()
     priority_llm.ask.assert_not_called()
     execution.execute_plan.assert_not_called()
-    chat_activity.chat_started.assert_called_once_with()
-    chat_activity.chat_ended.assert_called_once_with()
+    chat_activity.chat_started.assert_not_called()
+    chat_activity.chat_ended.assert_not_called()
     assert not any(needle in reply.lower() for needle in PROHIBITED_SUBSTRINGS)

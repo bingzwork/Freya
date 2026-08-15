@@ -107,19 +107,14 @@ def test_mutating_tools_require_confirmation(mock_llm):
     with patch.object(tm, 'execute') as mock_execute:
         mock_execute.return_value = MagicMock(success=True, output="saved")
 
-        with patch('sys.stdout') as mock_stdout:
-            with patch('sys.stdin') as mock_stdin:
-                mock_stdout.write = MagicMock()
-                mock_stdin.readline = MagicMock(return_value="1")
+        with patch('app.agent.executor.permission_prompt', return_value="Yes") as mock_permission_prompt:
+            result = executor.execute_step("Write a file")
 
-                result = executor.execute_step("Write a file")
-
-                stdout_calls = [str(c[0][0]) for c in mock_stdout.write.call_args_list if c[0]]
-                output = ''.join(stdout_calls)
-                assert "requests permission" in output.lower()
-                assert "write_file" in output
-
-                assert result["action"]["tool"] == "write_file"
+            mock_permission_prompt.assert_called_once()
+            prompt_title = mock_permission_prompt.call_args.kwargs["title"]
+            assert "requests permission" in prompt_title.lower()
+            assert "write_file" in prompt_title
+            assert result["action"]["tool"] == "write_file"
 
 
 def test_mutating_tool_denied(mock_llm):
@@ -129,14 +124,11 @@ def test_mutating_tool_denied(mock_llm):
 
     mock_llm.ask.return_value = '{"tool": "write_file", "args": {"path": "test.py", "content": ""}}'
 
-    with patch('sys.stdout') as mock_stdout:
-        with patch('sys.stdin') as mock_stdin:
-            mock_stdout.write = MagicMock()
-            mock_stdin.readline = MagicMock(return_value="2")
+    with patch('app.agent.executor.permission_prompt', return_value="No") as mock_permission_prompt:
+        result = executor.execute_step("Write a file")
 
-            result = executor.execute_step("Write a file")
-
-            assert result["error"] == "User denied permission for write_file."
+        mock_permission_prompt.assert_called_once()
+        assert result["error"] == "User denied permission for write_file."
 
 
 def test_allowed_tools_restriction(mock_llm):
@@ -146,14 +138,11 @@ def test_allowed_tools_restriction(mock_llm):
 
     mock_llm.ask.return_value = '{"tool": "write_file", "args": {"path": "test.py", "content": ""}}'
 
-    with patch('sys.stdout') as mock_stdout:
-        with patch('sys.stdin') as mock_stdin:
-            mock_stdout.write = MagicMock()
-            mock_stdin.readline = MagicMock(return_value="1")
+    with patch('app.agent.executor.permission_prompt', return_value="Yes") as mock_permission_prompt:
+        result = executor.execute_step("Write a file", allowed_tools=set(Executor.READ_ONLY_TOOLS))
 
-            result = executor.execute_step("Write a file", allowed_tools=set(Executor.READ_ONLY_TOOLS))
-
-            assert "requires explicit mutation approval" in result["error"]
+        mock_permission_prompt.assert_called_once()
+        assert "requires explicit mutation approval" in result["error"]
 
 
 def test_http_tools_classified_as_read_only():
