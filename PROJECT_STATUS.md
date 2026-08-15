@@ -6,6 +6,43 @@
 
 > **MVP decision:** There are **no remaining MVP blockers** in the current canonical runtime. The completed P1/P2 work below is intentionally narrow hardening; it preserves the established architecture and compatibility boundaries rather than introducing a replacement subsystem.
 
+## Durable Memory Status
+
+The durable-memory audit was verified against the implemented `MemoryCoordinator` → durable stores → `UnifiedRetrieval` path. The restart regression uses isolated temporary storage and launches Process 1 and Process 2 as separate Python interpreters; it does not reuse Python objects across the boundary.
+
+| Memory type | Persistent | Backend | Restart verified | Retrieval after restart |
+|---|---|---|---|---|
+| ConversationMemory | YES | Atomic JSON plus persistent FAISS vector index and metadata | YES | PASS |
+| SemanticMemory | YES | Atomic JSON store | YES | PASS |
+| EpisodicMemory | YES | Atomic JSON store | YES | PASS |
+| ProjectMemory | YES | Atomic JSON store; optional persistent vector backend | YES | PASS |
+| ExperienceMemory | YES | Atomic JSON store | YES | PASS |
+| EngineeringLessons | YES | Atomic JSON store | YES | PASS |
+| GoalStorage / persisted goals | YES | Atomic JSON store | YES | PASS |
+| TaskMemory | YES | Atomic JSON task-state store | YES | PASS |
+| CrossMemoryReferences | YES | Atomic JSON graph store with reciprocal edges | YES | PASS |
+| WorkingMemory | INTENTIONALLY TEMPORARY | In-process bounded runtime state | N/A | N/A |
+
+### Real Restart Test
+
+Process 1 reconstructed `MemoryCoordinator`, wrote deterministic CONV-731, SEM-731, EPI-731, PROJ-731, EXP-731, ENG-731, GOAL-731, and TASK-731 markers through the production memory APIs, created a durable semantic-to-project reference, and exited. Process 2 reconstructed a fresh `MemoryCoordinator` and its `UnifiedRetrieval`; every marker, the reciprocal reference relationship, and the persistent vector/index files were present. A semantic query with different wording, “Which port does Atlas use?”, recalled the conversation containing port **7319**. The index identity and metadata files were reopened from the isolated workspace rather than silently replaced with an empty index.
+
+### Bugs Fixed
+
+No production durability defect was found in the audited path. The implementation already performs atomic writes and reloads the durable stores and vector index during fresh construction. This change adds permanent coverage for the previously missing real-process boundary, vector-file reopening, semantic recall after shutdown, reciprocal cross-memory references, all coordinator-owned durable stores, and the intentional ephemerality of WorkingMemory. No parallel persistence or retrieval architecture was introduced.
+
+### Regression Evidence
+
+| Verification | Result |
+|---|---|
+| `python3 -m pytest -q tests/test_durable_memory_process_restart.py` | Passed: **4 tests**, including two separate interpreter processes for write and reload. |
+| Existing focused memory/vector/retrieval coverage | Passed: **255 tests** across conversation-vector persistence, real process restart, engineering lessons, experience, project memory, goals, vector DB, and knowledge retrieval. |
+| Full suite | Not rerun; focused evidence was sufficient for this narrow change and the repository's existing full-suite resource limits are documented below. |
+
+### Remaining Issues
+
+No required durability fix remains from this audit. WorkingMemory remains deliberately non-persistent as scratch state. The existing vector layer and durable stores continue to use their current production APIs and storage locations, preserving Freya Core Architecture v1.
+
 ## Completed Top 6 Priority work
 
 | Priority | Completed implementation | Definition of done | Result |
