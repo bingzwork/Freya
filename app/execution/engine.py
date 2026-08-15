@@ -79,6 +79,10 @@ class UnifiedPlanner:
             engineering_lessons=memory.engineering_lessons,
         )
 
+    def set_plan_manager(self, plan_manager: PlanManager) -> None:
+        """Bind the canonical execution plan store after construction."""
+        self._agent_planner.plan_manager = plan_manager
+
     def create_plan(self, task: str, context: str, allow_mutations: bool) -> Plan:
         """Create a plan after requesting target knowledge and capability context."""
         router_context = self._router.get_planning_context(task)

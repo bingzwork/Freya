@@ -556,6 +556,38 @@ class SystemInitializer:
         if safety is not None and hasattr(safety, "set_safety_gate"):
             safety.set_safety_gate(safety_gate)
 
+        planning = capability_registry.get_capability("planning_engine")
+        if planning is not None and hasattr(planning, "set_components"):
+            if hasattr(execution_engine._planner, "set_plan_manager"):
+                execution_engine._planner.set_plan_manager(execution_engine.plan_manager)
+            planning.set_components(
+                execution_engine._planner,
+                execution_engine.plan_manager,
+                decision_manager,
+            )
+
+        communication = capability_registry.get_capability("communication_hub")
+        if communication is not None and hasattr(communication, "set_event_bus"):
+            communication.set_event_bus(self.event_bus)
+
+        debugging = capability_registry.get_capability("debugging")
+        if debugging is not None and hasattr(debugging, "set_components"):
+            debugging.set_components(
+                tool_manager,
+                execution_engine.verification_runner,
+                safety_gate,
+            )
+
+        dependency_management = capability_registry.get_capability("dependency_management")
+        if dependency_management is not None and hasattr(dependency_management, "set_components"):
+            from app.audit.capability_auditor import CapabilityAuditor
+            dependency_management.set_components(
+                tool_manager,
+                execution_engine.verification_runner,
+                safety_gate,
+                CapabilityAuditor(registry=capability_registry, workspace=str(self.workspace)),
+            )
+
         orchestration = capability_registry.get_capability("orchestration_core")
         if orchestration is not None and orchestrator is not None and hasattr(orchestration, "set_orchestrator"):
             orchestration.set_orchestrator(orchestrator)

@@ -4,10 +4,14 @@ This module provides concrete implementations of the 14 built-in capabilities
 that integrate with FreyaAgent's subsystems.
 """
 
+import importlib.metadata
+import json
 import logging
 import mimetypes
 import os
+import shlex
 import shutil
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -188,16 +192,31 @@ class PlanningEngineCapability(BaseCapability):
         self._decision_manager = decision_manager
 
     def action_create_plan(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
-        """Create a new plan."""
+        """Create a plan through the initializer-owned production planner."""
         if not self._planner:
             return {"success": False, "error": "Planner not initialized"}
 
         task = inputs.get("task", "")
-        goal_id = inputs.get("goal_id")
         context = inputs.get("context", {})
+        external_context = context if isinstance(context, str) else json.dumps(context)
 
         try:
-            plan = self._planner.create_plan(task, goal_id=goal_id, context=context)
+            if hasattr(self._planner, "_agent_planner"):
+                plan = self._planner.create_plan(
+                    task,
+                    external_context,
+                    inputs.get("allow_mutations", True),
+                )
+            else:
+                plan = self._planner.create_plan(
+                    task,
+                    name=inputs.get("name", "Generated Plan"),
+                    external_context=external_context,
+                )
+            if plan is None:
+                return {"success": False, "error": "Planner returned no plan"}
+            if self._plan_manager and hasattr(self._plan_manager, "register_plan"):
+                self._plan_manager.register_plan(plan)
             self._publish_event("plan.created", {"plan_id": plan.id, "task": task[:100]})
             return {
                 "success": True,
@@ -210,13 +229,72 @@ class PlanningEngineCapability(BaseCapability):
             return {"success": False, "error": str(e)}
 
     def action_replan(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
-        """Adaptively replan after failure."""
+        """Update an existing plan after a failure or changed constraints."""
+        if not self._plan_manager:
+            return {"success": False, "error": "Plan manager not initialized"}
+        if not self._planner:
+            return {"success": False, "error": "Planner not initialized"}
         if not self._decision_manager:
             return {"success": False, "error": "Decision manager not initialized"}
 
-        # This is handled by the agent's _replan_after_failure method
-        self._publish_event("plan.replanned", {"task": inputs.get("task", "")})
-        return {"success": True, "replanned": True}
+        plan_id = inputs.get("plan_id")
+        plan = self._plan_manager.load_plan(plan_id) if plan_id else self._plan_manager.get_active_plan()
+        if plan is None:
+            return {"success": False, "error": "Plan not found"}
+
+        failed_task_id = inputs.get("failed_task_id")
+        if not failed_task_id:
+            failed_task_id = next(
+                (task.id for task in plan.tasks if getattr(task.status, "value", task.status) in {"failed", "blocked"}),
+                None,
+            )
+        if not failed_task_id:
+            return {"success": False, "error": "failed_task_id required"}
+
+        new_steps = inputs.get("new_steps")
+        proposal_id = None
+        try:
+            if not isinstance(new_steps, list) or not new_steps:
+                context = inputs.get("context", {})
+                failure = inputs.get("failure", inputs.get("task", ""))
+                prompt = f"Replan the existing task after this failure: {failure}. Context: {context}"
+                if hasattr(self._planner, "_agent_planner"):
+                    proposal = self._planner.create_plan(prompt, "", inputs.get("allow_mutations", True))
+                else:
+                    proposal = self._planner.create_plan(prompt, external_context="")
+                if proposal is None:
+                    return {"success": False, "error": "Planner returned no replacement plan"}
+                proposal_id = proposal.id
+                new_steps = [task.title for task in proposal.tasks]
+                if proposal_id != plan.id and hasattr(self._plan_manager, "delete_plan"):
+                    self._plan_manager.delete_plan(proposal_id)
+                self._plan_manager.set_active_plan(plan.id)
+
+            new_steps = [str(step).strip() for step in new_steps if str(step).strip()]
+            if not new_steps:
+                return {"success": False, "error": "new_steps must contain at least one replacement step"}
+            result = plan.replan_after_failure(
+                failed_task_id,
+                new_steps,
+                anchor_task_id=inputs.get("anchor_task_id"),
+            )
+            self._plan_manager.save_plan(plan)
+            self._publish_event("plan.replanned", {
+                "plan_id": plan.id,
+                "failed_task_id": failed_task_id,
+                "added_task_ids": result["added"],
+            })
+            return {
+                "success": True,
+                "replanned": True,
+                "plan_id": plan.id,
+                "invalidated": result["invalidated"],
+                "added": result["added"],
+                "steps": new_steps,
+            }
+        except Exception as e:
+            logger.error(f"Replanning failed: {e}")
+            return {"success": False, "error": str(e)}
 
     def action_get_plan(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
         """Get a plan by ID."""
@@ -607,42 +685,315 @@ class CommunicationHubCapability(BaseCapability):
         self._event_bus = eb
 
     def action_publish(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
-        """Publish an event."""
+        """Publish an event through the shared EventBus."""
         if not self._event_bus:
             return {"success": False, "error": "Event bus not initialized"}
 
         event_type = inputs.get("event_type", "")
+        if not isinstance(event_type, str) or not event_type.strip():
+            return {"success": False, "error": "event_type required"}
         data = inputs.get("data", {})
-        priority = inputs.get("priority", "normal")
+        priority_name = str(inputs.get("priority", "normal")).upper()
 
         try:
             from app.core.events import EventPriority
-            self._event_bus.publish(event_type, data, priority=EventPriority[priority.upper()])
-            return {"success": True, "published": True, "event_type": event_type}
+            priority = EventPriority[priority_name]
+            event = self._event_bus.emit(
+                event_type,
+                data,
+                source="capability:communication_hub",
+                priority=priority,
+            )
+            return {"success": True, "published": True, "event": event.to_dict()}
+        except KeyError:
+            return {"success": False, "error": f"Unknown event priority: {priority_name.lower()}"}
         except Exception as e:
             logger.error(f"Event publish failed: {e}")
             return {"success": False, "error": str(e)}
 
-    def action_subscribe(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
-        """Subscribe to events."""
-        if not self._event_bus:
-            return {"success": False, "error": "Event bus not initialized"}
-
-        # Note: Actual subscription requires a callback function
-        # This is a placeholder for the capability
-        return {"success": True, "message": "Subscriptions require callback registration in code"}
-
     def action_get_history(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
-        """Get event history."""
+        """Return recent events from the shared EventBus history."""
         if not self._event_bus:
             return {"success": False, "error": "Event bus not initialized"}
 
         try:
-            limit = inputs.get("limit", 100)
-            history = self._event_bus.get_history(limit=limit)
-            return {"success": True, "events": history}
+            limit = max(1, min(int(inputs.get("limit", 100)), 1000))
+            events = self._event_bus.history().get_recent(limit)
+            return {
+                "success": True,
+                "events": [event.to_dict() if hasattr(event, "to_dict") else event for event in events],
+            }
+        except (TypeError, ValueError):
+            return {"success": False, "error": "limit must be an integer"}
         except Exception as e:
             logger.error(f"Event history failed: {e}")
+            return {"success": False, "error": str(e)}
+
+
+# =============================================================================
+# Debugging Capability
+# =============================================================================
+
+class DebuggingCapability(BaseCapability):
+    """Repository diagnostics built on the canonical tools and verifier."""
+
+    def __init__(self):
+        super().__init__(CapabilityMetadata(
+            name="debugging",
+            version="1.0.0",
+            description="Inspect errors, run targeted diagnostics, and validate fixes",
+            category=CapabilityCategory.CUSTOM,
+            is_singleton=True,
+            auto_discoverable=True,
+            default_action="inspect_error",
+            supported_actions=["inspect_error", "run_diagnostics", "validate_fix"],
+        ))
+        self._tools = None
+        self._verifier = None
+        self._safety_gate = None
+
+    def set_components(self, tools, verifier, safety_gate):
+        self._tools = tools
+        self._verifier = verifier
+        self._safety_gate = safety_gate
+
+    def action_inspect_error(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        """Inspect an error message or a workspace file containing one."""
+        if not self._tools:
+            return {"success": False, "error": "Tools not initialized"}
+        path = inputs.get("path")
+        try:
+            if path:
+                result = self._tools.execute("read_file", path=path)
+                if not result.success:
+                    return {"success": False, "error": result.error}
+                details = result.output
+            else:
+                details = inputs.get("error", inputs.get("message", ""))
+                if not details:
+                    return {"success": False, "error": "path or error required"}
+            return {"success": True, "details": details}
+        except Exception as e:
+            logger.error(f"Error inspection failed: {e}")
+            return {"success": False, "error": str(e)}
+
+    def _authorize(self, operation: str, operation_type: str) -> Optional[Dict[str, Any]]:
+        if not self._safety_gate:
+            return {"success": False, "error": "Safety gate not initialized"}
+        try:
+            self._safety_gate.check_and_enforce(
+                operation,
+                operation_type,
+                {"capability": self.name},
+            )
+            return None
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def action_run_diagnostics(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        """Run a bounded diagnostic or targeted test command through SafetyGate."""
+        if not self._tools:
+            return {"success": False, "error": "Tools not initialized"}
+        command = inputs.get("command", "pytest -q")
+        if not isinstance(command, str) or not command.strip():
+            return {"success": False, "error": "command required"}
+        denied = self._authorize(command, "test_execution")
+        if denied:
+            return denied
+        try:
+            result = self._tools.execute("run_terminal", command=command)
+            return {
+                "success": result.success and result.output.get("code", 1) == 0,
+                "stdout": result.output.get("stdout", "") if result.success else "",
+                "stderr": result.output.get("stderr", result.error or "") if result.success else result.error,
+                "return_code": result.output.get("code", 1) if result.success else 1,
+            }
+        except Exception as e:
+            logger.error(f"Diagnostics failed: {e}")
+            return {"success": False, "error": str(e)}
+
+    def action_validate_fix(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        """Run the existing verification runner after the workflow safety check."""
+        if not self._verifier:
+            return {"success": False, "error": "Verifier not initialized"}
+        denied = self._authorize("validate proposed fix", "test_execution")
+        if denied:
+            return denied
+        try:
+            result = self._verifier.run_tests()
+            return {
+                "success": result.success,
+                "verified": result.success,
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+                "return_code": result.return_code,
+            }
+        except Exception as e:
+            logger.error(f"Fix validation failed: {e}")
+            return {"success": False, "error": str(e)}
+
+
+# =============================================================================
+# Dependency Management Capability
+# =============================================================================
+
+class DependencyManagementCapability(BaseCapability):
+    """Dependency inspection and explicitly authorized environment changes."""
+
+    def __init__(self):
+        super().__init__(CapabilityMetadata(
+            name="dependency_management",
+            version="1.0.0",
+            description="Inspect, validate, and safely manage project dependencies",
+            category=CapabilityCategory.CUSTOM,
+            is_singleton=True,
+            auto_discoverable=True,
+            default_action="inspect",
+            supported_actions=[
+                "inspect", "check_installed", "validate", "install", "update",
+                "remove", "verify_environment",
+            ],
+        ))
+        self._tools = None
+        self._verifier = None
+        self._safety_gate = None
+        self._auditor = None
+
+    def set_components(self, tools, verifier, safety_gate, auditor):
+        self._tools = tools
+        self._verifier = verifier
+        self._safety_gate = safety_gate
+        self._auditor = auditor
+
+    def _dependency_report(self) -> Dict[str, Any]:
+        if not self._auditor:
+            raise RuntimeError("Dependency auditor not initialized")
+        return self._auditor.check_dependencies()
+
+    def action_inspect(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        """Inspect declared dependency files using the existing auditor."""
+        try:
+            return {"success": True, "dependencies": self._dependency_report()}
+        except Exception as e:
+            logger.error(f"Dependency inspection failed: {e}")
+            return {"success": False, "error": str(e)}
+
+    def action_check_installed(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        """Compare declared packages with installed package metadata."""
+        try:
+            report = self._dependency_report()
+            requested = inputs.get("packages") or list(report["packages"])
+            installed = {}
+            for package in requested:
+                try:
+                    installed[package] = {
+                        "installed": True,
+                        "version": importlib.metadata.version(package),
+                    }
+                except importlib.metadata.PackageNotFoundError:
+                    installed[package] = {"installed": False, "version": None}
+            return {"success": True, "packages": installed}
+        except Exception as e:
+            logger.error(f"Installed dependency check failed: {e}")
+            return {"success": False, "error": str(e)}
+
+    def action_validate(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate that supported dependency files parse and contain packages."""
+        try:
+            report = self._dependency_report()
+            valid = bool(report["sources"]) and all(
+                isinstance(name, str) and name.strip()
+                for name in report["packages"]
+            )
+            return {
+                "success": valid,
+                "valid": valid,
+                "sources": report["sources"],
+                "package_count": len(report["packages"]),
+                "error": None if valid else "No supported dependency declarations found",
+            }
+        except Exception as e:
+            logger.error(f"Dependency validation failed: {e}")
+            return {"success": False, "valid": False, "error": str(e)}
+
+    def _mutate(self, action: str, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        if not self._tools:
+            return {"success": False, "error": "Tools not initialized"}
+        if not self._safety_gate:
+            return {"success": False, "error": "Safety gate not initialized"}
+        if inputs.get("authorized") is not True:
+            return {"success": False, "error": "Explicit authorization is required"}
+        package = inputs.get("package")
+        if not isinstance(package, str) or not package.strip():
+            return {"success": False, "error": "package required"}
+        ecosystem = str(inputs.get("ecosystem", "python")).lower()
+        if ecosystem == "python":
+            executable = shlex.quote(sys.executable)
+            package_arg = shlex.quote(package)
+            if action == "install":
+                command = f"{executable} -m pip install {package_arg}"
+            elif action == "update":
+                command = f"{executable} -m pip install --upgrade {package_arg}"
+            else:
+                command = f"{executable} -m pip uninstall -y {package_arg}"
+        elif ecosystem in {"node", "npm"}:
+            package_arg = shlex.quote(package)
+            command = {
+                "install": f"npm install {package_arg}",
+                "update": f"npm update {package_arg}",
+                "remove": f"npm uninstall {package_arg}",
+            }[action]
+        else:
+            return {"success": False, "error": f"Unsupported ecosystem: {ecosystem}"}
+        try:
+            self._safety_gate.check_and_enforce(
+                command,
+                "system_modification",
+                {"capability": self.name, "ecosystem": ecosystem, "package": package},
+            )
+            result = self._tools.execute("run_terminal", command=command)
+            return {
+                "success": result.success and result.output.get("code", 1) == 0,
+                "command": command,
+                "stdout": result.output.get("stdout", "") if result.success else "",
+                "stderr": result.output.get("stderr", result.error or "") if result.success else result.error,
+                "return_code": result.output.get("code", 1) if result.success else 1,
+            }
+        except Exception as e:
+            logger.error(f"Dependency {action} failed: {e}")
+            return {"success": False, "error": str(e)}
+
+    def action_install(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        return self._mutate("install", inputs)
+
+    def action_update(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        return self._mutate("update", inputs)
+
+    def action_remove(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        return self._mutate("remove", inputs)
+
+    def action_verify_environment(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        """Run the existing environment verification command through ToolManager."""
+        if not self._tools:
+            return {"success": False, "error": "Tools not initialized"}
+        command = inputs.get("command", f"{shlex.quote(sys.executable)} -m pip check")
+        if not self._safety_gate:
+            return {"success": False, "error": "Safety gate not initialized"}
+        try:
+            self._safety_gate.check_and_enforce(
+                command,
+                "dependency_verification",
+                {"capability": self.name},
+            )
+            result = self._tools.execute("run_terminal", command=command)
+            return {
+                "success": result.success and result.output.get("code", 1) == 0,
+                "stdout": result.output.get("stdout", "") if result.success else "",
+                "stderr": result.output.get("stderr", result.error or "") if result.success else result.error,
+                "return_code": result.output.get("code", 1) if result.success else 1,
+            }
+        except Exception as e:
+            logger.error(f"Dependency environment verification failed: {e}")
             return {"success": False, "error": str(e)}
 
 
@@ -1454,6 +1805,8 @@ def create_all_capabilities(agent=None) -> List[Capability]:
         LearningPipelineCapability(),
         SystemMonitoringCapability(),
         CommunicationHubCapability(),
+        DebuggingCapability(),
+        DependencyManagementCapability(),
         ToolRegistryCapability(),
         SafetyGuardCapability(),
         KnowledgeBaseCapability(),
@@ -1492,6 +1845,20 @@ def create_all_capabilities(agent=None) -> List[Capability]:
                 cap.set_observability(agent.observability)
             elif isinstance(cap, CommunicationHubCapability) and hasattr(agent, 'event_bus'):
                 cap.set_event_bus(agent.event_bus)
+            elif isinstance(cap, DebuggingCapability) and hasattr(agent, 'tools'):
+                cap.set_components(
+                    agent.tools,
+                    getattr(agent, 'verifier', None),
+                    getattr(agent, 'safety_gate', None),
+                )
+            elif isinstance(cap, DependencyManagementCapability) and hasattr(agent, 'tools'):
+                from app.audit.capability_auditor import CapabilityAuditor
+                cap.set_components(
+                    agent.tools,
+                    getattr(agent, 'verifier', None),
+                    getattr(agent, 'safety_gate', None),
+                    CapabilityAuditor(workspace=str(getattr(agent, 'workspace', '.'))),
+                )
             elif isinstance(cap, ToolRegistryCapability):
                 cap.set_tools(agent.tools)
             elif isinstance(cap, SafetyGuardCapability) and hasattr(agent, 'safety_gate'):
