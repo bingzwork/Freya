@@ -219,3 +219,22 @@ This audit inspected the production implementations and wiring rather than relyi
 ### Verification Evidence
 
 The focused runtime-performance and affected production-path suite passed: **28 tests** across incremental indexing, bounded caching, context generation, retrieval cache behavior, project intelligence, production retrieval integration, priority/background hardening, readiness, and authoritative capability wiring. Compilation also passed for the application and tests. No full-suite claim is made here because the repository's broader suite has documented environment/resource sensitivities.
+
+## Web Search and OSINT Status (2026-08-15)
+
+The existing `ResearchCapability`, `WebSearchTool`, `InternetResearchImporter`, `ToolManager`, capability registry/router, public-URL validator, provenance models, citation manager, and `VisionCapability` were audited before implementation. The working research path was preserved and extended rather than replaced.
+
+| Feature | Status | Verified final state |
+|---|---|---|
+| Standard Search | COMPLETE | Existing `WebSearchTool` remains the retrieval engine and now has a structured `WebSearchCapability` adapter that normalizes title, URL, snippet, domain, date, result type, and query provenance. |
+| Advanced Queries | COMPLETE | Added bounded query generation for exact phrases, `site:`, file types, years, aliases, and related search paths inside the search adapter. |
+| Archive Search | COMPLETE | Added public Wayback/CDX archive lookup with URL safety validation, snapshot provenance, bounded results, and graceful failure. |
+| Cross-Site Research | COMPLETE | Added bounded, depth-limited investigation orchestration across official, news, conference, PDF, profile, university, and archive search paths while reusing `WebSearchCapability`. |
+| Reverse Image Search | PARTIAL | Added a replaceable provider abstraction, provenance hashing, bounded result limits, and an explicit non-identity warning. A real external reverse-image provider remains configuration-dependent and is intentionally not faked. |
+| Image Intelligence | COMPLETE | Added image metadata/dimensions/format/EXIF extraction and optional reuse of the existing vision/OCR path when a vision collaborator is supplied. |
+
+The new adapters are nested under the existing `ResearchCapability` workflow capability and are callable through its existing registry, router, and ToolManager-facing execution path. No second registry, router, research orchestrator, provenance system, or safety boundary was introduced. Public URL validation and the existing safety model remain authoritative.
+
+### Verification Evidence
+
+The focused search/OSINT and existing capability suites passed: **67 tests** covering advanced query generation, archive handling, cross-site reuse, reverse-image safety boundaries, image intelligence, ResearchCapability action exposure, standard research, routing, and production wiring. Application and research-module compilation also passed.

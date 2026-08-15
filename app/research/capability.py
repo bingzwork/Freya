@@ -20,6 +20,7 @@ from urllib.parse import urlparse
 
 from app.orchestrator.capability_registry import Capability, CapabilityCategory, CapabilityMetadata, CapabilityState
 from app.software_engineering_knowledge.external_import import InternetResearchImporter
+from app.research.osint import WebSearchCapability, OSINTCapability
 
 logger = logging.getLogger(__name__)
 
@@ -557,6 +558,7 @@ class ResearchCapability(Capability):
         "facts": "research::fact_extractor",
         "cross_reference": "research::cross_reference",
         "citations": "research::citation_manager",
+        "archive": "research::archive_search",
     }
 
     def __init__(self):
@@ -569,7 +571,7 @@ class ResearchCapability(Capability):
             auto_discoverable=True,
             safe_query=True,
             default_action="search_web",
-            supported_actions=["search_web", "read_page", "research_topic", "compare_sources", "verify_claim", "learn_finding"],
+            supported_actions=["search_web", "read_page", "research_topic", "compare_sources", "verify_claim", "learn_finding", "archive_search", "advanced_search", "cross_site_research", "reverse_image_search", "image_intelligence"],
             tags=["research", "web", "search", "sources", "citations", "verify", "evidence"],
             required_collaborators=["tool_manager"],
         )
@@ -583,6 +585,8 @@ class ResearchCapability(Capability):
         self.fact_extractor = FactExtractor()
         self.cross_reference = CrossReference()
         self.citation_manager = CitationManager()
+        self.web_search = WebSearchCapability(self.search_tool)
+        self.osint = OSINTCapability(self.web_search)
 
     # The registry expects an instance of its Capability class.  Rather than
     # duplicate BaseCapability’s implementation, expose the same small public
@@ -637,6 +641,7 @@ class ResearchCapability(Capability):
         """Register every research stage as a named ToolManager tool."""
         self._tool_manager = tool_manager
         tool_manager.register(self.TOOL_NAMES["search"], lambda **kwargs: self.search_tool.search(**kwargs))
+        tool_manager.register(self.TOOL_NAMES["archive"], lambda **kwargs: self.web_search.archive_search(**kwargs))
         tool_manager.register(self.TOOL_NAMES["read"], lambda **kwargs: self.page_reader.read(**kwargs))
         tool_manager.register(self.TOOL_NAMES["evaluate"], lambda **kwargs: _jsonable(self.source_evaluator.evaluate(**kwargs)))
         tool_manager.register(self.TOOL_NAMES["facts"], lambda **kwargs: _jsonable(self.fact_extractor.extract(**kwargs)))
@@ -682,6 +687,21 @@ class ResearchCapability(Capability):
             {"query": query[:200], "result_count": len(result["results"]), "error_count": len(result.get("errors", []))},
         )
         return result
+
+    def action_advanced_search(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        return self.web_search.search(str(inputs.get("query") or ""), max_results=int(inputs.get("max_results", 5)), advanced=inputs.get("options") or inputs.get("advanced"))
+
+    def action_archive_search(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        return self._invoke("archive", url_or_query=str(inputs.get("url") or inputs.get("query") or ""), max_results=int(inputs.get("max_results", 10)))
+
+    def action_cross_site_research(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        return self.osint.cross_site_research(str(inputs.get("topic") or inputs.get("query") or ""), max_results=int(inputs.get("max_results", 10)), depth=int(inputs.get("depth", 1)))
+
+    def action_reverse_image_search(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        return self.osint.reverse_image_search(str(inputs.get("image_path") or inputs.get("path") or ""), limit=int(inputs.get("limit", 10)))
+
+    def action_image_intelligence(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        return self.osint.image_intelligence(str(inputs.get("image_path") or inputs.get("path") or ""), question=str(inputs.get("question") or "Extract useful public-investigation clues"))
 
     def action_read_page(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
         url = inputs.get("url")
