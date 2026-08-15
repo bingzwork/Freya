@@ -24,6 +24,9 @@ class TestRuntimeAwareness:
         orch.state = Mock()
         orch.state.value = "running"
         orch._start_time = time.time()
+        orch.get_system_status = Mock(return_value={
+            "orchestrator": {"uptime_seconds": 0},
+        })
 
         # Mock activity reporter
         reporter = Mock()

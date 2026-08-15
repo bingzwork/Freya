@@ -3,6 +3,7 @@
 import pytest
 import tempfile
 from pathlib import Path
+from unittest.mock import AsyncMock
 from datetime import datetime, timezone
 
 from app.software_engineering_knowledge.models import (
@@ -872,8 +873,9 @@ class TestExternalImport:
     @pytest.mark.asyncio
     async def test_external_import_stubs(self):
         importer = ExternalKnowledgeImporter()
+        importer.http_client.get = AsyncMock(return_value=None)
 
-        # All return not implemented errors
+        # Simulate unavailable external services at the HTTP boundary.
         result = await importer.import_from_source("python_docs", "query")
         assert not result.success
         assert len(result.errors) > 0

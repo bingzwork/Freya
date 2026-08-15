@@ -667,8 +667,9 @@ class TestScheduleItem:
 
     def test_item_creation(self):
         """Test creating a schedule item."""
-        now = datetime.now(timezone.utc).isoformat()
-        end = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
+        base_time = datetime.now(timezone.utc)
+        now = base_time.isoformat()
+        end = (base_time + timedelta(hours=2)).isoformat()
         item = ScheduleItem(task_id="task1", start_time=now, end_time=end)
         assert item.task_id == "task1"
         assert item.duration == timedelta(hours=2)
