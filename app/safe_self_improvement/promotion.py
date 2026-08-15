@@ -286,8 +286,18 @@ class PatchPromotionManager:
 
         metadata = {}
         metadata.update(getattr(candidate, "metadata", {}) or {})
-        metadata.update(getattr(execution_result, "metadata", {}) or {})
+        execution_metadata = getattr(execution_result, "metadata", {}) or {}
+        metadata.update(execution_metadata)
         rollback_plan = metadata.get("rollback_plan") or metadata.get("rollback_checkpoint_id", "")
+
+        # Before/after evidence is additional promotion evidence.  When a
+        # candidate explicitly requires it, malformed, missing, regressed, or
+        # inconclusive comparisons fail closed before the safety evaluator runs.
+        if (getattr(candidate, "metadata", {}) or {}).get("measurement_required"):
+            measurement_errors = self._validate_measurement_evidence(
+                execution_metadata.get("improvement_evidence")
+            )
+            evidence_errors.extend(measurement_errors)
 
         try:
             confidence = candidate.confidence
@@ -351,6 +361,24 @@ class PatchPromotionManager:
 
         return gate_result
 
+    @staticmethod
+    def _validate_measurement_evidence(evidence: Any) -> List[str]:
+        if not isinstance(evidence, dict):
+            return ["Required improvement measurement evidence is missing or malformed"]
+        if evidence.get("valid") is not True:
+            return ["Improvement measurement evidence is invalid or inconclusive"]
+        comparisons = evidence.get("comparisons")
+        if not isinstance(comparisons, dict) or not comparisons:
+            return ["Improvement measurement comparisons are missing"]
+        statuses = {item.get("status") for item in comparisons.values() if isinstance(item, dict)}
+        if "inconclusive" in statuses:
+            return ["Improvement measurement contains inconclusive metrics"]
+        if "regressed" in statuses:
+            return ["Improvement measurement detected a regression"]
+        if "improved" not in statuses:
+            return ["Improvement measurement provides no improvement evidence"]
+        return []
+
     def _run_stage(
         self,
         candidate: ImprovementCandidate,
@@ -378,6 +406,8 @@ class PatchPromotionManager:
     ) -> Dict[str, Any]:
         """Run verification stage - check execution verification results."""
         details = {}
+        if execution_result.metadata.get("improvement_evidence") is not None:
+            details["improvement_evidence"] = execution_result.metadata["improvement_evidence"]
 
         # The mandatory safety preflight has already validated this evidence.
         verification = execution_result.verification_results

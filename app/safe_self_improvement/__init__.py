@@ -21,6 +21,15 @@ from app.safe_self_improvement.rollback import RollbackManager, RollbackCheckpoi
 from app.safe_self_improvement.promotion import PatchPromotionManager, PromotionResult, PromotionStage
 from app.safe_self_improvement.policies import SelfImprovementPolicy, PolicyEngine
 from app.safe_self_improvement.self_improvement import SafeSelfImprovementEngine, create_self_improvement_engine
+from app.safe_self_improvement.measurement import (
+    MetricDirection,
+    ComparisonStatus,
+    MetricMeasurement,
+    MetricComparison,
+    ImprovementEvidence,
+    ImprovementMeasurement,
+    measure_improvement,
+)
 from app.safe_self_improvement.models import (
     SafeSelfImprovementConfig,
     ImprovementCandidate,
@@ -79,4 +88,12 @@ __all__ = [
     "ExecutionResult",
     "RollbackCheckpoint",
     "RollbackReason",
+    # Before/after evidence
+    "MetricDirection",
+    "ComparisonStatus",
+    "MetricMeasurement",
+    "MetricComparison",
+    "ImprovementEvidence",
+    "ImprovementMeasurement",
+    "measure_improvement",
 ]
