@@ -160,3 +160,90 @@ There are **no remaining MVP tasks**. The six dependency-first P1/P2 hardening t
 | **G3** | Add scenario benchmarks and regression dashboards for grounded answers, capability execution, provider outage recovery, and learning quality. | Converts reliability into measurable product velocity and protects future feature growth from silent regressions. | A repeatable local benchmark reports quality, latency, safe-failure rate, and learning-promotion outcomes by release. |
 | **G4** | Improve local-model resilience with provider warm-up, model availability diagnostics, and bounded retry/backoff policies. | Reduces perceived downtime and improves response quality where local models are available, without weakening safe fallback behavior. | The runtime recovers from local-provider restart/model availability changes and reports state transitions through readiness and correlation data. |
 | **G5** | Mature long-term autonomy through user-configured goal policies, work budgets, and transparent review queues. | Increases recurring value while keeping autonomous action bounded, reviewable, and aligned with user intent. | Autonomous work respects explicit budgets and approval policy, is traceable by correlation identifier, and can be paused or reviewed locally. |
+
+
+## Capability Audit (2026-08-15)
+
+This read-only audit evaluated registered and callable capabilities against the actual production path: implementation → registration → `CapabilityRegistry` → `CapabilityRouter` → supported execution. Core infrastructure such as `ConversationControl`, `Intelligence`, `MemoryCoordinator`, `WorkflowOrchestrator`, `SafetyGate`, `BackgroundJobService`, verification, routing, and learning was not counted as a user-facing capability merely because it exists.
+
+| Capability | Status | What Actually Exists | What Is Missing |
+|---|---|---|---|
+| Web Search | ✅ **IMPLEMENTED** | Exposed through `research_capability.search_web`, the existing bridge, and the research importer/tool path. | No material blocker in the audited scope. |
+| Research | ✅ **IMPLEMENTED** | Registered, router-reachable, ToolManager-mediated, source-aware, and equipped with research and verification actions. | Network and source availability remain operational dependencies. |
+| File Input | ✅ **IMPLEMENTED** | Validates local paths through the centralized allowlist and returns normalized metadata. | No material blocker in the audited scope. |
+| File Output | ✅ **IMPLEMENTED** | Creates or copies artifacts, validates destinations, and refuses implicit overwrite. | No material blocker in the audited scope. |
+| Document / Content Editing | ✅ **IMPLEMENTED** | Supports DOCX, Markdown, TXT, PDF, HTML, XLSX/CSV, and PPTX with inspection, editing, export, validation, and versioned output. | Complex PDF/DOCX/PPTX layout-preserving edits remain limited by format semantics and library coverage. |
+| Browser Automation | ✅ **IMPLEMENTED** | Supports navigation, interaction, page reading, uploads/downloads, tabs, screenshots, persistent profiles, and SafetyGate review for consequential actions. | Intentionally not natural-language auto-discoverable; real use requires Playwright/Chromium availability. |
+| Python / Shell / Run Tests / Repository Editing / Git | 🟡 **PARTIAL** | `code_execution` declares command, verification, and patch actions; ToolManager contains shell, file, formatting, and Git tools. | The production initializer does not bind the registered capability to its executor, verifier, patch engine, or ToolManager. A direct named call returns `Tools not initialized`. Direct command execution also does not itself enforce SafetyGate. PowerShell is not a distinct supported capability. |
+| Debugging / Dependency Management | 🟡 **PARTIAL** | Shell, file, formatting, Git, and verification primitives exist. | No dedicated registered capability or complete production capability boundary exists. |
+| Memory Management | 🟡 **PARTIAL** | Store, retrieve, and consolidate actions exist; the durable MemoryCoordinator path works separately. | The registered capability's agent-memory collaborator is not bound by the production initializer. |
+| Planning | 🟡 **PARTIAL** | Plan creation and retrieval logic exists. | Planner, PlanManager, and DecisionManager are not bound to the production-registered instance; `replan` is largely an acknowledgement rather than complete replanning. |
+| Decision | 🟡 **PARTIAL** | A real DecisionManager adapter exists. | DecisionManager is not injected into the production-registered capability. |
+| Learning | 🟡 **PARTIAL** | Reflection, consolidation, and lesson-storage actions exist. | The wrapper expects a legacy agent collaborator and is not bound to the initializer-owned LearningPipeline/MemoryCoordinator path. |
+| System Monitoring | 🟡 **PARTIAL** | Health, metrics, and component checks exist. | The registered wrapper is not injected with the initializer-owned ObservabilityHub; core readiness works separately. |
+| Communication | 🟡 **PARTIAL** | Event publication and history actions exist. | Subscription is explicitly a placeholder requiring callback registration in code; this is not a complete external messaging surface. |
+| Tool Registry | 🟡 **PARTIAL** | Tool listing and execution actions exist; ToolManager has real tools. | The registered wrapper does not receive ToolManager and direct actions return `Tools not initialized`. |
+| Safety Guard | 🟡 **PARTIAL** | The wrapper calls the real SafetyGate API. | The registered wrapper is not bound to the initializer-owned SafetyGate; SafetyGate itself remains core infrastructure. |
+| Knowledge Base | 🟡 **PARTIAL** | Semantic search and storage logic exists. | The registered wrapper's agent/semantic-memory collaborator is not bound; durable retrieval works through a separate path. |
+| Reasoning | 🟡 **PARTIAL** | Agent-side reasoning/LLM adapter logic exists. | No production agent/LLM collaborator is bound, so direct calls return `LLM not available`. |
+| Orchestration | 🟡 **PARTIAL** | Workflow execution and status actions exist. | The WorkflowOrchestrator is created after capability registration and is not late-bound into the registered wrapper. |
+| Desktop / Computer Control | 🔴 **NOT IMPLEMENTED** | Browser and local file tools exist, but no desktop-control capability exists. | Opening applications, screen-state reading, drag/drop, Windows control, and cross-application coordination are missing. |
+| Audio / Podcast Processing | 🔴 **NOT IMPLEMENTED** | No registered audio or podcast capability was found. | Transcription, diarization, cleanup, chapters, clip detection, and WAV/MP3 export are missing. |
+| Video Editing | 🔴 **NOT IMPLEMENTED** | No registered video capability was found. | Editing, captions, subtitles, logos, conversion, clip extraction, and Shorts/Reels generation are missing. |
+| Image Generation / Editing | 🔴 **NOT IMPLEMENTED** | No registered image capability was found. | Generation, thumbnails, graphics, resizing, cropping, background removal, object replacement, enhancement, and conversion are missing. |
+| Automation / Scheduling | 🟡 **PARTIAL** | BackgroundJobService, AutonomyManager, MaintenanceManager, watchdogs, and recurring internal maintenance exist. | No registered callable capability accepts user-defined schedules, recurring workflows, folder watching, website monitoring, reminders, or triggered processing. |
+| Email | 🔴 **NOT IMPLEMENTED** | No registered email capability or production email adapter was found. | Email read/search/draft/send operations are missing. |
+| Calendar | 🔴 **NOT IMPLEMENTED** | No registered calendar capability was found. | Calendar event operations and reminders are missing. |
+| Contacts / CRM | 🔴 **NOT IMPLEMENTED** | No registered contacts or CRM capability was found. | Contact and CRM operations are missing. |
+| Database / SQL | 🔴 **NOT IMPLEMENTED** | Internal durable stores exist, but no registered database/SQL capability is exposed. | Safe, scoped, parameterized database operations are missing. |
+| Voice | 🔴 **NOT IMPLEMENTED** | No registered voice capability was found. | Speech input/output and voice-session actions are missing. |
+| Vision / OCR | 🔴 **NOT IMPLEMENTED** | No registered vision or OCR capability was found. | Image understanding, OCR extraction, and structured visual evidence are missing. |
+| Data Analysis | 🔴 **NOT IMPLEMENTED** | Data libraries may exist, but no registered data-analysis capability exists. | Callable analysis, computation, and visualization boundaries are missing. |
+| API Connector | 🔴 **NOT IMPLEMENTED** | Generic HTTP tools exist, but no registered connector capability exists. | A credential-safe, allowlisted, approval-aware API connector surface is missing. |
+| Messaging | 🔴 **NOT IMPLEMENTED** | Internal event communication exists; no external messaging capability was found. | External messaging-provider actions are missing. |
+| Smart Home / IoT | 🔴 **NOT IMPLEMENTED** | No registered IoT or smart-home capability was found. | Device discovery, state reads, and safe actuation are missing. |
+
+### Audit: capabilities still not implemented
+
+Desktop / Computer Control; Audio / Podcast Processing; Video Editing; Image Generation / Editing; Email; Calendar; Contacts / CRM; Database / SQL; Voice; Vision / OCR; Data Analysis; API Connector; Messaging; and Smart Home / IoT remain **NOT IMPLEMENTED**.
+
+### Audit: partially implemented capabilities
+
+The main partial area is the development surface: the low-level ToolManager is substantial, but the registered `code_execution` capability is not bound to the production executor, verifier, patch engine, or ToolManager, and it does not itself enforce SafetyGate before command execution. Planning, decision, memory, learning, monitoring, tool registry, safety guard, knowledge base, reasoning, and orchestration wrappers similarly expose meaningful methods but lack production collaborator binding. Automation has real internal scheduling infrastructure but no callable user-facing automation capability. Communication has event publication/history but its subscription action is explicitly a placeholder.
+
+### Audit: placeholder or unreachable capability behavior
+
+The clearest placeholder is `communication_hub` subscription: it returns a success message stating that subscriptions require callback registration in code, rather than providing a real runtime subscription interface. The broader legacy wrappers are classified **PARTIAL**, not placeholder, because they are registered, have callable action methods, and are reachable by named router execution; their current failure mode is missing collaborator binding.
+
+### Recommended next ten capability implementations
+
+1. Production Code Execution / Development, by wiring the existing capability to the canonical executor, verifier, patch engine, ToolManager, and SafetyGate.
+2. Callable Automation / Scheduling over BackgroundJobService for schedules, recurring workflows, reminders, and triggers.
+3. Data Analysis for safe CSV/XLSX/JSON analysis and visualization.
+4. OCR / Vision for image, PDF, and structured visual extraction.
+5. Email with provider adapters and approval for sending or destructive actions.
+6. Calendar with confirmation for invitations and cancellations.
+7. API Connector with credential-safe, allowlisted HTTP operations.
+8. Audio / Podcast Processing for transcription, cleanup, chaptering, clip candidates, and export.
+9. Image Generation / Editing behind a media adapter.
+10. Video Editing with deterministic editing and separate analysis/generation actions.
+
+### Capability architecture verdict
+
+**🟡 MOSTLY READY — MINOR ARCHITECTURE WORK NEEDED.**
+
+For built-in capabilities registered before production router construction, the actual flow is supported:
+
+```text
+Capability implementation
+→ create_all_capabilities()
+→ CapabilityRegistry.register()
+→ UnifiedRouter's CapabilityRegistrationBridge.sync()
+→ CapabilityRouter
+→ ToolManager adapter
+→ named capability execution
+```
+
+Research, Browser, File Input, File Output, and Document Editing demonstrate usable implementations on this path. The model is not fully plug-and-play for arbitrary capabilities because lifecycle dependency injection/readiness validation is incomplete, and late-registered capabilities require an explicit bridge registration call rather than automatic router projection. A new capability can be added without replacing core architecture, but collaborators and late-registration routing still require manual integration.
+
+**Repository changes made by the audit: NONE.** This section records a read-only audit; the audit itself made no source, test, architecture, or configuration changes.
