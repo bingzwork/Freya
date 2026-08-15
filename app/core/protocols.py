@@ -120,6 +120,7 @@ class SystemConfig:
         enable_observability: bool = True,
         shutdown_timeout_seconds: float = 10.0,
         workspace: Optional[Path] = None,
+        autonomy_config: Optional[Any] = None,
     ):
         self.enable_autonomy = enable_autonomy
         self.enable_orchestrator = enable_orchestrator
@@ -130,6 +131,7 @@ class SystemConfig:
         self.enable_observability = enable_observability
         self.shutdown_timeout_seconds = max(0.1, float(shutdown_timeout_seconds))
         self.workspace = workspace
+        self.autonomy_config = autonomy_config
 
 
 class InfrastructureBundle:

@@ -366,6 +366,7 @@ class SystemInitializer:
         autonomy = None
         if self.config.enable_autonomy:
             autonomy = AutonomyManager(
+                config=self.config.autonomy_config,
                 event_bus=event_bus,
                 observability=observability,
                 learning_pipeline=None,

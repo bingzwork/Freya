@@ -6,7 +6,12 @@ import pytest
 
 from app.autonomy.models import AutonomyConfig, WatchdogEventType, WatchdogSeverity
 from app.autonomy.watchdog import Watchdog
-from app.core.background_jobs import BackgroundJobService, JobTriggerConfig, JobTriggerType
+from app.core.background_jobs import (
+    BackgroundJobService,
+    JobStatus,
+    JobTriggerConfig,
+    JobTriggerType,
+)
 from app.core.correlation import correlation_scope
 from app.core.events import Event, EventBus
 from app.orchestrator.capability_registry import (
@@ -61,6 +66,19 @@ def test_watchdog_deduplicates_replayed_observations_before_learning_queue():
         )
 
     assert len(pipeline.candidates) == 1
+
+
+def test_running_recurring_job_is_not_redispatched():
+    jobs = BackgroundJobService()
+    jobs.schedule(
+        "recurring-job",
+        lambda: None,
+        JobTriggerConfig(type=JobTriggerType.RECURRING, interval_seconds=1.0),
+    )
+    job = jobs.get_job("recurring-job")
+    job.status = JobStatus.RUNNING
+
+    assert job.is_ready(current_time=job.trigger_time + 10.0) is False
 
 
 def test_event_and_background_job_lifecycle_retain_one_correlation_identifier():

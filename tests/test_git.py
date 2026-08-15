@@ -994,12 +994,15 @@ class TestGitManager:
             assert len(branches) >= 0
 
     def test_manager_create_branch(self):
-        """Test creating a branch."""
+        """Test creating a branch from a realistic repository state."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            # Initialize a git repo
+            # Initialize a git repo with an initial commit so a branch has a base.
             subprocess.run(["git", "init"], cwd=tmpdir, capture_output=True)
             subprocess.run(["git", "config", "user.name", "Test"], cwd=tmpdir, capture_output=True)
             subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmpdir, capture_output=True)
+            Path(tmpdir, "README.md").write_text("test repository\n")
+            subprocess.run(["git", "add", "README.md"], cwd=tmpdir, capture_output=True, check=True)
+            subprocess.run(["git", "commit", "-m", "initial"], cwd=tmpdir, capture_output=True, check=True)
 
             manager = GitManager(workspace=tmpdir)
             result = manager.create_branch("feature")
@@ -1008,15 +1011,18 @@ class TestGitManager:
             assert result["success"] is True or "already exists" in result.get("stderr", "").lower()
 
     def test_manager_checkout(self):
-        """Test checking out a branch."""
+        """Test checking out a branch from a realistic repository state."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            # Initialize a git repo
+            # Initialize a git repo with an initial commit before creating branches.
             subprocess.run(["git", "init"], cwd=tmpdir, capture_output=True)
             subprocess.run(["git", "config", "user.name", "Test"], cwd=tmpdir, capture_output=True)
             subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmpdir, capture_output=True)
+            Path(tmpdir, "README.md").write_text("test repository\n")
+            subprocess.run(["git", "add", "README.md"], cwd=tmpdir, capture_output=True, check=True)
+            subprocess.run(["git", "commit", "-m", "initial"], cwd=tmpdir, capture_output=True, check=True)
 
             # Create a branch
-            subprocess.run(["git", "branch", "feature"], cwd=tmpdir, capture_output=True)
+            subprocess.run(["git", "branch", "feature"], cwd=tmpdir, capture_output=True, check=True)
 
             manager = GitManager(workspace=tmpdir)
             result = manager.checkout("feature")

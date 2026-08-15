@@ -1,8 +1,20 @@
 from pathlib import Path
 
+from app.autonomy.models import AutonomyConfig
 from app.core.protocols import SystemConfig
 from app.learning.models import LearningCandidate, LearningCandidateType
+from app.orchestrator.capability_registry import reset_capability_registry
 from main import FreyaApp
+
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def isolate_capability_registry():
+    reset_capability_registry()
+    yield
+    reset_capability_registry()
 
 
 def _start(tmp_path: Path, enabled: bool) -> FreyaApp:
@@ -10,7 +22,20 @@ def _start(tmp_path: Path, enabled: bool) -> FreyaApp:
     workspace.mkdir()
     app = FreyaApp(
         workspace,
-        SystemConfig(workspace=workspace, enable_autonomy=enabled),
+        SystemConfig(
+            workspace=workspace,
+            enable_autonomy=enabled,
+            enable_orchestrator=False,
+            enable_diagnostics=False,
+            enable_self_improvement=False,
+            enable_file_watcher=False,
+            enable_config_hot_reload=False,
+            autonomy_config=AutonomyConfig(
+                watchdog_enabled=False,
+                self_initiated_enabled=False,
+                maintenance_enabled=False,
+            ),
+        ),
     )
     app.start()
     return app
@@ -53,7 +78,10 @@ def test_background_learning_handoff_reaches_durable_memory(tmp_path: Path):
         assert pipeline._drain_pending() >= 1
 
         experiences = list(app.system.memory.experience_memory.all())
-        assert any("Task11Test" in entry.description for entry in experiences)
+        assert any(
+            entry.metadata.get("source_component") == "Task11Test"
+            for entry in experiences
+        )
         assert (app.workspace / "data" / "memory" / "experience_memory.json").exists()
     finally:
         app.shutdown()

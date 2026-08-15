@@ -35,6 +35,18 @@ def git_repo(tmp_path: Path) -> Path:
         capture_output=True,
         check=True
     )
+    subprocess.run(
+        ["git", "config", "color.ui", "false"],
+        cwd=tmp_path,
+        capture_output=True,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "color.branch", "false"],
+        cwd=tmp_path,
+        capture_output=True,
+        check=True,
+    )
 
     # Create a test file and commit it
     (tmp_path / "test.txt").write_text("original content")

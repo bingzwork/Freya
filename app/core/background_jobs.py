@@ -282,7 +282,7 @@ class Job:
                 return False
             if self.is_paused():
                 return False
-            if self.status == JobStatus.COMPLETED:
+            if self.status in {JobStatus.RUNNING, JobStatus.COMPLETED}:
                 return False
             if self.max_runs is not None and self.run_count >= self.max_runs:
                 self.status = JobStatus.COMPLETED

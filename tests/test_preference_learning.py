@@ -17,6 +17,7 @@ from app.memory import (
     apply_preferences,
     reset_global_learner,
 )
+import app.memory.preference_learning as preference_learning_module
 
 
 class TestUserPreference:
@@ -237,8 +238,19 @@ class TestPreferenceApplier:
 class TestConvenienceFunctions:
     """Test module-level convenience functions."""
 
-    def setup_method(self):
-        """Reset global learner before each test."""
+    @pytest.fixture(autouse=True)
+    def isolated_global_learner(self, tmp_path, monkeypatch):
+        """Use an explicitly allowed temporary workspace for global helpers."""
+        learner = PreferenceLearner(
+            create_long_term_memory(workspace=str(tmp_path), storage_path="prefs.json")
+        )
+        monkeypatch.setattr(
+            preference_learning_module,
+            "get_preference_learner",
+            lambda: learner,
+        )
+        monkeypatch.setattr(preference_learning_module, "_applier", None)
+        yield
         reset_global_learner()
 
     def test_learn_from_interaction(self):
