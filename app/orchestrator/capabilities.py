@@ -75,7 +75,7 @@ class MemoryManagementCapability(BaseCapability):
             default_action="store",
             supported_actions=["store", "retrieve", "consolidate"],
         ))
-        self._agent_memory = None
+        self._memory = None
 
     def _initialize(self) -> bool:
         return True
@@ -86,70 +86,94 @@ class MemoryManagementCapability(BaseCapability):
     def _deactivate(self) -> bool:
         return True
 
-    def set_agent_memory(self, memory):
-        """Set the agent's memory systems."""
-        self._agent_memory = memory
+    def set_memory_coordinator(self, memory):
+        """Bind the initializer-owned MemoryCoordinator."""
+        self._memory = memory
+
+    @staticmethod
+    def _entry_value(value: Any) -> Any:
+        return value.to_dict() if hasattr(value, "to_dict") else value
 
     def action_store(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
-        """Store information in memory."""
-        if not self._agent_memory:
-            return {"success": False, "error": "Memory not initialized"}
-
-        content = inputs.get("content", "")
+        """Store through MemoryCoordinator and its owned memory modules."""
+        if not self._memory:
+            return {"success": False, "error": "MemoryCoordinator unavailable"}
+        content = str(inputs.get("content", "")).strip()
         memory_type = inputs.get("type", "experience")
-        metadata = inputs.get("metadata", {})
-
+        metadata = inputs.get("metadata", {}) or {}
+        if not content:
+            return {"success": False, "error": "content required"}
         try:
-            if memory_type == "experience" and hasattr(self._agent_memory, 'experience_memory'):
-                result = self._agent_memory.experience_memory.store(content, metadata)
-            elif memory_type == "project" and hasattr(self._agent_memory, 'memory'):
-                result = self._agent_memory.memory.record(content, metadata)
-            elif memory_type == "task" and hasattr(self._agent_memory, 'task_memory'):
-                result = self._agent_memory.task_memory.store(inputs.get("task_id", ""), content)
+            if memory_type == "experience":
+                from app.memory.experience_memory import ExperienceEntry
+                entry = self._memory.add_experience(ExperienceEntry(
+                    id="",
+                    title=str(metadata.get("title", "Capability memory")),
+                    description=content,
+                    category=str(metadata.get("category", "capability")),
+                    tags=list(metadata.get("tags", [])),
+                    outcome=str(metadata.get("outcome", "neutral")),
+                    confidence=float(metadata.get("confidence", 0.5)),
+                    metadata=metadata,
+                    source="memory_management",
+                ))
+                result_id = getattr(entry, "id", None)
+            elif memory_type == "project":
+                result = self._memory.project_memory.record(
+                    str(metadata.get("kind", "memory")),
+                    {"content": content, **metadata},
+                )
+                result_id = result.get("timestamp") if isinstance(result, dict) else result
+            elif memory_type == "semantic":
+                result_id = self._memory.store_learned({
+                    "learning_type": "knowledge",
+                    "title": str(metadata.get("title", "Capability knowledge")),
+                    "content": content,
+                    "category": str(metadata.get("category", "general")),
+                    "confidence": float(metadata.get("confidence", 0.5)),
+                    "source": "memory_management",
+                    "tags": list(metadata.get("tags", [])),
+                    "metadata": metadata,
+                })
             else:
                 return {"success": False, "error": f"Unknown memory type: {memory_type}"}
-
             self._publish_event("memory.stored", {"type": memory_type, "content": content[:100]})
-            return {"success": True, "stored": True, "id": str(result) if result else None}
+            return {"success": True, "stored": True, "id": str(result_id) if result_id else None}
         except Exception as e:
             logger.error(f"Memory store failed: {e}")
             return {"success": False, "error": str(e)}
 
     def action_retrieve(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
-        """Retrieve information from memory."""
-        if not self._agent_memory:
-            return {"success": False, "error": "Memory not initialized"}
-
-        query = inputs.get("query", "")
+        """Retrieve through MemoryCoordinator’s unified or owned read surfaces."""
+        if not self._memory:
+            return {"success": False, "error": "MemoryCoordinator unavailable"}
+        query = str(inputs.get("query", ""))
         memory_type = inputs.get("type", "unified")
-        limit = inputs.get("limit", 10)
-
+        limit = max(1, min(int(inputs.get("limit", 10)), 100))
         try:
-            if memory_type == "unified" and hasattr(self._agent_memory, 'unified_retrieval'):
-                results = self._agent_memory.unified_retrieval.retrieve(query, limit=limit)
-            elif memory_type == "experience" and hasattr(self._agent_memory, 'experience_memory'):
-                results = self._agent_memory.experience_memory.search(query, limit=limit)
-            elif memory_type == "project" and hasattr(self._agent_memory, 'memory'):
-                results = self._agent_memory.memory.search(query, limit=limit)
-            elif memory_type == "semantic" and hasattr(self._agent_memory, 'semantic_memory'):
-                results = self._agent_memory.semantic_memory.search(query, limit=limit)
+            if memory_type == "unified":
+                results = self._memory.unified_retrieval.retrieve(query)[:limit]
+            elif memory_type == "experience":
+                results = self._memory.experience_memory.search(query, limit=limit)
+            elif memory_type == "project":
+                results = self._memory.project_memory.search(query, limit=limit)
+            elif memory_type == "semantic":
+                results = self._memory.semantic_memory.search(query, limit=limit)
             else:
                 return {"success": False, "error": f"Unknown memory type: {memory_type}"}
-
-            return {"success": True, "results": results}
+            return {"success": True, "results": [self._entry_value(result) for result in results]}
         except Exception as e:
             logger.error(f"Memory retrieve failed: {e}")
             return {"success": False, "error": str(e)}
 
     def action_consolidate(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
-        """Trigger memory consolidation."""
-        if not self._agent_memory or not hasattr(self._agent_memory, 'consolidation_engine'):
-            return {"success": False, "error": "Consolidation engine not available"}
-
+        """Trigger consolidation through the coordinator-owned engine."""
+        if not self._memory or not hasattr(self._memory, "consolidation_engine"):
+            return {"success": False, "error": "MemoryCoordinator unavailable"}
         try:
-            self._agent_memory.consolidation_engine.run_consolidation()
+            result = self._memory.consolidation_engine.run_consolidation()
             self._publish_event("memory.consolidated", {})
-            return {"success": True, "consolidated": True}
+            return {"success": True, "consolidated": True, "result": result}
         except Exception as e:
             logger.error(f"Memory consolidation failed: {e}")
             return {"success": False, "error": str(e)}
@@ -480,8 +504,7 @@ class DecisionEngineCapability(BaseCapability):
 # =============================================================================
 
 class LearningPipelineCapability(BaseCapability):
-    """Continuous learning capability."""
-
+    """Thin adapter over the authoritative LearningPipeline."""
     def __init__(self):
         super().__init__(CapabilityMetadata(
             name="learning_pipeline",
@@ -493,7 +516,9 @@ class LearningPipelineCapability(BaseCapability):
             default_action="reflect",
             supported_actions=["reflect", "consolidate", "store_lesson"],
         ))
-        self._agent = None
+        self._pipeline = None
+        self._memory = None
+
 
     def _initialize(self) -> bool:
         return True
@@ -504,76 +529,82 @@ class LearningPipelineCapability(BaseCapability):
     def _deactivate(self) -> bool:
         return True
 
-    def set_agent(self, agent):
-        self._agent = agent
+    def set_learning_pipeline(self, pipeline, memory=None):
+        """Bind the initializer-owned LearningPipeline and MemoryCoordinator."""
+        self._pipeline = pipeline
+        self._memory = memory or getattr(pipeline, "_memory", None)
 
-    def action_reflect(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
-        """Generate reflection on completed work."""
-        if not self._agent or not hasattr(self._agent, 'reflection_engine'):
-            return {"success": False, "error": "Reflection engine not available"}
+    @staticmethod
+    def _candidate(inputs: Dict[str, Any], *, raw_observation: Dict[str, Any], tags=None):
+        from app.learning.models import LearningCandidate, LearningCandidateType
+        return LearningCandidate(
+            candidate_type=LearningCandidateType.MANUAL_INPUT,
+            source_component="LearningPipelineCapability",
+            source_session_id=str(inputs.get("session_id", "")),
+            raw_observation=raw_observation,
+            context=inputs.get("context", {}) or {},
+            tags=list(tags or inputs.get("tags", []) or []),
+            metadata=inputs.get("metadata", {}) or {},
+        )
 
-        task_description = inputs.get("task", "")
-        outcome = inputs.get("outcome", "success")
-        eval_result = inputs.get("eval_result")
-
+    def _run_candidate(self, inputs: Dict[str, Any], raw_observation: Dict[str, Any], tags=None):
+        if not self._pipeline:
+            return {"success": False, "error": "LearningPipeline unavailable"}
         try:
-            from app.software_engineering_knowledge.reflection import ReflectionContext
-            context = ReflectionContext(
-                task_description=task_description,
-                original_request=task_description,
-                outcome=outcome,
-                eval_result=eval_result,
-            )
-            reflection = self._agent.reflection_engine.create_reflection(context)
-            self._agent.reflection_engine.store_reflection(reflection)
-            self._publish_event("learning.reflected", {"task": task_description[:100], "reflection_id": reflection.id})
-            return {"success": True, "reflection_id": reflection.id}
+            result = self._pipeline.run(self._candidate(
+                inputs,
+                raw_observation=raw_observation,
+                tags=tags,
+            ))
+            return {"success": True, "result": result.to_dict() if hasattr(result, "to_dict") else result}
         except Exception as e:
-            logger.error(f"Reflection failed: {e}")
+            logger.error(f"Learning pipeline run failed: {e}")
             return {"success": False, "error": str(e)}
 
-    def action_consolidate(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
-        """Run memory consolidation."""
-        if not self._agent or not hasattr(self._agent, 'consolidation_engine'):
-            return {"success": False, "error": "Consolidation engine not available"}
+    def action_reflect(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        """Run an observation through the real learning pipeline."""
+        task_description = str(inputs.get("task", ""))
+        if not task_description:
+            return {"success": False, "error": "task required"}
+        return self._run_candidate(
+            inputs,
+            raw_observation={
+                "task": task_description,
+                "outcome": inputs.get("outcome", "success"),
+                "eval_result": inputs.get("eval_result"),
+            },
+            tags=["reflection"],
+        )
 
+    def action_consolidate(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        """Run the coordinator-owned consolidation engine."""
+        if not self._memory:
+            return {"success": False, "error": "MemoryCoordinator unavailable"}
         try:
-            self._agent.consolidation_engine.run_consolidation()
+            result = self._memory.consolidation_engine.run_consolidation()
             self._publish_event("learning.consolidated", {})
-            return {"success": True, "consolidated": True}
+            return {"success": True, "consolidated": True, "result": result}
         except Exception as e:
             logger.error(f"Consolidation failed: {e}")
             return {"success": False, "error": str(e)}
 
     def action_store_lesson(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
-        """Store an engineering lesson."""
-        if not self._agent or not hasattr(self._agent, 'engineering_lessons'):
-            return {"success": False, "error": "Engineering lessons not available"}
-
-        title = inputs.get("title", "")
-        description = inputs.get("description", "")
-        lesson_type = inputs.get("lesson_type", "pattern")
-        category = inputs.get("category", "task")
-        severity = inputs.get("severity", "recommended")
-        tags = inputs.get("tags", [])
-        rationale = inputs.get("rationale", "")
-
-        try:
-            from app.memory.engineering_lessons import LessonType, LessonSeverity
-            self._agent.engineering_lessons.store(
-                title=title,
-                description=description,
-                lesson_type=LessonType(lesson_type),
-                category=category,
-                severity=LessonSeverity(severity),
-                tags=tags,
-                rationale=rationale,
-            )
-            self._publish_event("learning.lesson_stored", {"title": title})
-            return {"success": True, "stored": True}
-        except Exception as e:
-            logger.error(f"Lesson storage failed: {e}")
-            return {"success": False, "error": str(e)}
+        """Submit a lesson observation to the real learning pipeline."""
+        title = str(inputs.get("title", "")).strip()
+        description = str(inputs.get("description", "")).strip()
+        if not title or not description:
+            return {"success": False, "error": "title and description required"}
+        return self._run_candidate(
+            inputs,
+            raw_observation={
+                "title": title,
+                "description": description,
+                "category": inputs.get("category", "task"),
+                "severity": inputs.get("severity", "recommended"),
+                "rationale": inputs.get("rationale", ""),
+            },
+            tags=list(inputs.get("tags", []) or []) + ["lesson"],
+        )
 
 
 # =============================================================================
@@ -1126,8 +1157,7 @@ class SafetyGuardCapability(BaseCapability):
 # =============================================================================
 
 class KnowledgeBaseCapability(BaseCapability):
-    """Knowledge storage and retrieval capability."""
-
+    """Thin adapter over MemoryCoordinator’s UnifiedRetrieval path."""
     def __init__(self):
         super().__init__(CapabilityMetadata(
             name="knowledge_base",
@@ -1139,7 +1169,9 @@ class KnowledgeBaseCapability(BaseCapability):
             default_action="search",
             supported_actions=["search", "store_knowledge"],
         ))
-        self._agent = None
+        self._memory = None
+        self._retrieval = None
+
 
     def _initialize(self) -> bool:
         return True
@@ -1150,45 +1182,59 @@ class KnowledgeBaseCapability(BaseCapability):
     def _deactivate(self) -> bool:
         return True
 
-    def set_agent(self, agent):
-        self._agent = agent
+    def set_memory_services(self, memory, retrieval=None):
+        """Bind the canonical MemoryCoordinator and UnifiedRetrieval instances."""
+        self._memory = memory
+        self._retrieval = retrieval or getattr(memory, "unified_retrieval", None)
 
     def action_search(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
-        """Search knowledge base."""
-        if not self._agent:
-            return {"success": False, "error": "Agent not initialized"}
-
-        query = inputs.get("query", "")
+        """Search the shared UnifiedRetrieval stack."""
+        if not self._retrieval:
+            return {"success": False, "error": "UnifiedRetrieval unavailable"}
+        query = str(inputs.get("query", "")).strip()
+        if not query:
+            return {"success": False, "error": "query required"}
+        limit = max(1, min(int(inputs.get("limit", 10)), 100))
         memory_type = inputs.get("memory_type", "unified")
-        limit = inputs.get("limit", 10)
-
         try:
-            if memory_type == "unified" and hasattr(self._agent, 'unified_retrieval'):
-                results = self._agent.unified_retrieval.retrieve(query, limit=limit)
-            elif memory_type == "semantic" and hasattr(self._agent, 'semantic_memory'):
-                results = self._agent.semantic_memory.search(query, limit=limit)
-            elif memory_type == "episodic" and hasattr(self._agent, 'episodic_memory'):
-                results = self._agent.episodic_memory.search(query, limit=limit)
+            if memory_type == "unified":
+                results = self._retrieval.retrieve(query)[:limit]
             else:
-                return {"success": False, "error": f"Unknown memory type: {memory_type}"}
-
-            return {"success": True, "results": results}
+                results = self._retrieval.retrieve(
+                    query if memory_type == "semantic" else query,
+                )
+                results = [result for result in results if result.source == memory_type][:limit]
+            return {
+                "success": True,
+                "results": [result.to_dict() if hasattr(result, "to_dict") else result for result in results],
+            }
         except Exception as e:
             logger.error(f"Knowledge search failed: {e}")
             return {"success": False, "error": str(e)}
 
+
     def action_store_knowledge(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
-        """Store knowledge."""
-        if not self._agent or not hasattr(self._agent, 'semantic_memory'):
-            return {"success": False, "error": "Semantic memory not available"}
-
-        content = inputs.get("content", "")
-        metadata = inputs.get("metadata", {})
-
+        """Store knowledge through MemoryCoordinator’s canonical learning write."""
+        if not self._memory:
+            return {"success": False, "error": "MemoryCoordinator unavailable"}
+        content = str(inputs.get("content", "")).strip()
+        title = str(inputs.get("title", "")).strip()
+        if not content or not title:
+            return {"success": False, "error": "title and content required"}
+        metadata = inputs.get("metadata", {}) or {}
         try:
-            result = self._agent.semantic_memory.store(content, metadata)
-            self._publish_event("knowledge.stored", {"content": content[:100]})
-            return {"success": True, "stored": True, "id": str(result) if result else None}
+            entry_id = self._memory.store_learned({
+                "learning_type": "knowledge",
+                "title": title,
+                "content": content,
+                "category": str(inputs.get("category", "general")),
+                "confidence": float(inputs.get("confidence", 0.8)),
+                "source": "knowledge_base",
+                "tags": list(inputs.get("tags", []) or []),
+                "metadata": metadata,
+            })
+            self._publish_event("knowledge.stored", {"content": content[:100], "id": entry_id})
+            return {"success": True, "stored": True, "id": entry_id}
         except Exception as e:
             logger.error(f"Knowledge storage failed: {e}")
             return {"success": False, "error": str(e)}
@@ -1199,7 +1245,7 @@ class KnowledgeBaseCapability(BaseCapability):
 # =============================================================================
 
 class ReasoningEngineCapability(BaseCapability):
-    """Logical reasoning capability."""
+    """Thin adapter over Intelligence’s knowledge-first reasoning support."""
 
     def __init__(self):
         super().__init__(CapabilityMetadata(
@@ -1212,7 +1258,7 @@ class ReasoningEngineCapability(BaseCapability):
             default_action="analyze",
             supported_actions=["analyze", "synthesize"],
         ))
-        self._agent = None
+        self._intelligence = None
 
     def _initialize(self) -> bool:
         return True
@@ -1223,59 +1269,55 @@ class ReasoningEngineCapability(BaseCapability):
     def _deactivate(self) -> bool:
         return True
 
-    def set_agent(self, agent):
-        self._agent = agent
+    def set_intelligence(self, intelligence):
+        """Bind the initializer-owned Intelligence service."""
+        self._intelligence = intelligence
 
     def action_analyze(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
-        """Analyze a problem using reasoning."""
-        if not self._agent or not self._agent.llm:
-            return {"success": False, "error": "LLM not available"}
-
-        problem = inputs.get("problem", "")
-        context = inputs.get("context", "")
-
+        """Analyze through Intelligence answerability and routing decisions."""
+        if not self._intelligence:
+            return {"success": False, "error": "Intelligence unavailable"}
+        problem = str(inputs.get("problem", "")).strip()
+        if not problem:
+            return {"success": False, "error": "problem required"}
+        context = inputs.get("context", {})
+        context = context if isinstance(context, dict) else {"context": context}
         try:
-            prompt = f"""Analyze this problem step by step:
-
-Problem: {problem}
-
-Context: {context}
-
-Provide a structured analysis with:
-1. Problem decomposition
-2. Key factors
-3. Potential approaches
-4. Recommended solution path"""
-
-            answer = self._agent.llm.ask(prompt)
+            assessment = self._intelligence.assess_answerability(problem, context)
+            decision = self._intelligence.decide_next_action(problem, context)
             self._publish_event("reasoning.analyzed", {"problem": problem[:100]})
-            return {"success": True, "analysis": answer}
+            return {
+                "success": True,
+                "analysis": {
+                    "answerability": assessment.to_dict() if hasattr(assessment, "to_dict") else assessment,
+                    "next_action": decision,
+                },
+            }
         except Exception as e:
             logger.error(f"Reasoning analysis failed: {e}")
             return {"success": False, "error": str(e)}
 
     def action_synthesize(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
-        """Synthesize information from multiple sources."""
-        if not self._agent or not self._agent.llm:
-            return {"success": False, "error": "LLM not available"}
-
+        """Return a knowledge-first synthesis route without bypassing answer handling."""
+        if not self._intelligence:
+            return {"success": False, "error": "Intelligence unavailable"}
+        task = str(inputs.get("task", "")).strip()
+        if not task:
+            return {"success": False, "error": "task required"}
         sources = inputs.get("sources", [])
-        task = inputs.get("task", "")
-
+        context = {"sources": sources} if isinstance(sources, list) else {"sources": [sources]}
         try:
-            source_text = "\n\n".join([f"Source {i+1}: {s}" for i, s in enumerate(sources)])
-            prompt = f"""Synthesize the following information for this task:
-
-Task: {task}
-
-Sources:
-{source_text}
-
-Provide a coherent synthesis that addresses the task."""
-
-            answer = self._agent.llm.ask(prompt)
+            assessment = self._intelligence.assess_answerability(task, context)
+            decision = self._intelligence.decide_next_action(task, context)
             self._publish_event("reasoning.synthesized", {"task": task[:100]})
-            return {"success": True, "synthesis": answer}
+            return {
+                "success": True,
+                "synthesis": {
+                    "answerability": assessment.to_dict() if hasattr(assessment, "to_dict") else assessment,
+                    "next_action": decision,
+                    "sources": sources,
+                },
+            }
         except Exception as e:
             logger.error(f"Reasoning synthesis failed: {e}")
             return {"success": False, "error": str(e)}
@@ -1823,7 +1865,9 @@ def create_all_capabilities(agent=None) -> List[Capability]:
         # Wire capabilities to agent
         for cap in capabilities:
             if isinstance(cap, MemoryManagementCapability):
-                cap.set_agent_memory(agent)
+                memory = getattr(agent, "memory_coordinator", getattr(agent, "memory", None))
+                if memory is not None:
+                    cap.set_memory_coordinator(memory)
             elif isinstance(cap, PlanningEngineCapability):
                 cap.set_components(
                     agent.planner,
@@ -1840,7 +1884,9 @@ def create_all_capabilities(agent=None) -> List[Capability]:
             elif isinstance(cap, DecisionEngineCapability):
                 cap.set_decision_manager(getattr(agent, 'decision_manager', None))
             elif isinstance(cap, LearningPipelineCapability):
-                cap.set_agent(agent)
+                pipeline = getattr(agent, "learning_pipeline", None)
+                if pipeline is not None:
+                    cap.set_learning_pipeline(pipeline, getattr(agent, "memory_coordinator", None))
             elif isinstance(cap, SystemMonitoringCapability) and hasattr(agent, 'observability'):
                 cap.set_observability(agent.observability)
             elif isinstance(cap, CommunicationHubCapability) and hasattr(agent, 'event_bus'):
@@ -1864,9 +1910,13 @@ def create_all_capabilities(agent=None) -> List[Capability]:
             elif isinstance(cap, SafetyGuardCapability) and hasattr(agent, 'safety_gate'):
                 cap.set_safety_gate(agent.safety_gate)
             elif isinstance(cap, KnowledgeBaseCapability):
-                cap.set_agent(agent)
+                memory = getattr(agent, "memory_coordinator", getattr(agent, "memory", None))
+                if memory is not None:
+                    cap.set_memory_services(memory, getattr(agent, "unified_retrieval", None))
             elif isinstance(cap, ReasoningEngineCapability):
-                cap.set_agent(agent)
+                intelligence = getattr(agent, "intelligence", None)
+                if intelligence is not None:
+                    cap.set_intelligence(intelligence)
             elif isinstance(cap, OrchestrationCoreCapability) and hasattr(agent, 'orchestrator'):
                 cap.set_orchestrator(agent.orchestrator)
             elif isinstance(cap, FailureRecoveryCapability):

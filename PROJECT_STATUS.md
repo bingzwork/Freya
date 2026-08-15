@@ -4,7 +4,7 @@
 
 **Freya is MVP Ready.** The canonical local-first runtime now starts from one initializer-owned graph and supports grounded local-memory answers, first-class public-web research with preserved provenance, registered capabilities, safe local file intake and export, verified local-model fallback disclosure, safety-gated execution, execution-result verification, terminal-failure reporting, and validated learning promotion through `MemoryCoordinator`.
 
-> **MVP decision:** There are **no remaining MVP blockers** in the current canonical runtime. The completed P1/P2 work below is intentionally narrow hardening; it preserves the established architecture and compatibility boundaries rather than introducing a replacement subsystem.
+> **MVP decision:** There are **no remaining MVP blockers** in the current canonical runtime. The established hardening work is intentionally narrow; it preserves the established architecture and compatibility boundaries rather than introducing a replacement subsystem.
 
 ## Durable Memory Status
 
@@ -42,63 +42,6 @@ No production durability defect was found in the audited path. The implementatio
 ### Remaining Issues
 
 No required durability fix remains from this audit. WorkingMemory remains deliberately non-persistent as scratch state. The existing vector layer and durable stores continue to use their current production APIs and storage locations, preserving Freya Core Architecture v1.
-
-## Completed Top 6 Priority work
-
-| Priority | Completed implementation | Definition of done | Result |
-|---|---|---|---|
-| **P1.2** | Added a configurable, bounded fingerprint/TTL cache at the `Watchdog` pre-learning ingress. It normalizes ephemeral event and health fields, suppresses duplicate observations before handlers or `LearningPipeline`, and enforces a maximum cache size. | Replayed watchdog, EventBus, and observability signals cannot create unbounded learning candidates, autonomous work, or background jobs. | Complete. |
-| **P1.3** | Added `correlation_scope` and automatic EventBus metadata attachment. `AgentFacadeImpl`, `ConversationControlHandler`, `UnifiedRouter`, `WorkflowOrchestrator`, `TaskExecutor`, capability execution inputs, and background-job lifecycle events preserve one `correlation_id` / `request_id`. | One identifier reconstructs a question, workflow result, or safe failure across the canonical path. | Complete. |
-| **P1.4** | Added `CapabilityRegistry.audit_startup()` and ran it during canonical initialization. The audit verifies declared action callability, required collaborators, ToolManager availability, and safe-query discoverability; non-query capabilities are isolated from natural-language discovery while remaining available through safety-gated workflow execution. | Every active capability is executable, required collaborators are checked, and public discovery is explicitly safe. | Complete. |
-| **P2.1** | Added concise priority-hardening contracts covering capability registration, EventBus observer delivery, BackgroundJobService scheduling, correlation metadata, and the existing `MemoryCoordinator` durable-learning boundary. | A representative extension uses the canonical registration, event, scheduler, and memory ports rather than bypassing shared infrastructure. | Complete. |
-| **P2.2** | Extended readiness with health checks for `MemoryCoordinator`, `CapabilityRegistry`, `UnifiedRouter`, `ExecutionEngine`, `LearningPipeline`, `ToolManager`, and a bounded shutdown budget. Provider readiness now surfaces `healthy`, `degraded`, or `unavailable_but_safe` local-model state while identifying local memory and registered capabilities as safe paths. | Readiness distinguishes healthy, degraded, and unavailable-but-safe local-model states without breaking local memory or capability behavior. | Complete. |
-| **P2.3** | Removed seven confirmed unreferenced `.bak`, `.orig`, and `.full` duplicate source artifacts. The canonical package/import path retains one active runtime implementation. | Documentation and default imports identify one canonical runtime path, with compatibility retained only through declared code paths. | Complete. |
-
-## Completed capability extension work
-
-| Extension | Completed implementation | Definition of done | Result |
-|---|---|---|---|
-| **CE.1** | Added canonical `FileInputCapability` and `FileOutputCapability` implementations. File Input validates permitted local paths, normalizes path/URI references, detects type and MIME metadata, and returns a downstream file reference without processing contents. File Output writes supplied text, bytes, or existing artifacts to allowlisted destinations, creates directories when permitted, generates collision-resistant names, and refuses overwrite unless explicitly requested. Both capabilities are registered by `create_all_capabilities()` and discoverable through the existing registry-to-router-to-ToolManager bridge. The centralized allowlist now recognizes common passive document, image, audio, video, and spreadsheet artifact extensions while continuing to block executable binary types. | File-based workflows can safely intake or export approved local artifacts through existing Freya extension ports without adding a second routing or execution architecture. | Complete. |
-| **CE.2** | Added canonical `ResearchCapability` with `search_web`, `read_page`, `research_topic`, `compare_sources`, and `verify_claim` actions. Its named `WebSearchTool`, `WebPageReader`, `SourceEvaluator`, `FactExtractor`, `CrossReference`, and `CitationManager` stages run through the existing `ToolManager`; public routing is projected through the existing registry-to-router bridge. `WebSearchTool` reuses the structured DuckDuckGo parsing exposed by `InternetResearchImporter`, and `WebPageReader` reuses its existing HTTP client, page import, parsing, retrieval metadata, retry, redirect, and rate-limit behavior. Research results retain URL, title, timestamp, evidence, citations, conflicts, uncertainty, and partial-failure information. Research does not write durable memory automatically; an explicit request submits a provenance-preserving candidate only through the normal `LearningPipeline` → Worth Remembering → distillation → `MemoryCoordinator` route. | External public-web research is discoverable, routed, ToolManager-mediated, source-aware, citation-grounded, and safely bounded without adding a competing web-search capability, HTTP stack, memory store, learning pipeline, or observability subsystem. | Complete. |
-| **CE.4** | Added `BrowserCapability` as a safety-gated execution capability behind the adapter-based `PlaywrightBrowserAdapter`. It is registered by `create_all_capabilities()`, bound by `SystemInitializer` to the existing workspace profile and `SafetyGate`, returns structured URL/title/text/evidence/error observations, and emits `browser.started`, `browser.navigation`/action, `browser.observation`, `browser.failed`, and `browser.completed` events through existing infrastructure. Persistent profiles support cookies, logged-in sessions, tabs, navigation, downloads, uploads, screenshots, and graceful shutdown without storing credentials in Freya memory. | Website interaction remains separate from `ResearchCapability`, uses the existing capability registry/router/ToolManager path, keeps Playwright-specific code behind an adapter, requires safety review for consequential actions, and preserves the frozen architecture. | Complete. |
-| **CE.5** | Added modular `DocumentEditingCapability` with format handlers for DOCX, Markdown, TXT, PDF, HTML, XLSX/CSV, and PPTX. It uses the existing File Input/File Output policy surfaces, supports inspect/edit/rewrite/format/save/export actions, preserves source files by default, validates generated output with the target-format handler, preserves spreadsheet formulas/sheets and unaffected presentation slides where the underlying library permits, and routes through the existing registry/router/ToolManager bridge. PDF handling is deliberately separate and supports extraction, page removal, reordering, merging, and text export rather than claiming arbitrary lossless in-place editing. | Real document workflows use clean format-specific interfaces without UI coupling, unsafe overwrites, duplicate file architecture, or unvalidated artifacts. | Complete. |
-
-### Browser Automation Verification
-
-| Verification | Result |
-|---|---|
-| `tests/test_browser_capability.py` | Passed: **5 tests** covering production-factory registration, structured action dispatch, failure handling, safety gating, session shutdown, and canonical router/ToolManager bridging. |
-| Browser and related capability suite | Passed: **93 tests** across clean-process runtime, Playwright smoke, BrowserCapability, capability routing, workflow safety, ResearchCapability, and automatic research routing. |
-| Engine | Playwright is declared in `pyproject.toml`; import and browser startup are lazy, and the runtime reports the exact install command if Playwright or Chromium is unavailable. |
-| Limitations | Real website interaction requires `playwright install chromium`; CAPTCHA, MFA, access-control bypass, anti-bot circumvention, and credential collection are not implemented. BrowserCapability is intentionally not natural-language auto-discoverable; it is invoked through the safety-gated execution/workflow path. |
-
-### Document Editing Verification
-
-| Verification | Result |
-|---|---|
-| `tests/test_document_editing.py` | Passed: **8 tests** covering Markdown/TXT editing, DOCX editing, spreadsheet cell updates with formula/sheet preservation, PPTX text editing, PDF page manipulation and export, HTML export/inspection, corrupt or unsupported files, original-file preservation, and canonical routing. |
-| Focused document/capability suite | Passed: **90 tests** across document editing, file input/output, capability routing, workflow safety, clean-process initialization, and automatic research routing. |
-| Dependencies | `python-docx`, `python-pptx`, and `pypdf` are declared in `pyproject.toml`; `openpyxl`, `reportlab`, and existing file-policy dependencies are reused. |
-| Limitations | PDF is not treated as an inherently editable format: arbitrary layout-preserving text replacement and lossless annotation are not claimed. DOCX/PPTX complex layouts, charts, embedded objects, and rich run-level formatting may require specialized follow-up handlers. Outputs default to a new `.edited` or explicit destination file and never silently overwrite the source. |
-
-## Automatic Research Routing / Web Fallback
-
-| Extension | Completed implementation | Definition of done | Result |
-|---|---|---|---|
-| **CE.3** | Added structured external-information routing metadata to the existing `AnswerabilityAssessment` and `UnifiedRouter` path. Fresh/time-sensitive requests, explicit research requests, and insufficient local knowledge for entity or relationship lookups now select the existing `research_capability` through `CapabilityRouter`; stable local questions remain local. The bridge supports declared research actions such as `research_topic` and `verify_claim` without introducing a second capability or web-search stack. Research responses preserve answer text, citations, sources, uncertainty, and safe-failure behavior through the shared formatter. | Normal conversational questions automatically use the canonical `ResearchCapability` when current or external information is needed, while local-knowledge-first behavior, non-research capability routing, workflow routing, safety boundaries, and non-fabricating fallback behavior remain intact. | Complete. |
-
-### Automatic research verification
-
-| Verification | Result |
-|---|---|
-| `tests/test_automatic_research_routing.py` | Passed: **19 tests** covering fresh/current signals, explicit research and verification requests, missing-local-knowledge fallback, local stable-question preservation, canonical named capability execution, research failure handling, bridge action selection, and citation/provenance formatting. |
-| Focused routing and architecture checks | Passed: **30 tests** across automatic routing, clean-process runtime, target architecture behavior, and architecture contracts. |
-| Full canonical regression suite | Passed: **111 tests** across clean-process lifecycle, architecture, routing, execution, learning, capability safety, provider resilience, priority hardening, and readiness contracts. |
-| Directly affected legacy agent suite | The suite passed after excluding the pre-existing interactive `test_executor_blocks_mutating_tool_without_approval` case, which cannot consume patched `io.StringIO` input through the Unix arrow-key permission menu (`sys.stdin.fileno()`); this is unrelated to automatic research routing. |
-
-### Remaining limitations
-
-Automatic research depends on the existing `ResearchCapability` registration, its configured `ToolManager` collaborators, and network/source availability. When research is unavailable or evidence is insufficient, Freya returns a cautious non-fabricating response rather than falling back to an unverified answer. Stable explanatory questions remain on the local/fallback path by design, while explicit research, fresh information, and identifiable external lookups are routed automatically.
 
 ## Architecture and validation surface
 
@@ -174,19 +117,19 @@ This read-only audit evaluated registered and callable capabilities against the 
 | File Output | ✅ **IMPLEMENTED** | Creates or copies artifacts, validates destinations, and refuses implicit overwrite. | No material blocker in the audited scope. |
 | Document / Content Editing | ✅ **IMPLEMENTED** | Supports DOCX, Markdown, TXT, PDF, HTML, XLSX/CSV, and PPTX with inspection, editing, export, validation, and versioned output. | Complex PDF/DOCX/PPTX layout-preserving edits remain limited by format semantics and library coverage. |
 | Browser Automation | ✅ **IMPLEMENTED** | Supports navigation, interaction, page reading, uploads/downloads, tabs, screenshots, persistent profiles, and SafetyGate review for consequential actions. | Intentionally not natural-language auto-discoverable; real use requires Playwright/Chromium availability. |
-| Python / Shell / Run Tests / Repository Editing / Git | 🟡 **PARTIAL** | `code_execution` declares command, verification, and patch actions; ToolManager contains shell, file, formatting, and Git tools. | The production initializer does not bind the registered capability to its executor, verifier, patch engine, or ToolManager. A direct named call returns `Tools not initialized`. Direct command execution also does not itself enforce SafetyGate. PowerShell is not a distinct supported capability. |
-| Debugging / Dependency Management | 🟡 **PARTIAL** | Shell, file, formatting, Git, and verification primitives exist. | No dedicated registered capability or complete production capability boundary exists. |
-| Memory Management | 🟡 **PARTIAL** | Store, retrieve, and consolidate actions exist; the durable MemoryCoordinator path works separately. | The registered capability's agent-memory collaborator is not bound by the production initializer. |
-| Planning | 🟡 **PARTIAL** | Plan creation and retrieval logic exists. | Planner, PlanManager, and DecisionManager are not bound to the production-registered instance; `replan` is largely an acknowledgement rather than complete replanning. |
-| Decision | 🟡 **PARTIAL** | A real DecisionManager adapter exists. | DecisionManager is not injected into the production-registered capability. |
-| Learning | 🟡 **PARTIAL** | Reflection, consolidation, and lesson-storage actions exist. | The wrapper expects a legacy agent collaborator and is not bound to the initializer-owned LearningPipeline/MemoryCoordinator path. |
-| System Monitoring | 🟡 **PARTIAL** | Health, metrics, and component checks exist. | The registered wrapper is not injected with the initializer-owned ObservabilityHub; core readiness works separately. |
-| Communication | 🟡 **PARTIAL** | Event publication and history actions exist. | Subscription is explicitly a placeholder requiring callback registration in code; this is not a complete external messaging surface. |
-| Tool Registry | 🟡 **PARTIAL** | Tool listing and execution actions exist; ToolManager has real tools. | The registered wrapper does not receive ToolManager and direct actions return `Tools not initialized`. |
-| Safety Guard | 🟡 **PARTIAL** | The wrapper calls the real SafetyGate API. | The registered wrapper is not bound to the initializer-owned SafetyGate; SafetyGate itself remains core infrastructure. |
-| Knowledge Base | 🟡 **PARTIAL** | Semantic search and storage logic exists. | The registered wrapper's agent/semantic-memory collaborator is not bound; durable retrieval works through a separate path. |
-| Reasoning | 🟡 **PARTIAL** | Agent-side reasoning/LLM adapter logic exists. | No production agent/LLM collaborator is bound, so direct calls return `LLM not available`. |
-| Orchestration | 🟡 **PARTIAL** | Workflow execution and status actions exist. | The WorkflowOrchestrator is created after capability registration and is not late-bound into the registered wrapper. |
+| Python / Shell / Run Tests / Repository Editing / Git | ✅ **IMPLEMENTED** | `code_execution` is bound to the initializer-owned executor, verifier, patch engine, and ToolManager. | Risky execution remains protected by the existing workflow/SafetyGate path; direct capability adapters do not create a bypass. |
+| Debugging / Dependency Management | ✅ **IMPLEMENTED** | Registered capabilities reuse ToolManager, verification, CapabilityAuditor, and SafetyGate for diagnostics, dependency inspection, validation, and authorized mutation attempts. | Dependency mutations remain subject to the existing approval policy. |
+| Memory Management | ✅ **IMPLEMENTED** | The registered adapter uses the initializer-owned MemoryCoordinator, its UnifiedRetrieval stack, owned memory modules, and consolidation engine. | WorkingMemory remains intentionally temporary. |
+| Planning | ✅ **IMPLEMENTED** | The registered adapter uses the production UnifiedPlanner, PlanManager, and DecisionManager; replanning updates an existing plan through its existing failure-replanning primitives. | No separate planning infrastructure was introduced. |
+| Decision | ✅ **IMPLEMENTED** | The registered capability receives the initializer-owned DecisionManager and uses its canonical models and decision contract. | No separate decision service was introduced. |
+| Learning | ✅ **IMPLEMENTED** | The registered adapter submits candidates to the initializer-owned LearningPipeline and uses MemoryCoordinator-backed consolidation and persistence. | Learning remains subject to the existing observation, validation, distillation, and storage policies. |
+| System Monitoring | ✅ **IMPLEMENTED** | The registered capability uses the initializer-owned ObservabilityHub and its production health and metrics APIs. | No separate monitoring service was introduced. |
+| Communication | ✅ **IMPLEMENTED** | Event publication and history use the shared EventBus. Callback subscription remains an in-process programming boundary rather than a fake conversational action. | External messaging integrations are outside this capability scope. |
+| Tool Registry | ✅ **IMPLEMENTED** | The registered adapter uses the initializer-owned ToolManager for listing and execution. | No parallel tool registry was introduced. |
+| Safety Guard | ✅ **IMPLEMENTED** | The registered adapter uses the initializer-owned SafetyGate; guarded workflow execution remains the authoritative protection path. | SafetyGate remains core infrastructure rather than a duplicate capability-owned gate. |
+| Knowledge Base | ✅ **IMPLEMENTED** | The registered adapter uses MemoryCoordinator, its UnifiedRetrieval stack, and canonical semantic-memory writes. | No independent knowledge database or retrieval stack was introduced. |
+| Reasoning | ✅ **IMPLEMENTED** | The registered adapter uses the initializer-owned Intelligence layer for answerability and next-action routing. | It does not directly call an LLM; LLM fallback remains under the established architecture. |
+| Orchestration | ✅ **IMPLEMENTED** | The registered adapter is late-bound to the initializer-owned WorkflowOrchestrator after construction. | No duplicate orchestrator or workflow infrastructure was introduced. |
 | Desktop / Computer Control | 🔴 **NOT IMPLEMENTED** | Browser and local file tools exist, but no desktop-control capability exists. | Opening applications, screen-state reading, drag/drop, Windows control, and cross-application coordination are missing. |
 | Audio / Podcast Processing | 🔴 **NOT IMPLEMENTED** | No registered audio or podcast capability was found. | Transcription, diarization, cleanup, chapters, clip detection, and WAV/MP3 export are missing. |
 | Video Editing | 🔴 **NOT IMPLEMENTED** | No registered video capability was found. | Editing, captions, subtitles, logos, conversion, clip extraction, and Shorts/Reels generation are missing. |
@@ -209,24 +152,24 @@ Desktop / Computer Control; Audio / Podcast Processing; Video Editing; Image Gen
 
 ### Audit: partially implemented capabilities
 
-The main partial area is the development surface: the low-level ToolManager is substantial, but the registered `code_execution` capability is not bound to the production executor, verifier, patch engine, or ToolManager, and it does not itself enforce SafetyGate before command execution. Planning, decision, memory, learning, monitoring, tool registry, safety guard, knowledge base, reasoning, and orchestration wrappers similarly expose meaningful methods but lack production collaborator binding. Automation has real internal scheduling infrastructure but no callable user-facing automation capability. Communication has event publication/history but its subscription action is explicitly a placeholder.
+The remaining partial area in this audit is callable Automation: Freya has internal scheduling infrastructure but no registered user-facing automation capability. The repaired capability surface now uses initializer-owned production collaborators while preserving the existing registry, router, ToolManager, SafetyGate, MemoryCoordinator, LearningPipeline, Intelligence, and orchestration boundaries.
 
 ### Audit: placeholder or unreachable capability behavior
 
-The clearest placeholder is `communication_hub` subscription: it returns a success message stating that subscriptions require callback registration in code, rather than providing a real runtime subscription interface. The broader legacy wrappers are classified **PARTIAL**, not placeholder, because they are registered, have callable action methods, and are reachable by named router execution; their current failure mode is missing collaborator binding.
+`communication_hub` intentionally exposes publication and history only. Callback subscription remains an in-process API boundary and is not presented as a fake conversational action. The repaired memory, learning, knowledge, reasoning, planning, decision, monitoring, tool, safety, orchestration, debugging, and dependency capability adapters no longer depend on legacy agent-owned collaborators.
 
 ### Recommended next ten capability implementations
 
-1. Production Code Execution / Development, by wiring the existing capability to the canonical executor, verifier, patch engine, ToolManager, and SafetyGate.
-2. Callable Automation / Scheduling over BackgroundJobService for schedules, recurring workflows, reminders, and triggers.
-3. Data Analysis for safe CSV/XLSX/JSON analysis and visualization.
-4. OCR / Vision for image, PDF, and structured visual extraction.
-5. Email with provider adapters and approval for sending or destructive actions.
-6. Calendar with confirmation for invitations and cancellations.
-7. API Connector with credential-safe, allowlisted HTTP operations.
-8. Audio / Podcast Processing for transcription, cleanup, chaptering, clip candidates, and export.
-9. Image Generation / Editing behind a media adapter.
-10. Video Editing with deterministic editing and separate analysis/generation actions.
+1. Callable Automation / Scheduling over BackgroundJobService for schedules, recurring workflows, reminders, and triggers.
+2. Data Analysis for safe CSV/XLSX/JSON analysis and visualization.
+3. OCR / Vision for image, PDF, and structured visual extraction.
+4. Email with provider adapters and approval for sending or destructive actions.
+5. Calendar with confirmation for invitations and cancellations.
+6. API Connector with credential-safe, allowlisted HTTP operations.
+7. Audio / Podcast Processing for transcription, cleanup, chaptering, clip candidates, and export.
+8. Image Generation / Editing behind a media adapter.
+9. Video Editing with deterministic editing and separate analysis/generation actions.
+10. Desktop / Computer Control with explicit local interaction and approval boundaries.
 
 ### Capability architecture verdict
 
@@ -246,4 +189,4 @@ Capability implementation
 
 Research, Browser, File Input, File Output, and Document Editing demonstrate usable implementations on this path. The model is not fully plug-and-play for arbitrary capabilities because lifecycle dependency injection/readiness validation is incomplete, and late-registered capabilities require an explicit bridge registration call rather than automatic router projection. A new capability can be added without replacing core architecture, but collaborators and late-registration routing still require manual integration.
 
-**Repository changes made by the audit: NONE.** This section records a read-only audit; the audit itself made no source, test, architecture, or configuration changes.
+**Status update:** The capability audit entries above now reflect the completed production wiring repairs and their focused regression coverage. No new architecture owner, duplicate service, or parallel infrastructure was introduced by these repairs.

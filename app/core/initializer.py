@@ -175,6 +175,7 @@ class SystemInitializer:
         # 3. Memory Coordinator (depends on workspace, event_bus)
         # ------------------------------------------------------------------
         memory_coordinator = create_memory_coordinator(self.workspace, event_bus)
+        self._memory_coordinator = memory_coordinator
         logger.debug("[SystemInitializer] MemoryCoordinator created")
 
         # ------------------------------------------------------------------
@@ -192,6 +193,7 @@ class SystemInitializer:
             goal_storage=memory_coordinator.goal_storage,
             conversation_memory=memory_coordinator.conversation_memory,
         )
+        self._intelligence = intelligence
         logger.debug("[SystemInitializer] Intelligence created")
 
         # ------------------------------------------------------------------
@@ -380,6 +382,7 @@ class SystemInitializer:
             memory_coordinator=memory_coordinator,
             event_bus=event_bus,
         )
+        self._learning_pipeline = learning_pipeline
         if research_capability is not None and hasattr(research_capability, "set_learning_pipeline"):
             research_capability.set_learning_pipeline(learning_pipeline)
         execution_engine.set_learning_pipeline(learning_pipeline)
@@ -555,6 +558,25 @@ class SystemInitializer:
         safety = capability_registry.get_capability("safety_guard")
         if safety is not None and hasattr(safety, "set_safety_gate"):
             safety.set_safety_gate(safety_gate)
+
+        memory_capability = capability_registry.get_capability("memory_management")
+        if memory_capability is not None and hasattr(memory_capability, "set_memory_coordinator"):
+            memory_capability.set_memory_coordinator(self._memory_coordinator)
+
+        learning_capability = capability_registry.get_capability("learning_pipeline")
+        if learning_capability is not None and hasattr(learning_capability, "set_learning_pipeline"):
+            learning_capability.set_learning_pipeline(self._learning_pipeline, self._memory_coordinator)
+
+        knowledge_capability = capability_registry.get_capability("knowledge_base")
+        if knowledge_capability is not None and hasattr(knowledge_capability, "set_memory_services"):
+            knowledge_capability.set_memory_services(
+                self._memory_coordinator,
+                self._memory_coordinator.unified_retrieval,
+            )
+
+        reasoning_capability = capability_registry.get_capability("reasoning_engine")
+        if reasoning_capability is not None and hasattr(reasoning_capability, "set_intelligence"):
+            reasoning_capability.set_intelligence(self._intelligence)
 
         planning = capability_registry.get_capability("planning_engine")
         if planning is not None and hasattr(planning, "set_components"):
