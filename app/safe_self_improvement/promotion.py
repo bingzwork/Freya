@@ -170,6 +170,10 @@ class PatchPromotionManager:
                     details={"safety_gates": safety_result.to_dict()},
                     error="Safety promotion gates rejected the candidate",
                 )
+                if self.config.rollback_on_failure:
+                    from app.safe_self_improvement.rollback import RollbackManager
+                    RollbackManager().rollback(candidate.id, RollbackReason.RISK_EXCEEDED)
+                    self._stats["rolled_back_promotions"] += 1
                 self._stats["failed_promotions"] += 1
                 self._promotion_history.append(result)
                 return result
