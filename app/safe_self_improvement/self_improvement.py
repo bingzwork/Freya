@@ -394,8 +394,11 @@ class SafeSelfImprovementEngine:
             if execution_result.success:
                 self._stats["succeeded"] += 1
 
-                # 9. Promote if successful
+                # 9. Promote if successful. The checkpoint is part of the
+                # promotion evidence; without it, the safety gate must reject.
                 if self.config.promotion_require_tests or self.config.promotion_require_lint:
+                    if checkpoint:
+                        execution_result.metadata["rollback_checkpoint_id"] = checkpoint.id
                     promo_result = self.promotion_manager.promote(candidate, execution_result)
                     if promo_result.success:
                         self._stats["promoted"] += 1

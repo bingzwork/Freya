@@ -18,6 +18,7 @@ Provides a standardized safety evaluation layer with:
   - Future autonomous capabilities
 """
 
+import math
 import threading
 import time
 from abc import ABC, abstractmethod
@@ -312,8 +313,12 @@ class SafetyPromotionGates:
         self._event_bus = event_bus or get_event_bus()
         self._observability = observability or get_observability_hub()
 
-        # Evaluators
-        self.evaluators: List[SafetyEvaluator] = evaluators or []
+        # Evaluators. A default instance must not silently omit the built-in
+        # risk checks; callers can still pass an explicit empty list when they
+        # intentionally provide no evaluators (for example, in a unit test).
+        self.evaluators: List[SafetyEvaluator] = (
+            create_default_evaluators() if evaluators is None else list(evaluators)
+        )
 
         # Validation gates
         self._gates: List[ValidationGate] = []
@@ -404,54 +409,150 @@ class SafetyPromotionGates:
         """Register a custom approval handler for an operation type."""
         self._approval_handlers[operation_type] = handler
 
+    def evaluate(self, context: PromotionContext) -> PromotionResult:
+        """Evaluate a promotion request through the authoritative safety gates."""
+        return self.evaluate_promotion(context)
+
     def evaluate_promotion(self, context: PromotionContext) -> PromotionResult:
         """
         Evaluate a promotion request.
 
-        This runs all evaluators, gates, and applies decision logic
-        to produce a promotion result.
+        This method is fail-closed: malformed contexts, unavailable or
+        malformed evaluators, and invalid gate output can never result in an
+        approval.  It also remains the authoritative decision point for
+        callers that provide a custom approval handler.
         """
-        logger.info(f"Evaluating promotion: {context.operation_id} ({context.operation_type})")
         start_time = time.time()
+        context_errors = self._validate_context(context)
+        if context_errors:
+            result = self._rejected_result(context, context_errors)
+            self._record_result(result, time.time() - start_time)
+            return result
 
-        # Run safety evaluators
-        all_risks = []
+        logger.info(f"Evaluating promotion: {context.operation_id} ({context.operation_type})")
+
+        all_risks: List[RiskAssessment] = []
+        evaluation_errors: List[str] = []
         for evaluator in self.evaluators:
             try:
+                evaluator_name = getattr(evaluator, "name", evaluator.__class__.__name__)
+            except Exception:
+                evaluator_name = evaluator.__class__.__name__
+            try:
+                if not isinstance(evaluator, SafetyEvaluator):
+                    raise TypeError("not a SafetyEvaluator")
                 risks = evaluator.evaluate(context)
+                if not isinstance(risks, list) or any(not isinstance(risk, RiskAssessment) for risk in risks):
+                    raise TypeError("evaluator returned malformed risk data")
                 all_risks.extend(risks)
             except Exception as e:
-                logger.error(f"Evaluator {evaluator.name} failed: {e}")
+                reason = f"Safety evaluator '{evaluator_name}' failed"
+                evaluation_errors.append(reason)
+                logger.error(f"{reason}: {e}")
 
-        # Determine safety level from risks
-        safety_level = self._determine_safety_level(all_risks)
-        context.safety_level = max(context.safety_level, safety_level, key=lambda s: list(SafetyLevel).index(s))
+        # Determine safety level from risks. Invalid risk data is rejected
+        # rather than being allowed to disappear into the decision logic.
+        try:
+            safety_level = self._determine_safety_level(all_risks)
+            context.safety_level = max(
+                context.safety_level,
+                safety_level,
+                key=lambda level: list(SafetyLevel).index(level),
+            )
+        except Exception as e:
+            evaluation_errors.append("Safety risk evaluation returned an unknown state")
+            logger.error(f"Safety risk evaluation failed: {e}")
 
-        # Run validation gates
-        gate_results = {}
+        gate_results: Dict[str, ValidationGateStatus] = {}
         with self._gate_lock:
             for gate in self._gates:
                 status = gate.evaluate(context)
                 gate_results[gate.name] = status
+                if not isinstance(status, ValidationGateStatus):
+                    evaluation_errors.append(f"Validation gate '{gate.name}' returned an unknown state")
 
-        # Check for custom approval handler
+        # The standard decision logic is always computed so required gates,
+        # risk thresholds, and evaluator failures remain mandatory even when a
+        # custom handler is installed.
+        result = self._make_decision(
+            context,
+            all_risks,
+            gate_results,
+            forced_rejection_reasons=evaluation_errors,
+        )
+
         if context.operation_type in self._approval_handlers:
             try:
                 custom_result = self._approval_handlers[context.operation_type](context)
+                if not isinstance(custom_result, PromotionResult):
+                    raise TypeError("custom approval handler returned malformed result")
                 custom_result.gate_results.update(gate_results)
                 custom_result.risks.extend(all_risks)
-                self._record_result(custom_result, time.time() - start_time)
-                return custom_result
+                if result.rejection_reasons:
+                    custom_result.decision = PromotionDecision.REJECTED
+                    custom_result.rejection_reasons = list(dict.fromkeys(
+                        result.rejection_reasons + custom_result.rejection_reasons
+                    ))
+                result = custom_result
             except Exception as e:
                 logger.error(f"Custom approval handler failed: {e}")
+                # Keep the standard fail-closed result when a custom handler
+                # is unavailable or malformed.
 
-        # Make decision based on standard logic
-        result = self._make_decision(context, all_risks, gate_results)
-
-        # Record and emit
         self._record_result(result, time.time() - start_time)
-
         return result
+
+    def _validate_context(self, context: Any) -> List[str]:
+        """Return deterministic errors for malformed promotion contexts."""
+        errors: List[str] = []
+        if not isinstance(context, PromotionContext):
+            return ["Promotion context is missing or malformed"]
+        if not isinstance(context.operation_id, str) or not context.operation_id.strip():
+            errors.append("Operation id is required")
+        if not isinstance(context.operation_type, str) or not context.operation_type.strip():
+            errors.append("Operation type is required")
+        if not isinstance(context.description, str) or not context.description.strip():
+            errors.append("Operation description is required")
+        if not isinstance(context.source, str) or not context.source.strip():
+            errors.append("Operation source is required")
+        if not isinstance(context.safety_level, SafetyLevel):
+            errors.append("Safety level is invalid")
+        if isinstance(context.confidence, bool) or not isinstance(context.confidence, (int, float)):
+            errors.append("Confidence is invalid")
+        elif not math.isfinite(float(context.confidence)) or not 0.0 <= float(context.confidence) <= 1.0:
+            errors.append("Confidence must be between 0 and 1")
+        if not isinstance(context.rollback_possible, bool):
+            errors.append("Rollback capability is invalid")
+        if not isinstance(context.rollback_plan, str):
+            errors.append("Rollback plan is invalid")
+        if not isinstance(context.metadata, dict):
+            errors.append("Promotion metadata is invalid")
+        else:
+            evidence_errors = context.metadata.get("safety_evidence_errors", [])
+            if evidence_errors:
+                if not isinstance(evidence_errors, list):
+                    errors.append("Safety evidence errors are malformed")
+                else:
+                    errors.extend(str(error) for error in evidence_errors)
+        return list(dict.fromkeys(errors))
+
+    def _rejected_result(self, context: Any, reasons: List[str]) -> PromotionResult:
+        """Build a safe rejection even when the supplied context is invalid."""
+        operation_id = getattr(context, "operation_id", "unknown")
+        if not isinstance(operation_id, str) or not operation_id:
+            operation_id = "unknown"
+        safety_level = getattr(context, "safety_level", SafetyLevel.CRITICAL)
+        if not isinstance(safety_level, SafetyLevel):
+            safety_level = SafetyLevel.CRITICAL
+        return PromotionResult(
+            operation_id=operation_id,
+            decision=PromotionDecision.REJECTED,
+            safety_level=safety_level,
+            overall_confidence=0.0,
+            rejection_reasons=list(dict.fromkeys(reasons)),
+            requires_human_review=False,
+            metadata={"evaluation_error": True},
+        )
 
     def _determine_safety_level(self, risks: List[RiskAssessment]) -> SafetyLevel:
         """Determine overall safety level from risks."""
@@ -476,6 +577,7 @@ class SafetyPromotionGates:
         context: PromotionContext,
         risks: List[RiskAssessment],
         gate_results: Dict[str, ValidationGateStatus],
+        forced_rejection_reasons: Optional[List[str]] = None,
     ) -> PromotionResult:
         """Make promotion decision based on evaluation."""
 
@@ -486,7 +588,7 @@ class SafetyPromotionGates:
         overall_confidence = self._calculate_confidence(context, risks, gate_passed)
 
         # Check rejection conditions
-        rejection_reasons = []
+        rejection_reasons = list(forced_rejection_reasons or [])
         conditions = []
 
         # Confidence check
@@ -542,7 +644,7 @@ class SafetyPromotionGates:
         # Check if human review required
         requires_human = (
             decision == PromotionDecision.REQUIRES_HUMAN or
-            context.safety_level == SafetyLevel.CRITICAL or
+            (context.safety_level in (SafetyLevel.HIGH_RISK, SafetyLevel.CRITICAL) and self.config.human_review_on_high_risk) or
             (self.config.human_review_on_conflict and any(r.category == RiskCategory.CORRECTNESS for r in risks))
         )
 

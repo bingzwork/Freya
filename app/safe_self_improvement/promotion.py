@@ -158,10 +158,26 @@ class PatchPromotionManager:
             }
 
         try:
+            # A promotion must always pass the authoritative safety gate,
+            # even when callers request skipped stages.
+            safety_result = self._evaluate_safety_gates(candidate, execution_result)
+            if safety_result.decision != PromotionDecision.APPROVED:
+                result = PromotionResult(
+                    candidate_id=candidate.id,
+                    success=False,
+                    stage=PromotionStage.STAGING,
+                    decision=PromotionDecision.REJECTED,
+                    details={"safety_gates": safety_result.to_dict()},
+                    error="Safety promotion gates rejected the candidate",
+                )
+                self._stats["failed_promotions"] += 1
+                self._promotion_history.append(result)
+                return result
+
             # Run through each stage
             skip_stages = skip_stages or []
             all_passed = True
-            stage_results = {}
+            stage_results = {"safety_preflight": safety_result.to_dict()}
 
             for stage in self.config.stages:
                 if stage in skip_stages:
@@ -239,6 +255,98 @@ class PatchPromotionManager:
 
         return result
 
+    def _evaluate_safety_gates(
+        self,
+        candidate: ImprovementCandidate,
+        execution_result: ExecutionResult,
+    ):
+        """Evaluate promotion safety and reject malformed evidence."""
+        from app.core.safety_gates import PromotionResult as SafetyPromotionResult
+
+        evidence_errors: List[str] = []
+        if execution_result.candidate_id != candidate.id:
+            evidence_errors.append("Execution result does not match candidate")
+        if not isinstance(execution_result.verification_results, dict):
+            evidence_errors.append("Verification evidence is missing or malformed")
+            verification = None
+        else:
+            verification = execution_result.verification_results.get("verification")
+            if not isinstance(verification, dict):
+                evidence_errors.append("Verification evidence is missing or malformed")
+            elif "passed" not in verification:
+                evidence_errors.append("Verification evidence has no explicit pass state")
+            elif verification["passed"] is not True:
+                evidence_errors.append("Verification evidence did not pass")
+        if execution_result.failed_modifications:
+            evidence_errors.append("Execution contains failed modifications")
+
+        metadata = {}
+        metadata.update(getattr(candidate, "metadata", {}) or {})
+        metadata.update(getattr(execution_result, "metadata", {}) or {})
+        rollback_plan = metadata.get("rollback_plan") or metadata.get("rollback_checkpoint_id", "")
+
+        try:
+            confidence = candidate.confidence
+            if isinstance(confidence, bool):
+                raise ValueError("boolean confidence")
+            confidence = float(confidence)
+        except (TypeError, ValueError):
+            confidence = 0.0
+            evidence_errors.append("Candidate confidence is invalid")
+
+        risk_level = getattr(candidate, "estimated_risk", None)
+        risk_mapping = {
+            "none": "safe",
+            "low": "low_risk",
+            "medium": "medium_risk",
+            "high": "high_risk",
+            "critical": "critical",
+        }
+        risk_value = getattr(risk_level, "value", risk_level)
+        safety_value = risk_mapping.get(risk_value)
+        if safety_value is None:
+            evidence_errors.append("Candidate risk level is invalid")
+            safety_value = "critical"
+
+        from app.core.safety_gates import SafetyLevel
+        context = PromotionContext(
+            operation_id=candidate.id,
+            operation_type="self_improvement",
+            description=candidate.description or candidate.title or "Self-improvement candidate",
+            source=candidate.source or "SafeSelfImprovement",
+            payload=candidate,
+            metadata={
+                "execution_verification": execution_result.verification_results,
+                "safety_evidence_errors": evidence_errors,
+            },
+            confidence=confidence,
+            rollback_possible=bool(rollback_plan),
+            rollback_plan=str(rollback_plan),
+            safety_level=SafetyLevel(safety_value),
+            affected_systems=list(getattr(candidate, "affected_files", []) or []),
+        )
+
+        try:
+            evaluator = getattr(self.safety_gates, "evaluate", None)
+            if not callable(evaluator):
+                evaluator = getattr(self.safety_gates, "evaluate_promotion", None)
+            if not callable(evaluator):
+                raise TypeError("Safety gate evaluator is unavailable")
+            gate_result = evaluator(context)
+            if not isinstance(gate_result, SafetyPromotionResult):
+                raise TypeError("Safety gate evaluator returned malformed result")
+        except Exception as error:
+            gate_result = SafetyPromotionResult(
+                operation_id=candidate.id,
+                decision=PromotionDecision.REJECTED,
+                safety_level=SafetyLevel.CRITICAL,
+                overall_confidence=0.0,
+                rejection_reasons=["Safety gate evaluation failed"],
+                metadata={"evaluation_error": str(error)},
+            )
+
+        return gate_result
+
     def _run_stage(
         self,
         candidate: ImprovementCandidate,
@@ -267,30 +375,12 @@ class PatchPromotionManager:
         """Run verification stage - check execution verification results."""
         details = {}
 
-        # Check verification results from execution
+        # The mandatory safety preflight has already validated this evidence.
         verification = execution_result.verification_results
         details["execution_verification"] = verification
-
-        # Run the authoritative safety gate API. Malformed evidence is a
-        # rejection, never an implicit approval.
-        operation_id = str(getattr(candidate, "candidate_id", None) or getattr(candidate, "id", None) or uuid.uuid4())
-        description = str(getattr(candidate, "description", None) or getattr(candidate, "title", None) or "Self-improvement candidate")
-        payload = getattr(candidate, "patch", None) or getattr(candidate, "changes", None) or candidate
-        confidence = float(getattr(candidate, "confidence", 0.0) or 0.0)
-        context = PromotionContext(
-            operation_id=operation_id,
-            operation_type="self_improvement",
-            description=description,
-            source="SafeSelfImprovement",
-            payload=payload,
-            metadata={"execution_verification": verification},
-            confidence=max(0.0, min(1.0, confidence)),
-            rollback_possible=True,
-        )
-        gate_result = self.safety_gates.evaluate_promotion(context)
-        details["safety_gates"] = gate_result.to_dict() if gate_result else {}
-
-        passed = gate_result.decision == PromotionDecision.APPROVED if gate_result else False
+        passed = isinstance(verification, dict) and isinstance(
+            verification.get("verification"), dict
+        ) and verification["verification"].get("passed") is True
 
         return {"stage": "verification", "passed": passed, "details": details}
 
@@ -380,11 +470,12 @@ class PatchPromotionManager:
         """Run production stage - final validation."""
         details = {"final_validation": True}
 
-        # Final safety gate check
-        gate_result = self.safety_gates.evaluate(candidate, execution_result)
-        details["final_safety_gates"] = gate_result.to_dict() if gate_result else {}
+        # Final safety gate check. Never default to approval when an
+        # evaluator is unavailable or the gate API fails.
+        gate_result = self._evaluate_safety_gates(candidate, execution_result)
+        details["final_safety_gates"] = gate_result.to_dict()
 
-        passed = gate_result.decision == PromotionDecision.APPROVED if gate_result else True
+        passed = gate_result.decision == PromotionDecision.APPROVED
 
         return {"stage": "production", "passed": passed, "details": details}
 
