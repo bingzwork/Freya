@@ -348,6 +348,7 @@ class BackgroundJobService:
         tick_interval: float = 1.0,
         max_workers: int = 10,
         event_bus: Optional[EventBus] = None,
+        max_pending_jobs: int = 1000,
     ):
         """
         Initialize the background job service.
@@ -358,7 +359,8 @@ class BackgroundJobService:
             event_bus: Optional event bus for job lifecycle events
         """
         self._tick_interval = tick_interval
-        self._max_workers = max_workers
+        self._max_workers = max(1, int(max_workers))
+        self._max_pending_jobs = max(1, int(max_pending_jobs))
         self._event_bus = event_bus or get_event_bus()
 
         # Job storage
@@ -779,6 +781,9 @@ class BackgroundJobService:
         )
 
         with self._lock:
+            pending = sum(1 for existing in self._jobs.values() if existing.status in {JobStatus.PENDING, JobStatus.SCHEDULED, JobStatus.PAUSED})
+            if pending >= self._max_pending_jobs:
+                raise RuntimeError(f"Background job queue is full ({self._max_pending_jobs})")
             self._jobs[job.id] = job
             for tag_key, tag_value in tags.items():
                 tag = f"{tag_key}:{tag_value}"
@@ -1038,6 +1043,8 @@ class BackgroundJobService:
             "status_counts": dict(status_counts),
             "worker_capacity": self._max_workers,
             "workers_available": self._worker_semaphore._value,
+            "max_pending_jobs": self._max_pending_jobs,
+            "queue_depth": sum(1 for job in self._jobs.values() if job.status in {JobStatus.PENDING, JobStatus.SCHEDULED, JobStatus.PAUSED}),
         })
         return stats
 

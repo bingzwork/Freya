@@ -4,14 +4,21 @@ from __future__ import annotations
 
 from typing import List, Dict, Any, Set
 
+from app.core.performance import BoundedTTLCache
+
 
 class ContextBuilder:
     def __init__(self, symbol_index, dependency_graph, max_characters=12_000):
         self.symbol_index = symbol_index
         self.dependency_graph = dependency_graph
         self.max_characters = max_characters
+        self._cache = BoundedTTLCache(max_size=64, ttl_seconds=30.0)
 
     def build(self, matches):
+        key = (tuple((m.get("file"), m.get("type"), m.get("name"), m.get("line")) for m in matches), self.max_characters)
+        cached = self._cache.get(key)
+        if cached is not None:
+            return cached
         sections = []
         included_files = set()
 
@@ -31,7 +38,12 @@ class ContextBuilder:
                     included_files.add(dependency)
 
         context = "\n\n".join(sections)
-        return context[: self.max_characters]
+        result = context[: self.max_characters]
+        self._cache.set(key, result)
+        return result
+
+    def invalidate_cache(self):
+        self._cache.invalidate()
 
     def _section_for_match(self, match: Dict[str, Any]) -> str:
         """

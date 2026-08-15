@@ -20,10 +20,13 @@ Features:
 """
 
 import logging
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set, Callable, Union, TYPE_CHECKING
+
+from app.core.performance import BoundedTTLCache, bounded_parallel_map
 
 if TYPE_CHECKING:
     from app.memory.project_memory import ProjectMemory
@@ -817,6 +820,11 @@ class UnifiedRetrieval:
 
         self._default_max_results = 20
         self._default_min_score = 0.1
+        self._result_cache = BoundedTTLCache(max_size=128, ttl_seconds=30.0)
+        # Existing durable/vector memory backends are thread-sensitive; callers may
+        # opt into bounded fan-out after proving their backend is thread-safe.
+        self._max_parallel_retrievers = 1
+        self._metrics = {"retrieval_count": 0, "cache_hits": 0, "cache_misses": 0, "last_duration_ms": 0.0}
 
     def add_retriever(self, retriever: MemoryRetriever) -> None:
         """Add a custom memory retriever."""
@@ -833,24 +841,23 @@ class UnifiedRetrieval:
         """
         if isinstance(query, str):
             query = RetrievalQuery(query=query)
-
-        all_results: List[RetrievalResult] = []
-
-        # Query each available retriever
-        for retriever in self._retrievers:
-            if not retriever.is_available():
-                continue
-
+        started = time.perf_counter()
+        key = (query.query, tuple(query.sources or ()), query.max_results, query.min_score, repr(query.context), query.boost_category)
+        cached = self._result_cache.get(key)
+        if cached is not None:
+            self._metrics["cache_hits"] += 1
+            return list(cached)
+        self._metrics["cache_misses"] += 1
+        available = [r for r in self._retrievers if r.is_available() and (not query.sources or r.source_name in query.sources)]
+        def run(retriever):
             try:
-                # Filter by requested sources if specified
-                if query.sources and retriever.source_name not in query.sources:
-                    continue
-
-                results = retriever.retrieve(query)
-                all_results.extend(results)
+                return retriever.retrieve(query)
             except Exception as e:
                 logger.warning(f"Retriever {retriever.source_name} failed: {e}")
-                continue
+                return []
+        all_results: List[RetrievalResult] = []
+        for results in bounded_parallel_map(run, available, self._max_parallel_retrievers):
+            all_results.extend(results)
 
         # Deduplicate by content similarity (simple approach)
         all_results = self._deduplicate(all_results)
@@ -863,7 +870,17 @@ class UnifiedRetrieval:
         min_score = query.min_score if query.min_score is not None else self._default_min_score
 
         filtered = [r for r in all_results if r.score >= min_score]
-        return filtered[:max_results]
+        final = filtered[:max_results]
+        self._result_cache.set(key, list(final))
+        self._metrics["retrieval_count"] += 1
+        self._metrics["last_duration_ms"] = (time.perf_counter() - started) * 1000.0
+        return final
+
+    def performance_stats(self) -> Dict[str, Any]:
+        return {**self._metrics, "cache": self._result_cache.stats()}
+
+    def invalidate_cache(self) -> None:
+        self._result_cache.invalidate()
 
     def _deduplicate(self, results: List[RetrievalResult]) -> List[RetrievalResult]:
         """Remove near-duplicate results based on content similarity."""

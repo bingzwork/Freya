@@ -198,3 +198,24 @@ Research, Browser, File Input, File Output, and Document Editing demonstrate usa
 | Automation / Scheduling | `AutomationCapability` → `BackgroundJobService` → `WorkflowOrchestrator` → normal routing and safety boundary; definitions persist through `AtomicJsonStore`. | Creation, recurrence, duplicate/unsafe-frequency rejection, workflow-boundary invocation, registration, and routing contracts passed. | **PARTIAL** for specialized trigger breadth; core callable scheduling path is wired. |
 | Vision / OCR | `VisionCapability` → `VisionProvider` adapter → optional local Tesseract OCR or replaceable provider; file references remain validated by the centralized file policy. | Registration, structured evidence, source metadata, confidence/uncertainty, and unavailable-provider behavior passed. | **PARTIAL** pending a full multimodal/VQA provider. |
 | API Connector | `APIConnectorCapability` → existing `http_request` primitive, with allowlist, credential store, redaction, response bounds, and `SafetyGate`. | Allowed request, domain/URL blocking, credential reference handling, redaction, mutation approval, HTTP compatibility, registration, and routing contracts passed. | **IMPLEMENTED** for the controlled HTTP contract. |
+
+## Runtime Performance Status (2026-08-15)
+
+This audit inspected the production implementations and wiring rather than relying on prior percentage estimates. The existing `MemoryCoordinator`, `UnifiedRetrieval`, `BackgroundJobService`, `ObservabilityHub`, and legacy project-intelligence ownership were preserved.
+
+| Capability | Verified status | Evidence and final state |
+|---|---|---|
+| Runtime Performance | PARTIAL | Retrieval now has bounded result caching, context generation has bounded fragment caching, and project indexing avoids repeated reads. Some legacy runtime paths still perform synchronous work and require future end-to-end measurement. |
+| Project Indexing | COMPLETE | Existing discovery and exclusions were preserved; indexing now persists metadata, handles read failures, and supports stable incremental updates. |
+| Semantic Search Performance | COMPLETE | `UnifiedRetrieval` remains authoritative and now applies bounded TTL result caching, deterministic limiting/deduplication, graceful source failure isolation, and measured retrieval statistics. |
+| Runtime Context Generation | COMPLETE | Existing provenance-preserving context construction remains intact and now avoids repeated recomputation with bounded caching and the existing character budget. |
+| Memory Optimization | PARTIAL | New reusable bounded TTL/LRU-style caching is in place for runtime results and context fragments. Broader memory-store retention and vector-backend lifecycle behavior remain existing architecture concerns. |
+| Incremental Indexing | COMPLETE | Added metadata/signature-based change detection for new, modified, unchanged, and deleted files, atomic metadata persistence, stale-entry cleanup, and invalidation. |
+| Background Processing | COMPLETE | Existing `BackgroundJobService` was reused; bounded pending-job admission and queue-depth statistics were added without creating a second framework. Existing retry, lifecycle, cancellation, and shutdown behavior remains in force. |
+| Parallel Execution | PARTIAL | A bounded parallel execution helper is available, and background workers remain bounded. Unified retrieval defaults to sequential mode because the existing durable/vector backends are thread-sensitive; safe fan-out is opt-in after backend validation. |
+| Cache Optimization | COMPLETE | Added one reusable bounded TTL cache abstraction with eviction, invalidation, and hit/miss statistics; integrated it into authoritative retrieval and context-generation paths. |
+| Performance Profiling | PARTIAL | Retrieval cache and duration statistics plus indexing change metrics are exposed through service APIs/ObservabilityHub-compatible metrics. Full capability-level and background-job duration dashboards remain future work. |
+
+### Verification Evidence
+
+The focused runtime-performance and affected production-path suite passed: **28 tests** across incremental indexing, bounded caching, context generation, retrieval cache behavior, project intelligence, production retrieval integration, priority/background hardening, readiness, and authoritative capability wiring. Compilation also passed for the application and tests. No full-suite claim is made here because the repository's broader suite has documented environment/resource sensitivities.
