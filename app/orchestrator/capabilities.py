@@ -1429,6 +1429,7 @@ def create_all_capabilities(agent=None) -> List[Capability]:
     # that is intentionally kept in its own research domain module.
     from app.research.capability import ResearchCapability
     from app.browser.capability import BrowserCapability
+    from app.document.capability import DocumentEditingCapability
 
     capabilities = [
         MemoryManagementCapability(),
@@ -1447,6 +1448,7 @@ def create_all_capabilities(agent=None) -> List[Capability]:
         OrchestrationCoreCapability(),
         FileInputCapability(),
         FileOutputCapability(),
+        DocumentEditingCapability(),
     ]
 
     if agent:
