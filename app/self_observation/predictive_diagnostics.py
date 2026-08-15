@@ -105,6 +105,10 @@ class PredictionValidationRecord:
     time_to_validation_seconds: float = 0.0
     model_name: str = ""
     metadata: Dict[str, Any] = field(default_factory=dict)
+    evaluation: str = "UNRESOLVED"  # CORRECT, INCORRECT, PARTIAL, UNRESOLVED
+    observation_id: str = ""
+    hypothesis_id: str = ""
+    evidence: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -238,6 +242,7 @@ class PredictiveDiagnostics:
 
         # Validation tracking
         self._pending_validations: Dict[str, PredictionResult] = {}
+        self._validated_prediction_ids: Set[str] = set()
 
         # Alert generation
         self._generated_alerts: List[PredictiveAlert] = []
@@ -854,15 +859,78 @@ class PredictiveDiagnostics:
             self._pending_validations.pop(pred_id, None)
 
     def _validate_prediction(self, prediction: PredictionResult, current_state: Any) -> bool:
-        """
-        Validate a prediction against current state.
+        """Compare a prediction with an actual runtime observation."""
+        actual_state = getattr(current_state, "system_health_status", None)
+        if prediction.predicted_state is not None and isinstance(actual_state, str):
+            return prediction.predicted_state == actual_state
+        metric_name = prediction.metadata.get("metric") if isinstance(prediction.metadata, dict) else None
+        actual_value = getattr(current_state, metric_name, None) if metric_name else None
+        if isinstance(prediction.predicted_value, (int, float)) and isinstance(actual_value, (int, float)):
+            tolerance = prediction.metadata.get("tolerance", 0.0) if isinstance(prediction.metadata, dict) else 0.0
+            return abs(prediction.predicted_value - actual_value) <= tolerance
+        return False
 
-        This is a framework method - actual validation logic depends
-        on the prediction type and would be implemented with real algorithms.
-        """
-        # Framework placeholder - real validation would compare predicted vs actual
-        logger.debug(f"Validation for {prediction.prediction_id} - framework placeholder")
-        return False  # Placeholder
+    def record_actual_outcome(
+        self,
+        prediction_id: str,
+        *,
+        actual_state: Optional[str] = None,
+        actual_value: Optional[float] = None,
+        observation_id: str = "",
+        evidence: Optional[Dict[str, Any]] = None,
+    ) -> Optional[PredictionValidationRecord]:
+        """Evaluate a prediction once against an explicitly recorded outcome."""
+        with self._lock:
+            prediction = next((item for item in self._prediction_history if item.prediction_id == prediction_id), None)
+            if prediction is None or prediction_id in self._validated_prediction_ids:
+                return None
+            self._validated_prediction_ids.add(prediction_id)
+
+        has_state = prediction.predicted_state is not None and actual_state is not None
+        has_value = isinstance(prediction.predicted_value, (int, float)) and isinstance(actual_value, (int, float))
+        if has_state:
+            evaluation = "CORRECT" if prediction.predicted_state == actual_state else "INCORRECT"
+            accurate = evaluation == "CORRECT"
+        elif has_value:
+            tolerance = prediction.metadata.get("tolerance", 0.0) if isinstance(prediction.metadata, dict) else 0.0
+            evaluation = "CORRECT" if abs(prediction.predicted_value - actual_value) <= tolerance else "INCORRECT"
+            accurate = evaluation == "CORRECT"
+        else:
+            evaluation, accurate = "UNRESOLVED", False
+        record = PredictionValidationRecord(
+            prediction_id=prediction_id,
+            prediction_type=prediction.prediction_type,
+            horizon=prediction.horizon,
+            was_accurate=accurate,
+            predicted_value=prediction.predicted_value,
+            actual_value=actual_value,
+            predicted_state=prediction.predicted_state,
+            actual_state=actual_state,
+            confidence_at_prediction=prediction.confidence_score,
+            confidence_score_at_prediction=prediction.confidence_score,
+            model_name=prediction.model_info.get("model", ""),
+            evaluation=evaluation,
+            observation_id=observation_id,
+            hypothesis_id=str(prediction.metadata.get("hypothesis_id", "")),
+            evidence=evidence or {},
+        )
+        with self._lock:
+            self._validation_history.append(record)
+            if len(self._validation_history) > self._max_validation_history:
+                self._validation_history.pop(0)
+        if evaluation != "UNRESOLVED":
+            self._record_validation_result(prediction, accurate)
+        return record
+
+    def get_prediction_accuracy(self) -> Dict[str, Any]:
+        with self._lock:
+            resolved = [record for record in self._validation_history if record.evaluation in {"CORRECT", "INCORRECT", "PARTIAL"}]
+            counts = {status: sum(1 for record in self._validation_history if record.evaluation == status) for status in ("CORRECT", "INCORRECT", "PARTIAL", "UNRESOLVED")}
+        return {"resolved": len(resolved), "total": len(self._validation_history), "accuracy": (counts["CORRECT"] + 0.5 * counts["PARTIAL"]) / len(resolved) if resolved else None, "counts": counts}
+
+    def get_validation_history(self, limit: int = 50) -> List[PredictionValidationRecord]:
+        with self._lock:
+            return self._validation_history[-limit:]
 
     def _record_validation_result(self, prediction: PredictionResult, was_accurate: bool) -> None:
         """Record validation result and update model accuracy."""
