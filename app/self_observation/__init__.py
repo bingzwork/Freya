@@ -19,6 +19,12 @@ from .runtime_awareness import (
     set_runtime_awareness,
 )
 
+from .system_anatomy import (
+    AnatomyNode,
+    SystemAnatomy,
+    get_system_anatomy,
+)
+
 from .self_analysis import (
     CentralizedSelfAnalysis,
     AnalysisConfig,
@@ -75,6 +81,11 @@ __all__ = [
     "AwarenessConfig",
     "get_runtime_awareness",
     "set_runtime_awareness",
+
+    # Live System Anatomy
+    "AnatomyNode",
+    "SystemAnatomy",
+    "get_system_anatomy",
 
     # Self-Analysis
     "CentralizedSelfAnalysis",
