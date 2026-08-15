@@ -148,6 +148,7 @@ class LearningAnalytics:
         self._load()
 
         # Start background aggregation thread
+        self._stop_event = threading.Event()
         self._aggregation_thread = threading.Thread(
             target=self._aggregation_loop,
             daemon=True
@@ -343,10 +344,15 @@ class LearningAnalytics:
                     alpha * gap_rate + (1 - alpha) * current_rate
                 )
 
+    def stop(self, timeout: float = 5.0) -> None:
+        """Stop the background aggregation thread."""
+        self._stop_event.set()
+        if self._aggregation_thread and self._aggregation_thread.is_alive():
+            self._aggregation_thread.join(timeout=timeout)
+
     def _aggregation_loop(self):
         """Background thread to periodically aggregate metrics."""
-        while True:
-            time.sleep(60)  # Aggregate every minute
+        while not self._stop_event.wait(60.0):
             self._aggregate_metrics()
 
     def _aggregate_metrics(self):

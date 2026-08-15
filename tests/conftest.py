@@ -1,12 +1,17 @@
-﻿import time
-import gc
-import sys
+﻿import gc
+import time
 
 import pytest
 
+from app.orchestrator.capability_registry import reset_capability_registry
+from app.orchestrator.workflow_orchestrator import reset_workflow_orchestrator
+
+
 @pytest.fixture(autouse=True)
-def delay_after_test():
+def isolate_global_runtime():
+    """Release process-global runtime state after every test."""
     yield
-    # Force garbage collection and a small delay to release any file handles
+    reset_workflow_orchestrator()
+    reset_capability_registry()
     gc.collect()
     time.sleep(0.05)

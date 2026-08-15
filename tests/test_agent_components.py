@@ -1,4 +1,3 @@
-import io
 import sys
 import tempfile
 import uuid
@@ -59,8 +58,8 @@ def test_executor_blocks_mutating_tool_without_approval() -> None:
         StubLLM('{"tool": "write_file", "args": {"path": "x.py", "content": "x"}}'),
         StubTools(),
     )
-    # Mock stdin to provide "2" (No) to the interactive prompt
-    with patch("sys.stdin", io.StringIO("2\n")):
+    # Patch the supported approval boundary; do not emulate the obsolete stdin menu.
+    with patch("app.agent.executor.permission_prompt", return_value="No"):
         result = executor.execute_step("change a file")
 
     assert result["error"] == "User denied permission for write_file."

@@ -143,8 +143,8 @@ class HealthMonitor:
         """Get metric history."""
         return self._history[-limit:]
 
-    def collect_metrics(self) -> Dict[str, Metric]:
-        """Collect all health metrics."""
+    def collect_metrics(self, include_test_metrics: bool = True) -> Dict[str, Metric]:
+        """Collect health metrics, optionally excluding subprocess-based test metrics."""
         metrics: Dict[str, Metric] = {}
 
         # Code Quality Metrics
@@ -153,11 +153,12 @@ class HealthMonitor:
             self._apply_threshold(m)
             metrics[m.name] = m
 
-        # Test Metrics
-        tm = TestMetrics(str(self.workspace))
-        for m in tm.collect_all():
-            self._apply_threshold(m)
-            metrics[m.name] = m
+        # Test Metrics invoke pytest subprocesses and are optional for quick health checks.
+        if include_test_metrics:
+            tm = TestMetrics(str(self.workspace))
+            for m in tm.collect_all():
+                self._apply_threshold(m)
+                metrics[m.name] = m
 
         # Performance Metrics
         pm = PerformanceMetrics(str(self.workspace))
@@ -182,9 +183,9 @@ class HealthMonitor:
             metric.threshold_fair = thresholds.get("fair", metric.threshold_fair)
             metric.threshold_poor = thresholds.get("poor", metric.threshold_poor)
 
-    def check_metrics(self) -> Dict[str, Alert]:
-        """Check all metrics and return any alerts."""
-        metrics = self.collect_metrics()
+    def check_metrics(self, include_test_metrics: bool = True) -> Dict[str, Alert]:
+        """Check metrics and return any alerts."""
+        metrics = self.collect_metrics(include_test_metrics=include_test_metrics)
         alerts: Dict[str, Alert] = {}
 
         for name, metric in metrics.items():

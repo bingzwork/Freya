@@ -843,7 +843,7 @@ class WorldModel:
             hm = self.health_monitor
             # Must call check_metrics() first to populate _current_metrics,
             # otherwise get_health_score() returns 0.0 and status is CRITICAL
-            hm.check_metrics()
+            hm.check_metrics(include_test_metrics=False)
             summary = hm.get_summary()
 
             # Get detailed metrics (already collected by check_metrics)

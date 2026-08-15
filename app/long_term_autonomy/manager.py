@@ -591,6 +591,12 @@ class AutonomyManager:
                 self._unregister_background_jobs()
                 raise RuntimeError("Autonomy startup failed") from exc
 
+    def _stop_learning_analytics(self) -> None:
+        """Stop the learning pipeline's background analytics worker."""
+        analytics = getattr(self.learning_pipeline, "analytics", None)
+        if analytics is not None and hasattr(analytics, "stop"):
+            analytics.stop()
+
     def stop(self) -> bool:
         """
         Stop the autonomous system.
@@ -600,6 +606,7 @@ class AutonomyManager:
         """
         with self._lock:
             if not self._running:
+                self._stop_learning_analytics()
                 logger.warning("Autonomy system is not running")
                 return False
 
@@ -618,6 +625,7 @@ class AutonomyManager:
         self.self_initiated_work.stop()
         self.maintenance.stop()
         self.continuous_operation.stop()
+        self._stop_learning_analytics()
 
         # Wait for main thread to finish (with timeout, outside lock)
         if self._main_thread and self._main_thread.is_alive():

@@ -95,7 +95,10 @@ def mock_agent(tmp_path: Path):
         with patch("app.core.logger.logger") as mock_logger:
             agent = FreyaAgent(str(tmp_path))
 
-        yield agent
+        try:
+            yield agent
+        finally:
+            agent.shutdown()
 
 
 class TestFreyaAgentConversation:
@@ -127,7 +130,10 @@ class TestFreyaAgentConversation:
              patch("app.core.logger.logger"):
 
             agent = FreyaAgent(str(tmp_path), max_conversation_history=10)
-            assert agent.conversation.max_history == 10
+            try:
+                assert agent.conversation.max_history == 10
+            finally:
+                agent.shutdown()
 
     def test_new_conversation_clears_history(self, mock_agent):
         """new_conversation should clear the conversation state."""
@@ -187,7 +193,10 @@ class TestFreyaAgentConversation:
 
             save_path = str(tmp_path / "conversation.json")
             agent = FreyaAgent(str(tmp_path), max_conversation_history=10, conversation_persistence_path=save_path)
-            assert agent.conversation._persistence_path == save_path
+            try:
+                assert agent.conversation._persistence_path == save_path
+            finally:
+                agent.shutdown()
 
     def test_save_conversation_method(self, mock_agent, tmp_path: Path):
         """save_conversation should save conversation to file."""

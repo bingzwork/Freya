@@ -130,6 +130,7 @@ class SelfObserver:
 
         # State
         self._running = False
+        self._stop_event = threading.Event()
         self._snapshot_thread: Optional[threading.Thread] = None
         self._snapshots: List[SystemSnapshot] = []
         self._max_snapshots = 1000
@@ -259,6 +260,7 @@ class SelfObserver:
             if self._running:
                 return
             self._running = True
+            self._stop_event.clear()
 
         self._snapshot_thread = threading.Thread(
             target=self._snapshot_loop,
@@ -275,6 +277,7 @@ class SelfObserver:
             if not self._running:
                 return
             self._running = False
+            self._stop_event.set()
 
         if self._snapshot_thread:
             self._snapshot_thread.join(timeout=5.0)
@@ -289,7 +292,7 @@ class SelfObserver:
             except Exception as e:
                 logger.error(f"Error taking snapshot: {e}")
 
-            time.sleep(self.snapshot_interval)
+            self._stop_event.wait(self.snapshot_interval)
 
     def _take_snapshot(self) -> SystemSnapshot:
         """Take a snapshot of the current system state."""
