@@ -218,6 +218,12 @@ class SystemInitializer:
         from app.orchestrator.capabilities import create_all_capabilities
         for cap in create_all_capabilities():
             capability_registry.register(cap)
+        # Keep the ten audited extension areas on the same canonical registry.
+        # Providers are injectable and remain unavailable-safe when optional
+        # credentials, hardware, binaries, or SDKs are not configured.
+        from app.capabilities.extended import build_extended_capabilities
+        for cap in build_extended_capabilities():
+            capability_registry.register(cap, registered_by="SystemInitializer")
         research_capability = capability_registry.get_capability("research_capability")
         if research_capability is not None and hasattr(research_capability, "set_tool_manager"):
             research_capability.set_tool_manager(tool_manager)
