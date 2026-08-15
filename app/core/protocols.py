@@ -167,6 +167,13 @@ class InitializedSystem:
         intelligence: Optional[IntelligenceBundle] = None,
         learning_pipeline: Optional[Any] = None,
         diagnostics: Optional[Any] = None,
+        diagnostic_grouper: Optional[Any] = None,
+        predictive_diagnostics: Optional[Any] = None,
+        runtime_awareness: Optional[Any] = None,
+        system_anatomy: Optional[Any] = None,
+        improvement_measurement: Optional[Any] = None,
+        canary_validator: Optional[Any] = None,
+        patch_promotion_manager: Optional[Any] = None,
         self_improvement: Optional[Any] = None,
     ):
         self.facade = facade
@@ -181,4 +188,11 @@ class InitializedSystem:
         self.intelligence = intelligence
         self.learning_pipeline = learning_pipeline
         self.diagnostics = diagnostics
+        self.diagnostic_grouper = diagnostic_grouper
+        self.predictive_diagnostics = predictive_diagnostics
+        self.runtime_awareness = runtime_awareness
+        self.system_anatomy = system_anatomy
+        self.improvement_measurement = improvement_measurement
+        self.canary_validator = canary_validator
+        self.patch_promotion_manager = patch_promotion_manager
         self.self_improvement = self_improvement

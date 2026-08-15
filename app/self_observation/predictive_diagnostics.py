@@ -213,14 +213,20 @@ class PredictiveDiagnostics:
         runtime_awareness: Optional[RuntimeAwareness] = None,
         self_analysis: Optional[CentralizedSelfAnalysis] = None,
         config: Optional[PredictiveDiagnosticsConfig] = None,
+        event_bus=None,
+        observability=None,
     ):
         """Initialize the predictive diagnostics service."""
         self._runtime_awareness = runtime_awareness
         self._self_analysis = self_analysis
         self._config = config or PredictiveDiagnosticsConfig()
 
-        self._event_bus = get_event_bus()
-        self._observability = get_observability_hub()
+        self._event_bus = event_bus or get_event_bus()
+        self._observability = observability or get_observability_hub()
+        if self._event_bus is None:
+            raise ValueError("PredictiveDiagnostics requires the canonical EventBus")
+        if self._observability is None:
+            raise ValueError("PredictiveDiagnostics requires the canonical ObservabilityHub")
 
         self._lock = threading.RLock()
         self._running = False
@@ -340,6 +346,7 @@ class PredictiveDiagnostics:
 
         if self._diagnostics_thread and self._diagnostics_thread.is_alive():
             self._diagnostics_thread.join(timeout=5.0)
+        self._diagnostics_thread = None
 
         logger.info("PredictiveDiagnostics stopped")
 

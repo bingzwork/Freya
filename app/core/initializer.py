@@ -67,11 +67,20 @@ from app.orchestrator.workflow_orchestrator import WorkflowOrchestrator
 from app.orchestrator.capability_registry import CapabilityRegistry
 from app.orchestrator.safety_gate import SafetyGate
 
-# Diagnostics (Q1)
+# Runtime observation and diagnostics
+from app.self_observation.runtime_awareness import RuntimeAwareness, AwarenessConfig, set_runtime_awareness
+from app.self_observation.system_anatomy import SystemAnatomy
+from app.self_observation.predictive_diagnostics import PredictiveDiagnostics, PredictiveDiagnosticsConfig
 from app.diagnostics.diagnostic_engine import DiagnosticEngine, DiagnosticConfig
+from app.diagnostics.grouping import DiagnosticEvent, DiagnosticGrouper
 
 # SafeSelfImprovement (Q2)
 from app.safe_self_improvement.self_improvement import create_self_improvement_engine, SafeSelfImprovementConfig
+from app.safe_self_improvement.measurement import ImprovementMeasurement
+from app.safe_self_improvement.canary import CanaryValidator, CanaryDecision
+from app.safe_self_improvement.promotion import PatchPromotionManager, PromotionPipelineConfig
+from app.safe_self_improvement.rollback import create_rollback_manager
+from app.core.safety_gates import SafetyPromotionGates, set_safety_gates
 
 # LearningPipeline
 from app.learning.pipeline import create_learning_pipeline
@@ -129,14 +138,11 @@ class SystemInitializer:
 
         job_service = BackgroundJobService(event_bus=event_bus)
         set_job_service(job_service)
-        job_service.start()
-        logger.debug("[SystemInitializer] BackgroundJobService started")
+        logger.debug("[SystemInitializer] BackgroundJobService constructed")
 
         observability = ObservabilityHub(event_bus=event_bus)
         set_observability_hub(observability)
-        if self.config.enable_observability:
-            observability.start()
-        logger.debug("[SystemInitializer] ObservabilityHub started")
+        logger.debug("[SystemInitializer] ObservabilityHub constructed")
 
         config_hot_reload = None
         if self.config.enable_config_hot_reload:
@@ -145,8 +151,7 @@ class SystemInitializer:
                 config=global_config,
                 event_bus=event_bus,
             )
-            config_hot_reload.start()
-        logger.debug("[SystemInitializer] ConfigHotReload started")
+        logger.debug("[SystemInitializer] ConfigHotReload constructed")
 
         file_watcher = None
         if self.config.enable_file_watcher:
@@ -155,8 +160,7 @@ class SystemInitializer:
                 paths=[str(self.workspace)],
                 recursive=True,
             )
-            file_watcher.start()
-        logger.debug("[SystemInitializer] FileWatcher started")
+        logger.debug("[SystemInitializer] FileWatcher constructed")
 
         # ------------------------------------------------------------------
         # 2. LLM Stack (replaces LLM + Priority + ChatActivity)
@@ -332,9 +336,7 @@ class SystemInitializer:
                 event_bus=event_bus,
                 job_service=job_service,
             )
-            if not orchestrator.start():
-                raise RuntimeError("WorkflowOrchestrator failed to start")
-            logger.info("[SystemInitializer] WorkflowOrchestrator started")
+            logger.debug("[SystemInitializer] WorkflowOrchestrator constructed")
 
         # ------------------------------------------------------------------
         # 9. ConversationControl
@@ -396,35 +398,165 @@ class SystemInitializer:
         answer_verifier.set_learning_pipeline(learning_pipeline)
         if autonomy is not None:
             autonomy.set_learning_pipeline(learning_pipeline)
-            if not autonomy.start() or not autonomy.is_running():
-                raise RuntimeError("AutonomyManager failed to start")
-            logger.info("[SystemInitializer] AutonomyManager started")
         logger.debug("[SystemInitializer] LearningPipeline created and late-bound")
 
         # ------------------------------------------------------------------
-        # 13. Diagnostics (Q1)
+        # 13. Runtime observation and live anatomy
+        # ------------------------------------------------------------------
+        runtime_awareness = None
+        system_anatomy = None
+        if self.config.enable_diagnostics:
+            runtime_awareness = RuntimeAwareness(
+                orchestrator=orchestrator,
+                decision_manager=decision_manager,
+                memory_retrieval=memory_coordinator.unified_retrieval,
+                autonomy_manager=autonomy,
+                goal_storage=memory_coordinator.goal_storage,
+                config=AwarenessConfig(),
+                event_bus=event_bus,
+                observability=observability,
+            )
+            set_runtime_awareness(runtime_awareness)
+            system_anatomy = SystemAnatomy(
+                observability=observability,
+                capability_registry=capability_registry,
+                orchestrator=orchestrator,
+            )
+            logger.debug("[SystemInitializer] RuntimeAwareness and SystemAnatomy created")
+
+        # ------------------------------------------------------------------
+        # 14. Diagnostics and deterministic post-processing
         # ------------------------------------------------------------------
         diagnostic_engine = None
+        diagnostic_grouper = None
         if self.config.enable_diagnostics:
-            diagnostic_config = DiagnosticConfig()
             diagnostic_engine = DiagnosticEngine(
                 workspace=str(self.workspace),
-                config=diagnostic_config,
+                config=DiagnosticConfig(),
                 event_bus=event_bus,
             )
             execution_engine.set_diagnostics(diagnostic_engine)
-            logger.debug("[SystemInitializer] DiagnosticEngine created")
+            dependencies = {
+                node["name"]: node.get("dependencies", [])
+                for node in system_anatomy.list_nodes()
+            }
+            diagnostic_grouper = DiagnosticGrouper(dependencies=dependencies)
+
+            def _group_completed_diagnostics(event):
+                grouped_events = []
+                for index, issue in enumerate((event.data or {}).get("issues", [])):
+                    if not isinstance(issue, dict):
+                        continue
+                    grouped_events.append(DiagnosticEvent(
+                        event_id=str(issue.get("id") or f"diagnostic-{index}"),
+                        source="DiagnosticEngine",
+                        failure_type=str(issue.get("type") or issue.get("severity") or "unknown"),
+                        component=str(issue.get("file") or issue.get("component") or "workspace"),
+                        operation=str(issue.get("operation") or "diagnostic"),
+                        message=str(issue.get("description") or issue.get("message") or ""),
+                        fingerprint=str(issue.get("fingerprint") or issue.get("code") or ""),
+                        dependencies=list(issue.get("dependencies", [])) if isinstance(issue.get("dependencies", []), list) else [],
+                        metadata=issue,
+                    ))
+                self._last_diagnostic_grouping = diagnostic_grouper.group(grouped_events)
+                event_bus.emit(
+                    "diagnostics.grouped",
+                    {"report": self._last_diagnostic_grouping.to_dict()},
+                    source="DiagnosticGrouper",
+                )
+
+            self._last_diagnostic_grouping = None
+            self._diagnostic_grouping_subscription = event_bus.subscribe(
+                "diagnostics.completed", _group_completed_diagnostics
+            )
+            logger.debug("[SystemInitializer] DiagnosticEngine and DiagnosticGrouper connected")
 
         # ------------------------------------------------------------------
-        # 14. Safe Self-Improvement (Q2)
+        # 15. Predictive diagnostics, measurement, and controlled canary
+        # ------------------------------------------------------------------
+        predictive_diagnostics = None
+        if self.config.enable_diagnostics:
+            predictive_diagnostics = PredictiveDiagnostics(
+                runtime_awareness=runtime_awareness,
+                config=PredictiveDiagnosticsConfig(),
+                event_bus=event_bus,
+                observability=observability,
+            )
+
+        improvement_measurement = ImprovementMeasurement(
+            collector=observability.get_system_metrics,
+            provenance="ObservabilityHub",
+        )
+
+        def _controlled_canary_executor(candidate, execution_result):
+            if execution_result.candidate_id != candidate.id:
+                return {
+                    "tested": "canonical verification runner",
+                    "environment": "controlled-canary",
+                    "executed": False,
+                    "outcome": None,
+                    "decision": CanaryDecision.INCONCLUSIVE.value,
+                    "failures": ["candidate identity mismatch"],
+                }
+            verification_runner = getattr(execution_engine, "verification_runner", None)
+            if verification_runner is None:
+                return {
+                    "tested": "canonical verification runner",
+                    "environment": "controlled-canary",
+                    "executed": False,
+                    "outcome": None,
+                    "decision": CanaryDecision.INCONCLUSIVE.value,
+                    "failures": ["canonical verification runner unavailable"],
+                }
+            lint_result = verification_runner.lint()
+            health = observability.get_health()
+            health_status = health.get("status", "unknown") if isinstance(health, dict) else "unknown"
+            passed = bool(lint_result.success) and health_status in {"healthy", "degraded"}
+            return {
+                "tested": "canonical verification runner lint plus live health",
+                "environment": "controlled-canary",
+                "executed": True,
+                "outcome": "success" if passed else "failure",
+                "decision": CanaryDecision.PASS.value if passed else CanaryDecision.FAIL.value,
+                "metrics": {
+                    "lint_passed": bool(lint_result.success),
+                    "health_status": health_status,
+                    "health_passed": health_status in {"healthy", "degraded"},
+                },
+                "baseline": (getattr(execution_result, "metadata", {}) or {}).get("canary_baseline", {}),
+                "failures": [] if passed else ["controlled canary health or lint check failed"],
+            }
+
+        canary_validator = CanaryValidator(_controlled_canary_executor)
+
+        # ------------------------------------------------------------------
+        # 16. Authoritative safety and promotion boundary
+        # ------------------------------------------------------------------
+        safety_promotion_gates = SafetyPromotionGates()
+        set_safety_gates(safety_promotion_gates)
+        rollback_manager = create_rollback_manager(
+            checkpoint_dir=str(self.workspace / "data" / "checkpoints")
+        )
+        promotion_manager = PatchPromotionManager(
+            safety_gates=safety_promotion_gates,
+            config=PromotionPipelineConfig(canary_validator=canary_validator),
+            staging_dir=str(self.workspace / "data" / "promotion" / "staging"),
+            production_dir=str(self.workspace / "data" / "promotion" / "production"),
+            rollback_manager=rollback_manager,
+        )
+
+        # ------------------------------------------------------------------
+        # 17. Safe Self-Improvement orchestration
         # ------------------------------------------------------------------
         self_improvement = None
         if self.config.enable_self_improvement:
-            ssi_config = SafeSelfImprovementConfig()
             self_improvement = create_self_improvement_engine(
-                config=ssi_config,
+                config=SafeSelfImprovementConfig(),
                 event_bus=event_bus,
                 workflow_orchestrator=orchestrator,
+                promotion_manager=promotion_manager,
+                rollback_manager=rollback_manager,
+                improvement_measurement=improvement_measurement,
             )
             logger.debug("[SystemInitializer] SafeSelfImprovementEngine created")
 
@@ -481,6 +613,31 @@ class SystemInitializer:
                 "Capability startup audit failed: " + "; ".join(capability_audit["errors"])
             )
         self.capability_audit = capability_audit
+
+        # ------------------------------------------------------------------
+        # Activation occurs only after construction, late binding, and event
+        # subscriptions are complete.  This prevents partial-graph emissions.
+        # ------------------------------------------------------------------
+        job_service.start()
+        if self.config.enable_observability:
+            observability.start()
+        if config_hot_reload is not None:
+            config_hot_reload.start()
+        if file_watcher is not None:
+            file_watcher.start()
+        if orchestrator is not None:
+            if not orchestrator.start():
+                raise RuntimeError("WorkflowOrchestrator failed to start")
+            logger.info("[SystemInitializer] WorkflowOrchestrator started")
+        if autonomy is not None:
+            if not autonomy.start() or not autonomy.is_running():
+                raise RuntimeError("AutonomyManager failed to start")
+            logger.info("[SystemInitializer] AutonomyManager started")
+        if runtime_awareness is not None:
+            runtime_awareness.start()
+        if predictive_diagnostics is not None:
+            predictive_diagnostics.start()
+
         self._register_readiness_checks(
             observability=observability,
             job_service=job_service,
@@ -494,6 +651,15 @@ class SystemInitializer:
             execution_engine=execution_engine,
             learning_pipeline=learning_pipeline,
             tool_manager=tool_manager,
+            runtime_awareness=runtime_awareness,
+            system_anatomy=system_anatomy,
+            diagnostic_engine=diagnostic_engine,
+            diagnostic_grouper=diagnostic_grouper,
+            predictive_diagnostics=predictive_diagnostics,
+            improvement_measurement=improvement_measurement,
+            canary_validator=canary_validator,
+            promotion_manager=promotion_manager,
+            self_improvement=self_improvement,
         )
         # Populate the existing observability state before exposing readiness.
         observability.run_health_checks()
@@ -529,6 +695,14 @@ class SystemInitializer:
                     "execution_engine",
                     "conversation_control",
                     "agent_facade",
+                    "runtime_awareness",
+                    "system_anatomy",
+                    "diagnostic_engine",
+                    "diagnostic_grouper",
+                    "predictive_diagnostics",
+                    "improvement_measurement",
+                    "canary_validator",
+                    "patch_promotion_manager",
                     "diagnostics",
                     "self_improvement",
                 ] + (["autonomy"] if autonomy else []) + (["orchestrator"] if orchestrator else []),
@@ -550,6 +724,13 @@ class SystemInitializer:
             intelligence=intelligence,
             learning_pipeline=learning_pipeline,
             diagnostics=diagnostic_engine,
+            diagnostic_grouper=diagnostic_grouper,
+            predictive_diagnostics=predictive_diagnostics,
+            runtime_awareness=runtime_awareness,
+            system_anatomy=system_anatomy,
+            improvement_measurement=improvement_measurement,
+            canary_validator=canary_validator,
+            patch_promotion_manager=promotion_manager,
             self_improvement=self_improvement,
         )
 
@@ -660,6 +841,15 @@ class SystemInitializer:
         execution_engine=None,
         learning_pipeline=None,
         tool_manager=None,
+        runtime_awareness=None,
+        system_anatomy=None,
+        diagnostic_engine=None,
+        diagnostic_grouper=None,
+        predictive_diagnostics=None,
+        improvement_measurement=None,
+        canary_validator=None,
+        promotion_manager=None,
+        self_improvement=None,
     ) -> None:
         """Register required runtime dependencies with the shared health monitor."""
         self._register_readiness_component(
@@ -735,6 +925,62 @@ class SystemInitializer:
                 callable(getattr(tool_manager, "execute", None))
                 and callable(getattr(tool_manager, "register", None))
             ),
+        )
+        self._register_readiness_component(
+            observability,
+            name="runtime_awareness",
+            component_type=ComponentType.SERVICE,
+            category="runtime_observation",
+            check=lambda: runtime_awareness is None or callable(getattr(runtime_awareness, "get_current_state", None)),
+        )
+        self._register_readiness_component(
+            observability,
+            name="system_anatomy",
+            component_type=ComponentType.SERVICE,
+            category="runtime_observation",
+            check=lambda: system_anatomy is None or callable(getattr(system_anatomy, "snapshot", None)),
+        )
+        self._register_readiness_component(
+            observability,
+            name="diagnostic_pipeline",
+            component_type=ComponentType.SERVICE,
+            category="diagnostics",
+            check=lambda: diagnostic_engine is None or diagnostic_grouper is not None,
+        )
+        self._register_readiness_component(
+            observability,
+            name="predictive_diagnostics",
+            component_type=ComponentType.SERVICE,
+            category="diagnostics",
+            check=lambda: predictive_diagnostics is None or runtime_awareness is not None,
+        )
+        self._register_readiness_component(
+            observability,
+            name="improvement_measurement",
+            component_type=ComponentType.SERVICE,
+            category="self_improvement",
+            check=lambda: improvement_measurement is not None and callable(getattr(improvement_measurement, "compare", None)),
+        )
+        self._register_readiness_component(
+            observability,
+            name="controlled_canary",
+            component_type=ComponentType.SERVICE,
+            category="self_improvement",
+            check=lambda: canary_validator is not None and callable(getattr(canary_validator, "validate", None)) and callable(getattr(canary_validator, "_executor", None)),
+        )
+        self._register_readiness_component(
+            observability,
+            name="promotion_boundary",
+            component_type=ComponentType.SERVICE,
+            category="self_improvement",
+            check=lambda: promotion_manager is not None and callable(getattr(promotion_manager, "promote", None)) and getattr(promotion_manager, "safety_gates", None) is not None,
+        )
+        self._register_readiness_component(
+            observability,
+            name="safe_self_improvement",
+            component_type=ComponentType.SERVICE,
+            category="self_improvement",
+            check=lambda: self_improvement is None or getattr(self_improvement, "promotion_manager", None) is promotion_manager,
         )
         self._register_readiness_component(
             observability,
@@ -849,6 +1095,15 @@ class SystemInitializer:
         if system.self_improvement:
             system.self_improvement.shutdown()
             logger.debug("[SystemInitializer] SafeSelfImprovementEngine stopped")
+
+        if system.predictive_diagnostics:
+            system.predictive_diagnostics.stop()
+            logger.debug("[SystemInitializer] PredictiveDiagnostics stopped")
+
+        if system.runtime_awareness:
+            system.runtime_awareness.stop()
+            set_runtime_awareness(None)
+            logger.debug("[SystemInitializer] RuntimeAwareness stopped")
 
         if system.orchestrator:
             system.orchestrator.stop()

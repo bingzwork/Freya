@@ -31,6 +31,7 @@ from app.safe_self_improvement.approval_gates import ApprovalGateManager, Approv
 from app.safe_self_improvement.prioritization import ImprovementPrioritizer, PrioritizationCriteria, create_balanced_prioritizer
 from app.safe_self_improvement.rollback import RollbackManager, RollbackReason, create_rollback_manager
 from app.safe_self_improvement.promotion import PatchPromotionManager, PromotionStage, create_patch_promotion_manager
+from app.safe_self_improvement.measurement import ImprovementMeasurement
 from app.safe_self_improvement.policies import PolicyEngine, PolicyAction, create_policy_engine
 from app.core.events import Event, EventBus
 from app.core.logger import logger
@@ -89,6 +90,7 @@ class SafeSelfImprovementEngine:
         policy_engine: Optional[PolicyEngine] = None,
         event_bus: Optional[EventBus] = None,
         workflow_orchestrator=None,
+        improvement_measurement: Optional[ImprovementMeasurement] = None,
     ):
         self.config = config or SafeSelfImprovementConfig()
         self._lock = threading.RLock()
@@ -111,6 +113,7 @@ class SafeSelfImprovementEngine:
         )
         self.promotion_manager = promotion_manager or create_patch_promotion_manager()
         self.policy_engine = policy_engine or create_policy_engine()
+        self.improvement_measurement = improvement_measurement
 
         # State tracking
         self._pending_candidates: Dict[str, ImprovementCandidate] = {}
@@ -277,6 +280,7 @@ class SafeSelfImprovementEngine:
                     "candidate": candidate,
                     "checkpoint_id": checkpoint.id if checkpoint else None,
                     "started_at": datetime.now(timezone.utc).isoformat(),
+                    "baseline_measurements": self._collect_measurements(candidate),
                 }
 
             self._trigger_callbacks("on_executing", candidate)
@@ -344,6 +348,14 @@ class SafeSelfImprovementEngine:
                     "verification": verification,
                 },
                 source="SafeSelfImprovementEngine",
+            )
+
+            # Attach comparable before/after evidence before any promotion decision.
+            processing_state = self._processing_candidates.get(candidate.id, {})
+            self._attach_improvement_evidence(
+                candidate,
+                execution_result,
+                processing_state.get("baseline_measurements", {}),
             )
 
             # Handle execution result
@@ -440,6 +452,39 @@ class SafeSelfImprovementEngine:
             },
             queued=True,
         )
+
+    def _collect_measurements(self, candidate: ImprovementCandidate) -> Dict[str, Any]:
+        """Collect factual metrics from the canonical measurement provider."""
+        if self.improvement_measurement is None:
+            return {}
+        try:
+            definitions = (getattr(candidate, "metadata", {}) or {}).get("measurement_definitions")
+            return self.improvement_measurement.collect(definitions=definitions)
+        except Exception as error:
+            logger.warning("Improvement measurement collection failed: %s", error)
+            return {}
+
+    def _attach_improvement_evidence(
+        self,
+        candidate: ImprovementCandidate,
+        execution_result: ExecutionResult,
+        baseline: Dict[str, Any],
+    ) -> None:
+        """Add explicit, typed before/after evidence for candidates that require it."""
+        if not (getattr(candidate, "metadata", {}) or {}).get("measurement_required"):
+            return
+        after = self._collect_measurements(candidate)
+        definitions = (getattr(candidate, "metadata", {}) or {}).get("measurement_definitions")
+        if self.improvement_measurement is None:
+            execution_result.metadata["improvement_evidence"] = {"valid": False, "reason": "measurement provider unavailable"}
+            return
+        evidence = self.improvement_measurement.compare(
+            baseline,
+            after,
+            tolerance=float((getattr(candidate, "metadata", {}) or {}).get("measurement_tolerance", 0.0)),
+            provenance="ObservabilityHub",
+        )
+        execution_result.metadata["improvement_evidence"] = evidence.to_dict()
 
     def process_pending_approvals(self) -> int:
         """Process pending approval requests (check timeouts, etc.)."""
@@ -676,10 +721,16 @@ def create_self_improvement_engine(
     config: Optional[SafeSelfImprovementConfig] = None,
     event_bus: Optional[EventBus] = None,
     workflow_orchestrator=None,
+    promotion_manager: Optional[PatchPromotionManager] = None,
+    rollback_manager: Optional[RollbackManager] = None,
+    improvement_measurement: Optional[ImprovementMeasurement] = None,
 ) -> SafeSelfImprovementEngine:
     """Create a SafeSelfImprovementEngine with shared runtime collaborators."""
     return SafeSelfImprovementEngine(
         config=config,
         event_bus=event_bus,
         workflow_orchestrator=workflow_orchestrator,
+        promotion_manager=promotion_manager,
+        rollback_manager=rollback_manager,
+        improvement_measurement=improvement_measurement,
     )

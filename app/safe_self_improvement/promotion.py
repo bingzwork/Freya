@@ -24,6 +24,7 @@ from app.safe_self_improvement.models import (
 from app.core.safety_gates import SafetyPromotionGates, PromotionDecision, PromotionContext
 from app.core.logger import logger
 from app.safe_self_improvement.canary import CanaryValidator
+from app.safe_self_improvement.rollback import RollbackManager
 
 
 class PromotionStage(Enum):
@@ -99,9 +100,11 @@ class PatchPromotionManager:
         config: Optional[PromotionPipelineConfig] = None,
         staging_dir: str = "data/promotion/staging",
         production_dir: str = "data/promotion/production",
+        rollback_manager: Optional[RollbackManager] = None,
     ):
         self.safety_gates = safety_gates or SafetyPromotionGates()
         self.config = config or PromotionPipelineConfig()
+        self.rollback_manager = rollback_manager
         self.staging_dir = Path(staging_dir)
         self.production_dir = Path(production_dir)
 
@@ -172,9 +175,8 @@ class PatchPromotionManager:
                     details={"safety_gates": safety_result.to_dict()},
                     error="Safety promotion gates rejected the candidate",
                 )
-                if self.config.rollback_on_failure:
-                    from app.safe_self_improvement.rollback import RollbackManager
-                    RollbackManager().rollback(candidate.id, RollbackReason.RISK_EXCEEDED)
+                if self.config.rollback_on_failure and self.rollback_manager:
+                    self.rollback_manager.rollback(candidate.id, RollbackReason.RISK_EXCEEDED)
                     self._stats["rolled_back_promotions"] += 1
                 self._stats["failed_promotions"] += 1
                 self._promotion_history.append(result)
@@ -214,10 +216,8 @@ class PatchPromotionManager:
                 decision = PromotionDecision.APPROVED if all_passed else PromotionDecision.REJECTED
 
             # Rollback on failure if configured
-            if not success and self.config.rollback_on_failure:
-                from app.safe_self_improvement.rollback import RollbackManager
-                rollback_manager = RollbackManager()
-                rollback_manager.rollback(candidate.id, RollbackReason.VERIFICATION_FAILED)
+            if not success and self.config.rollback_on_failure and self.rollback_manager:
+                self.rollback_manager.rollback(candidate.id, RollbackReason.VERIFICATION_FAILED)
                 self._stats["rolled_back_promotions"] += 1
 
             final_stage = self.config.stages[-1] if all_passed else stage

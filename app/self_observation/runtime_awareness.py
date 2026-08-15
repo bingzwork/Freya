@@ -88,6 +88,8 @@ class RuntimeAwareness:
         autonomy_manager: Optional[AutonomyManager] = None,
         goal_storage: Optional[GoalStorage] = None,
         config: Optional[AwarenessConfig] = None,
+        event_bus=None,
+        observability=None,
     ):
         """Initialize the runtime awareness service."""
         self._orchestrator = orchestrator
@@ -100,8 +102,12 @@ class RuntimeAwareness:
         self._goal_storage = goal_storage
         self._config = config or AwarenessConfig()
 
-        self._event_bus = get_event_bus()
-        self._observability = get_observability_hub()
+        self._event_bus = event_bus or get_event_bus()
+        self._observability = observability or get_observability_hub()
+        if self._event_bus is None:
+            raise ValueError("RuntimeAwareness requires the canonical EventBus")
+        if self._observability is None:
+            raise ValueError("RuntimeAwareness requires the canonical ObservabilityHub")
 
         self._lock = threading.RLock()
         self._running = False
@@ -793,6 +799,8 @@ def get_runtime_awareness(
     autonomy_manager: Optional[AutonomyManager] = None,
     goal_storage: Optional[GoalStorage] = None,
     config: Optional[AwarenessConfig] = None,
+    event_bus=None,
+    observability=None,
 ) -> RuntimeAwareness:
     """Get or create the global runtime awareness instance."""
     global _runtime_awareness
@@ -808,11 +816,13 @@ def get_runtime_awareness(
                 autonomy_manager=autonomy_manager,
                 goal_storage=goal_storage,
                 config=config,
+                event_bus=event_bus,
+                observability=observability,
             )
         return _runtime_awareness
 
 
-def set_runtime_awareness(awareness: RuntimeAwareness) -> None:
+def set_runtime_awareness(awareness: Optional[RuntimeAwareness]) -> None:
     """Set the global runtime awareness instance."""
     global _runtime_awareness
     with _awareness_lock:
