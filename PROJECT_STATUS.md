@@ -134,25 +134,25 @@ This read-only audit evaluated registered and callable capabilities against the 
 | Audio / Podcast Processing | 🔴 **NOT IMPLEMENTED** | No registered audio or podcast capability was found. | Transcription, diarization, cleanup, chapters, clip detection, and WAV/MP3 export are missing. |
 | Video Editing | 🔴 **NOT IMPLEMENTED** | No registered video capability was found. | Editing, captions, subtitles, logos, conversion, clip extraction, and Shorts/Reels generation are missing. |
 | Image Generation / Editing | 🔴 **NOT IMPLEMENTED** | No registered image capability was found. | Generation, thumbnails, graphics, resizing, cropping, background removal, object replacement, enhancement, and conversion are missing. |
-| Automation / Scheduling | 🟡 **PARTIAL** | BackgroundJobService, AutonomyManager, MaintenanceManager, watchdogs, and recurring internal maintenance exist. | No registered callable capability accepts user-defined schedules, recurring workflows, folder watching, website monitoring, reminders, or triggered processing. |
+| Automation / Scheduling | 🟡 **PARTIAL** | Registered `automation` capability persists user-defined one-time, recurring, and cron schedules through `AtomicJsonStore`, delegates execution through `WorkflowOrchestrator`, and exposes listing, status, history, pause, resume, cancel, and removal through the existing `BackgroundJobService`. | Folder watching, condition-triggered jobs, and a dedicated website-change detector are not yet specialized actions; callers can still schedule Freya workflows through the safe orchestration path. |
 | Email | 🔴 **NOT IMPLEMENTED** | No registered email capability or production email adapter was found. | Email read/search/draft/send operations are missing. |
 | Calendar | 🔴 **NOT IMPLEMENTED** | No registered calendar capability was found. | Calendar event operations and reminders are missing. |
 | Contacts / CRM | 🔴 **NOT IMPLEMENTED** | No registered contacts or CRM capability was found. | Contact and CRM operations are missing. |
 | Database / SQL | 🔴 **NOT IMPLEMENTED** | Internal durable stores exist, but no registered database/SQL capability is exposed. | Safe, scoped, parameterized database operations are missing. |
 | Voice | 🔴 **NOT IMPLEMENTED** | No registered voice capability was found. | Speech input/output and voice-session actions are missing. |
-| Vision / OCR | 🔴 **NOT IMPLEMENTED** | No registered vision or OCR capability was found. | Image understanding, OCR extraction, and structured visual evidence are missing. |
+| Vision / OCR | 🟡 **PARTIAL** | Registered `vision` capability exposes OCR, visual analysis, and structured-field actions through a provider-neutral adapter with source metadata, confidence, regions, and uncertainty. The production default is an optional local Tesseract adapter and tests verify the provider contract with a mock. | Full visual question answering and richer multimodal understanding require an installed/selected multimodal provider; PDF processing remains under the existing document capability. |
 | Data Analysis | 🔴 **NOT IMPLEMENTED** | Data libraries may exist, but no registered data-analysis capability exists. | Callable analysis, computation, and visualization boundaries are missing. |
-| API Connector | 🔴 **NOT IMPLEMENTED** | Generic HTTP tools exist, but no registered connector capability exists. | A credential-safe, allowlisted, approval-aware API connector surface is missing. |
+| API Connector | ✅ **IMPLEMENTED** | Registered `api_connector` capability wraps the existing generic HTTP primitive for GET/POST/PUT/PATCH/DELETE/HEAD, with URL validation, domain allowlisting, named credential references, timeout/redirect/response-size controls, redacted results, and SafetyGate approval for mutating methods. | Production domains must be configured through `FREYA_API_ALLOWED_DOMAINS`, and named credentials currently resolve from `FREYA_CREDENTIAL_*` environment entries; a richer secret manager can be substituted through the credential-store interface. |
 | Messaging | 🔴 **NOT IMPLEMENTED** | Internal event communication exists; no external messaging capability was found. | External messaging-provider actions are missing. |
 | Smart Home / IoT | 🔴 **NOT IMPLEMENTED** | No registered IoT or smart-home capability was found. | Device discovery, state reads, and safe actuation are missing. |
 
 ### Audit: capabilities still not implemented
 
-Desktop / Computer Control; Audio / Podcast Processing; Video Editing; Image Generation / Editing; Email; Calendar; Contacts / CRM; Database / SQL; Voice; Vision / OCR; Data Analysis; API Connector; Messaging; and Smart Home / IoT remain **NOT IMPLEMENTED**.
+Desktop / Computer Control; Audio / Podcast Processing; Video Editing; Image Generation / Editing; Email; Calendar; Contacts / CRM; Database / SQL; Voice; Data Analysis; Messaging; and Smart Home / IoT remain **NOT IMPLEMENTED**.
 
 ### Audit: partially implemented capabilities
 
-The remaining partial area in this audit is callable Automation: Freya has internal scheduling infrastructure but no registered user-facing automation capability. The repaired capability surface now uses initializer-owned production collaborators while preserving the existing registry, router, ToolManager, SafetyGate, MemoryCoordinator, LearningPipeline, Intelligence, and orchestration boundaries.
+Callable Automation / Scheduling and Vision / OCR remain **PARTIAL** because specialized folder/condition monitoring and a full multimodal visual-question-answering provider are not yet included. Both are registered and callable through the canonical capability, router, ToolManager, and production initializer path. API Connector is **IMPLEMENTED** for the declared controlled HTTP surface, with deployment configuration required for domains and named credentials. The repaired capability surface preserves the existing registry, router, ToolManager, SafetyGate, MemoryCoordinator, LearningPipeline, Intelligence, BackgroundJobService, and orchestration boundaries.
 
 ### Audit: placeholder or unreachable capability behavior
 
@@ -160,16 +160,16 @@ The remaining partial area in this audit is callable Automation: Freya has inter
 
 ### Recommended next ten capability implementations
 
-1. Callable Automation / Scheduling over BackgroundJobService for schedules, recurring workflows, reminders, and triggers.
-2. Data Analysis for safe CSV/XLSX/JSON analysis and visualization.
-3. OCR / Vision for image, PDF, and structured visual extraction.
-4. Email with provider adapters and approval for sending or destructive actions.
-5. Calendar with confirmation for invitations and cancellations.
-6. API Connector with credential-safe, allowlisted HTTP operations.
-7. Audio / Podcast Processing for transcription, cleanup, chaptering, clip candidates, and export.
-8. Image Generation / Editing behind a media adapter.
-9. Video Editing with deterministic editing and separate analysis/generation actions.
-10. Desktop / Computer Control with explicit local interaction and approval boundaries.
+1. Data Analysis for safe CSV/XLSX/JSON analysis and visualization.
+2. Email with provider adapters and approval for sending or destructive actions.
+3. Calendar with confirmation for invitations and cancellations.
+4. Audio / Podcast Processing for transcription, cleanup, chaptering, clip candidates, and export.
+5. Image Generation / Editing behind a media adapter.
+6. Video Editing with deterministic editing and separate analysis/generation actions.
+7. Desktop / Computer Control with explicit local interaction and approval boundaries.
+8. Messaging with provider adapters and destination allowlisting.
+9. Smart Home / IoT with explicit device scope and actuation approval.
+10. Mature specialized automation triggers and a stronger multimodal vision provider behind the existing adapters.
 
 ### Capability architecture verdict
 
@@ -189,4 +189,12 @@ Capability implementation
 
 Research, Browser, File Input, File Output, and Document Editing demonstrate usable implementations on this path. The model is not fully plug-and-play for arbitrary capabilities because lifecycle dependency injection/readiness validation is incomplete, and late-registered capabilities require an explicit bridge registration call rather than automatic router projection. A new capability can be added without replacing core architecture, but collaborators and late-registration routing still require manual integration.
 
-**Status update:** The capability audit entries above now reflect the completed production wiring repairs and their focused regression coverage. No new architecture owner, duplicate service, or parallel infrastructure was introduced by these repairs.
+**Status update:** The capability audit entries above reflect the completed production wiring repairs and the three new capability adapters. Focused verification covers 25 new-capability and HTTP tests plus 37 relevant routing, production-wiring, authoritative-wiring, workflow-safety, and HTTP regression tests. No new architecture owner, duplicate scheduler, duplicate HTTP stack, or parallel capability registry was introduced.
+
+### New capability verification
+
+| Capability | Production path | Focused verification | Recorded status |
+|---|---|---|---|
+| Automation / Scheduling | `AutomationCapability` → `BackgroundJobService` → `WorkflowOrchestrator` → normal routing and safety boundary; definitions persist through `AtomicJsonStore`. | Creation, recurrence, duplicate/unsafe-frequency rejection, workflow-boundary invocation, registration, and routing contracts passed. | **PARTIAL** for specialized trigger breadth; core callable scheduling path is wired. |
+| Vision / OCR | `VisionCapability` → `VisionProvider` adapter → optional local Tesseract OCR or replaceable provider; file references remain validated by the centralized file policy. | Registration, structured evidence, source metadata, confidence/uncertainty, and unavailable-provider behavior passed. | **PARTIAL** pending a full multimodal/VQA provider. |
+| API Connector | `APIConnectorCapability` → existing `http_request` primitive, with allowlist, credential store, redaction, response bounds, and `SafetyGate`. | Allowed request, domain/URL blocking, credential reference handling, redaction, mutation approval, HTTP compatibility, registration, and routing contracts passed. | **IMPLEMENTED** for the controlled HTTP contract. |

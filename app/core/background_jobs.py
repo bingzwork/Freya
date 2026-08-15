@@ -114,6 +114,60 @@ class JobTriggerConfig:
     max_runs: Optional[int] = None
 
 
+def _cron_field_matches(value: int, field: str, minimum: int, maximum: int) -> bool:
+    """Evaluate one standard cron field without adding a second scheduler."""
+    for part in field.split(","):
+        if part == "*":
+            return True
+        if "/" in part:
+            base, step_text = part.split("/", 1)
+            try:
+                step = int(step_text)
+            except ValueError:
+                continue
+            if step <= 0:
+                continue
+            start = minimum if base == "*" else int(base)
+            if start <= value <= maximum and (value - start) % step == 0:
+                return True
+            continue
+        if "-" in part:
+            try:
+                start_text, end_text = part.split("-", 1)
+                if int(start_text) <= value <= int(end_text):
+                    return True
+            except ValueError:
+                continue
+            continue
+        try:
+            if int(part) == value:
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+def _next_cron_time(expression: str, after_timestamp: float) -> Optional[float]:
+    """Return the next matching minute for a five-field cron expression."""
+    fields = expression.split()
+    if len(fields) != 5:
+        return None
+    candidate = datetime.fromtimestamp(after_timestamp, timezone.utc).replace(
+        second=0, microsecond=0
+    ) + timedelta(minutes=1)
+    for _ in range(366 * 24 * 60):
+        if (
+            _cron_field_matches(candidate.minute, fields[0], 0, 59)
+            and _cron_field_matches(candidate.hour, fields[1], 0, 23)
+            and _cron_field_matches(candidate.day, fields[2], 1, 31)
+            and _cron_field_matches(candidate.month, fields[3], 1, 12)
+            and _cron_field_matches((candidate.weekday() + 1) % 7, fields[4], 0, 7)
+        ):
+            return candidate.timestamp()
+        candidate += timedelta(minutes=1)
+    return None
+
+
 @dataclass
 class Job:
     """Represents a background job."""
@@ -209,6 +263,16 @@ class Job:
             return self.trigger_time + (self.run_count * self.interval_seconds)
         elif self.job_type == JobType.DELAYED:
             return self.trigger_time
+        elif self.job_type == JobType.CRON:
+            if not self.cron_expression:
+                return None
+            candidate = self.trigger_time or time.time()
+            for _ in range(self.run_count + 1):
+                next_candidate = _next_cron_time(self.cron_expression, candidate)
+                if next_candidate is None:
+                    return None
+                candidate = next_candidate
+            return candidate
         return None
 
     def is_ready(self, current_time: float) -> bool:
@@ -248,7 +312,7 @@ class Job:
         with self._lock:
             self.result_history.append(result)
             if len(self.result_history) > self.max_result_history:
-                self.result_history = self.result_history[-self.max_result_height:]
+                self.result_history = self.result_history[-self.max_result_history:]
 
     def get_summary(self) -> Dict[str, Any]:
         """Get job summary."""
@@ -510,12 +574,12 @@ class BackgroundJobService:
                 job.run_count += 1
                 job.completed_at = datetime.now(timezone.utc).isoformat()
 
-                # Handle recurring vs one-time
-                if job.job_type == JobType.RECURRING and job.interval_seconds > 0:
-                    if job.max_runs is None or job.run_count < job.max_runs:
-                        job.status = JobStatus.SCHEDULED
-                    else:
-                        job.status = JobStatus.COMPLETED
+                # Handle recurring/cron vs one-time without replacing the scheduler.
+                is_recurring = (
+                    job.job_type == JobType.RECURRING and job.interval_seconds > 0
+                ) or job.job_type == JobType.CRON
+                if is_recurring and (job.max_runs is None or job.run_count < job.max_runs):
+                    job.status = JobStatus.SCHEDULED
                 else:
                     job.status = JobStatus.COMPLETED
 
@@ -540,9 +604,8 @@ class BackgroundJobService:
             # Only log job completion for state changes: first run, after retry, or final completion
             # (not for recurring jobs that complete successfully and are rescheduled)
             is_recurring_rescheduled = (
-                job.job_type == JobType.RECURRING and
-                job.interval_seconds > 0 and
-                (job.max_runs is None or job.run_count < job.max_runs)
+                ((job.job_type == JobType.RECURRING and job.interval_seconds > 0) or job.job_type == JobType.CRON)
+                and (job.max_runs is None or job.run_count < job.max_runs)
             )
             if not is_recurring_rescheduled or job.run_count == 1 or job.current_retry > 0:
                 logger.debug(f"Job '{job.name}' ({job.id[:8]}) completed in {duration:.3f}s")

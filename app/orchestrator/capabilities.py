@@ -1838,8 +1838,11 @@ def create_all_capabilities(agent=None) -> List[Capability]:
     from app.research.capability import ResearchCapability
     from app.browser.capability import BrowserCapability
     from app.document.capability import DocumentEditingCapability
-
+    from app.automation.capability import AutomationCapability
+    from app.vision.capability import VisionCapability
+    from app.api_connector.capability import APIConnectorCapability
     capabilities = [
+
         MemoryManagementCapability(),
         PlanningEngineCapability(),
         CodeExecutionCapability(),
@@ -1859,6 +1862,9 @@ def create_all_capabilities(agent=None) -> List[Capability]:
         FileInputCapability(),
         FileOutputCapability(),
         DocumentEditingCapability(),
+        AutomationCapability(),
+        VisionCapability(),
+        APIConnectorCapability(),
     ]
 
     if agent:

@@ -435,6 +435,30 @@ class SystemInitializer:
             orchestrator=orchestrator,
         )
 
+        # Late-bind the new adapters to the same production collaborators. No
+        # capability creates a replacement scheduler, HTTP stack, or workflow path.
+        automation = capability_registry.get_capability("automation")
+        if automation is not None and hasattr(automation, "set_services"):
+            automation.set_services(job_service, orchestrator, workspace=self.workspace)
+            automation.restore_persisted()
+
+        vision = capability_registry.get_capability("vision")
+        if vision is not None and hasattr(vision, "set_file_allowlist"):
+            from app.core.file_allowlist import get_file_allowlist
+            vision.set_file_allowlist(get_file_allowlist())
+
+        api_connector = capability_registry.get_capability("api_connector")
+        if api_connector is not None:
+            if hasattr(api_connector, "set_safety_gate"):
+                api_connector.set_safety_gate(safety_gate)
+            if hasattr(api_connector, "set_policy"):
+                import os
+                configured_domains = {
+                    item.strip() for item in os.getenv("FREYA_API_ALLOWED_DOMAINS", "").split(",")
+                    if item.strip()
+                }
+                api_connector.set_policy(allowed_domains=configured_domains)
+
         # ------------------------------------------------------------------
         # Finalize
         # ------------------------------------------------------------------

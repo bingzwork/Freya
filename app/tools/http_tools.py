@@ -354,26 +354,11 @@ def http_request(
     headers: Optional[Dict[str, str]] = None,
     params: Optional[Dict[str, Any]] = None,
     timeout: int = 30,
+    *,
+    allow_redirects: bool = True,
+    max_response_bytes: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Execute a generic HTTP request with any method.
-
-    Args:
-        method: HTTP method (GET, POST, PUT, DELETE, PATCH, HEAD, etc.)
-        url: The URL to request
-        data: Form data to send
-        json: JSON data to send (sets Content-Type: application/json)
-        headers: Optional HTTP headers to include
-        params: Optional query parameters
-        timeout: Request timeout in seconds (default: 30)
-
-    Returns:
-        Dict with keys:
-        - status: HTTP status code
-        - headers: Response headers as dict
-        - body: Response body as string (raw)
-        - json: Parsed JSON if content-type is JSON, None otherwise
-        - error: Error message if request failed, None otherwise
-    """
+    """Execute a generic HTTP request with optional redirect/size controls."""
     method = method.upper()
 
     try:
@@ -385,8 +370,21 @@ def http_request(
             headers=headers,
             params=params,
             timeout=timeout,
+            allow_redirects=allow_redirects,
         )
         body = response.text
+        truncated = False
+        if max_response_bytes is not None:
+            if max_response_bytes <= 0:
+                raise ValueError("max_response_bytes must be positive")
+            raw_body = getattr(response, "content", None)
+            if isinstance(raw_body, (bytes, bytearray)):
+                truncated = len(raw_body) > max_response_bytes
+                body = bytes(raw_body[:max_response_bytes]).decode("utf-8", errors="replace")
+            else:
+                encoded_body = body.encode("utf-8")
+                truncated = len(encoded_body) > max_response_bytes
+                body = encoded_body[:max_response_bytes].decode("utf-8", errors="replace")
         json_data = None
         try:
             json_data = response.json()
@@ -399,6 +397,7 @@ def http_request(
             "body": body,
             "json": json_data,
             "error": None,
+            "truncated": truncated,
         }
     except requests.exceptions.RequestException as e:
         return {
