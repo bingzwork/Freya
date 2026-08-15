@@ -1428,6 +1428,7 @@ def create_all_capabilities(agent=None) -> List[Capability]:
     # Imported lazily because ResearchCapability is a registry-facing adapter
     # that is intentionally kept in its own research domain module.
     from app.research.capability import ResearchCapability
+    from app.browser.capability import BrowserCapability
 
     capabilities = [
         MemoryManagementCapability(),
@@ -1441,6 +1442,7 @@ def create_all_capabilities(agent=None) -> List[Capability]:
         SafetyGuardCapability(),
         KnowledgeBaseCapability(),
         ResearchCapability(),
+        BrowserCapability(),
         ReasoningEngineCapability(),
         OrchestrationCoreCapability(),
         FileInputCapability(),

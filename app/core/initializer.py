@@ -252,7 +252,13 @@ class SystemInitializer:
         # 7. Safety Gate (required for ExecutionEngine/WorkflowOrchestrator)
         # ------------------------------------------------------------------
         safety_gate = SafetyGate()
-        logger.debug("[SystemInitializer] SafetyGate created")
+        browser_capability = capability_registry.get_capability("browser_capability")
+        if browser_capability is not None:
+            if hasattr(browser_capability, "set_profile_dir"):
+                browser_capability.set_profile_dir(str(self.workspace / "data" / "browser-profile"))
+            if hasattr(browser_capability, "set_safety_gate"):
+                browser_capability.set_safety_gate(safety_gate)
+        logger.debug("[SystemInitializer] SafetyGate created and BrowserCapability bound")
 
         # ------------------------------------------------------------------
         # 8. Unified Router (depends on memory, tools, priority_llm, chat_activity, unified_retrieval, intelligence, llm_stack)
