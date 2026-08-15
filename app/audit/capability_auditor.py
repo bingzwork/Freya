@@ -320,6 +320,30 @@ class CapabilityAuditor:
 
         return debt_items
 
+    @staticmethod
+    def _read_dependency_text(path: Path) -> str:
+        """Read a dependency file using strict, explicitly detected encodings.
+
+        ``requirements.txt`` may be exported by Windows tooling as UTF-16 with
+        a BOM.  UTF-8 remains the default for files without a BOM.  Decoding is
+        always strict so malformed or ambiguous input cannot silently lose data.
+        """
+        raw = path.read_bytes()
+        if raw.startswith(b"\xff\xfe") or raw.startswith(b"\xfe\xff"):
+            encoding = "utf-16"
+        elif raw.startswith(b"\xef\xbb\xbf"):
+            encoding = "utf-8-sig"
+        else:
+            encoding = "utf-8"
+
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError as error:
+            raise ValueError(
+                f"Unable to decode dependency file '{path}' as {encoding}: {error}. "
+                "Expected UTF-8 or BOM-marked UTF-16 text."
+            ) from error
+
     def check_dependencies(self) -> Dict[str, Any]:
         """Check project dependencies and their status."""
         requirements_files = [
@@ -333,7 +357,7 @@ class CapabilityAuditor:
             if req_file.exists():
                 dependencies["sources"].append(req_file.name)
                 if req_file.name == "requirements.txt":
-                    content = req_file.read_text()
+                    content = self._read_dependency_text(req_file)
                     for line in content.strip().split("\n"):
                         line = line.strip()
                         if line and not line.startswith("#"):

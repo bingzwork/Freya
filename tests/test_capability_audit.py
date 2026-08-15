@@ -233,6 +233,34 @@ class TestCapabilityAuditor:
         assert "sources" in deps
         assert "packages" in deps
 
+    def test_check_dependencies_supports_utf16_requirements(self, tmp_path: Path):
+        """Windows-exported UTF-16 requirements files are decoded strictly."""
+        requirements = tmp_path / "requirements.txt"
+        requirements.write_bytes("pytest==8.4.2\r\nrequests>=2.0\r\n".encode("utf-16"))
+
+        deps = CapabilityAuditor(workspace=str(tmp_path)).check_dependencies()
+
+        assert deps["sources"] == ["requirements.txt"]
+        assert deps["packages"]["pytest"]["specifier"] == "pytest==8.4.2"
+        assert deps["packages"]["requests"]["specifier"] == "requests>=2.0"
+
+    def test_check_dependencies_supports_utf8_bom_requirements(self, tmp_path: Path):
+        """A UTF-8 BOM is accepted without contaminating the first package name."""
+        requirements = tmp_path / "requirements.txt"
+        requirements.write_bytes("pytest>=8\n".encode("utf-8-sig"))
+
+        deps = CapabilityAuditor(workspace=str(tmp_path)).check_dependencies()
+
+        assert "pytest" in deps["packages"]
+
+    def test_dependency_decode_failure_is_explicit(self, tmp_path: Path):
+        """Malformed dependency bytes fail with path and supported-encoding diagnostics."""
+        requirements = tmp_path / "requirements.txt"
+        requirements.write_bytes(b"\xff\xfe\x00")
+
+        with pytest.raises(ValueError, match=r"Unable to decode dependency file.*UTF-8.*UTF-16"):
+            CapabilityAuditor(workspace=str(tmp_path)).check_dependencies()
+
 
 class TestAuditFindings:
     """Tests for AuditFindings."""
