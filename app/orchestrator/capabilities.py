@@ -370,16 +370,24 @@ class DecisionEngineCapability(BaseCapability):
         options = inputs.get("options", [])
 
         try:
-            from app.decision.manager import DecisionContext
+            from app.decision.models import DecisionContext, DecisionOption
             decision_context = DecisionContext(
-                task=task,
-                context=context,
+                task_description=task,
+                available_context=str(context),
+                project_state=context if isinstance(context, dict) else {},
+                metadata=context if isinstance(context, dict) else {},
+                component="decision_engine",
             )
-            result = self._decision_manager.decide(decision_context, options)
-            self._publish_event("decision.made", {"task": task[:100], "choice": str(result.choice)})
+            decision_options = [
+                DecisionOption.from_dict(option) if isinstance(option, dict) else option
+                for option in options
+            ]
+            result = self._decision_manager.decide(decision_context, decision_options)
+            choice = result.chosen_option.name if result.chosen_option else None
+            self._publish_event("decision.made", {"task": task[:100], "choice": choice})
             return {
                 "success": True,
-                "decision": result.choice,
+                "decision": choice,
                 "confidence": result.confidence,
                 "rationale": result.rationale,
                 "risk_level": result.risk_level.value if hasattr(result.risk_level, 'value') else str(result.risk_level),
@@ -528,7 +536,7 @@ class SystemMonitoringCapability(BaseCapability):
             return {"success": False, "error": "Observability not initialized"}
 
         try:
-            health = self._observability.get_health_summary()
+            health = self._observability.get_health()
             return {"success": True, "health": health}
         except Exception as e:
             logger.error(f"Health check failed: {e}")
@@ -540,7 +548,7 @@ class SystemMonitoringCapability(BaseCapability):
             return {"success": False, "error": "Observability not initialized"}
 
         try:
-            metrics = self._observability.get_metrics()
+            metrics = self._observability.get_system_metrics()
             return {"success": True, "metrics": metrics}
         except Exception as e:
             logger.error(f"Metrics retrieval failed: {e}")
@@ -556,8 +564,12 @@ class SystemMonitoringCapability(BaseCapability):
             return {"success": False, "error": "component required"}
 
         try:
-            result = self._observability.check_component(component)
-            return {"success": True, "component": component, "status": result.status.value, "message": result.message}
+            result = self._observability.get_health(component=component)
+            status = result.get("status") if isinstance(result, dict) else getattr(result, "status", result)
+            if hasattr(status, "value"):
+                status = status.value
+            message = result.get("message", "") if isinstance(result, dict) else getattr(result, "message", "")
+            return {"success": True, "component": component, "status": status, "message": message}
         except Exception as e:
             logger.error(f"Component check failed: {e}")
             return {"success": False, "error": str(e)}
@@ -672,7 +684,10 @@ class ToolRegistryCapability(BaseCapability):
             return {"success": False, "error": "Tools not initialized"}
 
         try:
-            tools = self._tools.get_available_tools()
+            if hasattr(self._tools, "get_available_tools"):
+                tools = self._tools.get_available_tools()
+            else:
+                tools = sorted(getattr(self._tools, "tools", {}).keys())
             return {"success": True, "tools": tools}
         except Exception as e:
             logger.error(f"List tools failed: {e}")

@@ -44,6 +44,7 @@ from app.core.tool_manager import ToolManager
 # Intelligence (G1, G2, G3) - Knowledge-first routing
 from app.intelligence.intelligence import Intelligence, create_intelligence
 from app.memory.unified_retrieval import UnifiedRetrieval
+from app.decision.manager import DecisionManager
 
 # Knowledge-First Resolver
 from app.routing.knowledge_first_resolver import KnowledgeFirstResolver
@@ -194,6 +195,20 @@ class SystemInitializer:
         logger.debug("[SystemInitializer] Intelligence created")
 
         # ------------------------------------------------------------------
+        # 5a. Decision Manager (shared by decision and safety capabilities)
+        # ------------------------------------------------------------------
+        decision_manager = DecisionManager(
+            workspace=str(self.workspace),
+            goal_storage=memory_coordinator.goal_storage,
+            unified_retrieval=memory_coordinator.unified_retrieval,
+            event_bus=event_bus,
+            job_service=job_service,
+            observability=observability,
+        )
+        self.decision_manager = decision_manager
+        logger.debug("[SystemInitializer] DecisionManager created")
+
+        # ------------------------------------------------------------------
         # 6. Capability Registry (required for KnowledgeFirstResolver)
         # ------------------------------------------------------------------
         capability_registry = CapabilityRegistry()
@@ -251,7 +266,7 @@ class SystemInitializer:
         # ------------------------------------------------------------------
         # 7. Safety Gate (required for ExecutionEngine/WorkflowOrchestrator)
         # ------------------------------------------------------------------
-        safety_gate = SafetyGate()
+        safety_gate = SafetyGate(registry=capability_registry)
         browser_capability = capability_registry.get_capability("browser_capability")
         if browser_capability is not None:
             if hasattr(browser_capability, "set_profile_dir"):
@@ -403,6 +418,20 @@ class SystemInitializer:
             )
             logger.debug("[SystemInitializer] SafeSelfImprovementEngine created")
 
+        # Bind the already-registered capability objects to this initializer's
+        # production graph.  This is deliberately late-bound because execution
+        # and orchestration are constructed after the registry, and it never
+        # creates replacement managers or a second capability registry.
+        self._bind_registered_capabilities(
+            capability_registry=capability_registry,
+            tool_manager=tool_manager,
+            decision_manager=decision_manager,
+            observability=observability,
+            safety_gate=safety_gate,
+            execution_engine=execution_engine,
+            orchestrator=orchestrator,
+        )
+
         # ------------------------------------------------------------------
         # Finalize
         # ------------------------------------------------------------------
@@ -489,6 +518,47 @@ class SystemInitializer:
             diagnostics=diagnostic_engine,
             self_improvement=self_improvement,
         )
+
+    def _bind_registered_capabilities(
+        self,
+        *,
+        capability_registry: CapabilityRegistry,
+        tool_manager: ToolManager,
+        decision_manager: DecisionManager,
+        observability: ObservabilityHub,
+        safety_gate: SafetyGate,
+        execution_engine: ExecutionEngine,
+        orchestrator: Optional[WorkflowOrchestrator],
+    ) -> None:
+        """Late-bind registered capabilities to the canonical production graph."""
+        code_execution = capability_registry.get_capability("code_execution")
+        if code_execution is not None and hasattr(code_execution, "set_components"):
+            code_execution.set_components(
+                execution_engine._executor,
+                execution_engine.verification_runner,
+                execution_engine.repair_loop.patch_engine,
+                tool_manager,
+            )
+
+        decision = capability_registry.get_capability("decision_engine")
+        if decision is not None and hasattr(decision, "set_decision_manager"):
+            decision.set_decision_manager(decision_manager)
+
+        monitoring = capability_registry.get_capability("system_monitoring")
+        if monitoring is not None and hasattr(monitoring, "set_observability"):
+            monitoring.set_observability(observability)
+
+        tool_registry = capability_registry.get_capability("tool_registry")
+        if tool_registry is not None and hasattr(tool_registry, "set_tools"):
+            tool_registry.set_tools(tool_manager)
+
+        safety = capability_registry.get_capability("safety_guard")
+        if safety is not None and hasattr(safety, "set_safety_gate"):
+            safety.set_safety_gate(safety_gate)
+
+        orchestration = capability_registry.get_capability("orchestration_core")
+        if orchestration is not None and orchestrator is not None and hasattr(orchestration, "set_orchestrator"):
+            orchestration.set_orchestrator(orchestrator)
 
     def _register_readiness_checks(
         self,
