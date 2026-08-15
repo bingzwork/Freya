@@ -23,6 +23,7 @@ from app.safe_self_improvement.models import (
 )
 from app.core.safety_gates import SafetyPromotionGates, PromotionDecision, PromotionContext
 from app.core.logger import logger
+from app.safe_self_improvement.canary import CanaryValidator
 
 
 class PromotionStage(Enum):
@@ -82,6 +83,7 @@ class PromotionPipelineConfig:
     canary_duration_seconds: float = 300.0
     auto_promote_on_success: bool = True
     rollback_on_failure: bool = True
+    canary_validator: Optional[CanaryValidator] = None
 
 
 class PatchPromotionManager:
@@ -477,24 +479,24 @@ class PatchPromotionManager:
         candidate: ImprovementCandidate,
         execution_result: ExecutionResult,
     ) -> Dict[str, Any]:
-        """Run canary stage - deploy to subset."""
-        # In a real implementation, this would deploy to a canary environment
-        # For now, we simulate with a quick health check
-        import time
-
+        """Run a real controlled canary and fail closed without evidence."""
+        validator = self.config.canary_validator
+        if not isinstance(validator, CanaryValidator):
+            evidence = CanaryValidator().validate(candidate, execution_result)
+        else:
+            evidence = validator.validate(candidate, execution_result)
         details = {
             "canary_percentage": self.config.canary_percentage,
             "duration_seconds": self.config.canary_duration_seconds,
-            "simulated": True,
+            "simulated": False,
+            "evidence": evidence.to_dict(),
         }
-
-        # Simulate canary period
-        time.sleep(min(1.0, self.config.canary_duration_seconds / 100))
-
-        # Check health (placeholder)
-        details["health_check"] = {"status": "healthy", "simulated": True}
-
-        return {"stage": "canary", "passed": True, "details": details}
+        return {
+            "stage": "canary",
+            "passed": evidence.passed,
+            "details": details,
+            "error": None if evidence.passed else "; ".join(evidence.failures) or "canary did not pass",
+        }
 
     def _run_production_stage(
         self,

@@ -21,6 +21,7 @@ from app.safe_self_improvement.rollback import RollbackManager, RollbackCheckpoi
 from app.safe_self_improvement.promotion import PatchPromotionManager, PromotionResult, PromotionStage
 from app.safe_self_improvement.policies import SelfImprovementPolicy, PolicyEngine
 from app.safe_self_improvement.self_improvement import SafeSelfImprovementEngine, create_self_improvement_engine
+from app.safe_self_improvement.canary import CanaryDecision, CanaryEvidence, CanaryValidator
 from app.safe_self_improvement.measurement import (
     MetricDirection,
     ComparisonStatus,
@@ -88,6 +89,10 @@ __all__ = [
     "ExecutionResult",
     "RollbackCheckpoint",
     "RollbackReason",
+    # Controlled canary validation
+    "CanaryDecision",
+    "CanaryEvidence",
+    "CanaryValidator",
     # Before/after evidence
     "MetricDirection",
     "ComparisonStatus",
