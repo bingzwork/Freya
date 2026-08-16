@@ -13,6 +13,7 @@ No LLM calls. Deterministic local processing only.
 
 import time
 import hashlib
+import json
 import threading
 from collections import deque
 from typing import Any, Dict, List
@@ -42,6 +43,45 @@ from .distillers import (
     SkillDistiller,
 )
 
+
+_OPERATIONAL_CANDIDATE_TYPES = {'watchdog_observation', 'event_bus_event'}
+_OPERATIONAL_COMPONENTS = {'watchdog', 'eventbus', 'event_bus', 'health', 'scheduler', 'systemmonitor'}
+_MEANINGFUL_TELEMETRY_MARKERS = {'abnormal', 'blocked', 'crash', 'critical', 'degraded', 'denied', 'error', 'exception', 'failed', 'failure', 'incident', 'outage', 'resource_pressure', 'security', 'safety', 'stalled', 'timeout', 'transition', 'unhealthy', 'unusual'}
+_EPHEMERAL_TELEMETRY_KEYS = {'candidate_id', 'event_id', 'id', 'timestamp', 'created_at', 'updated_at', 'checked_at', 'emitted_at'}
+
+def _candidate_type_value(candidate):
+    value = getattr(candidate, 'candidate_type', '')
+    return str(getattr(value, 'value', value) or '').strip().lower()
+
+def _normalize_telemetry(value):
+    if isinstance(value, dict):
+        return {str(key): _normalize_telemetry(nested) for key, nested in sorted(value.items(), key=lambda pair: str(pair[0])) if str(key).lower() not in _EPHEMERAL_TELEMETRY_KEYS}
+    if isinstance(value, (list, tuple, set)):
+        return [_normalize_telemetry(nested) for nested in value]
+    return value
+
+def _telemetry_fingerprint(candidate):
+    payload = {'candidate_type': _candidate_type_value(candidate), 'source_component': str(getattr(candidate, 'source_component', '') or '').strip().lower(), 'raw_observation': _normalize_telemetry(getattr(candidate, 'raw_observation', {}) or {}), 'context': _normalize_telemetry(getattr(candidate, 'context', {}) or {}), 'tags': sorted(str(tag).strip().lower() for tag in (getattr(candidate, 'tags', []) or []))}
+    encoded = json.dumps(payload, sort_keys=True, separators=(',', ':'), default=str)
+    return hashlib.sha256(encoded.encode('utf-8')).hexdigest()[:20]
+
+def _is_operational_candidate(candidate):
+    candidate_type = _candidate_type_value(candidate)
+    source = str(getattr(candidate, 'source_component', '') or '').strip().lower().replace('-', '_').replace(' ', '_')
+    metadata = getattr(candidate, 'metadata', {}) or {}
+    return candidate_type in _OPERATIONAL_CANDIDATE_TYPES or bool(metadata.get('operational_telemetry')) or source in _OPERATIONAL_COMPONENTS
+
+def _has_meaningful_telemetry(candidate):
+    """Return whether operational telemetry contains a learning-worthy signal."""
+    payload = {
+        "raw_observation": getattr(candidate, "raw_observation", {}) or {},
+        "context": getattr(candidate, "context", {}) or {},
+        "metadata": getattr(candidate, "metadata", {}) or {},
+        "tags": getattr(candidate, "tags", []) or [],
+    }
+    normalized = _normalize_telemetry(payload)
+    serialized = json.dumps(normalized, sort_keys=True, default=str).lower()
+    return any(marker in serialized for marker in _MEANINGFUL_TELEMETRY_MARKERS)
 
 class LearningPipeline:
     """Self-Learning Pipeline - deterministic 5-stage pipeline for learning from candidates."""
@@ -99,6 +139,7 @@ class LearningPipeline:
         self._knowledge_distiller = KnowledgeDistiller()
         self._experience_distiller = ExperienceDistiller()
         self._skill_distiller = SkillDistiller()
+        self._recent_telemetry = {}
         self._lock = threading.RLock()
         self._pending_candidates = deque()
         self._running = False
@@ -168,6 +209,14 @@ class LearningPipeline:
         start = time.time()
         result = LearningPipelineResult(candidate_id=candidate.id)
         result.observe_result = self._observe(candidate)
+        if _is_operational_candidate(candidate) and not _has_meaningful_telemetry(candidate):
+            fingerprint = _telemetry_fingerprint(candidate)
+            if fingerprint in self._recent_telemetry or any(marker in str(getattr(candidate, 'raw_observation', {})).lower() for marker in ('healthy', 'health_check', 'info', 'normal', 'ok', 'alive')):
+                result.final_decision = WorthRememberingDecision.NO
+                result.worth_remembering_result = WorthRememberingResult(candidate_id=candidate.id, decision=WorthRememberingDecision.NO, reasoning='routine or duplicate operational telemetry')
+                result.duration_seconds = time.time() - start
+                return result
+            self._recent_telemetry[fingerprint] = time.monotonic()
         result.evaluate_result = self._evaluate(candidate, result.observe_result)
         if not result.evaluate_result.has_learning_potential:
             result.worth_remembering_result = WorthRememberingResult(candidate_id=candidate.id, decision=WorthRememberingDecision.NO, reasoning="No learning potential")
@@ -585,6 +634,7 @@ class LearningPipeline:
                 [item.to_memory_item() for item in items],
                 _suppress_improvement_event=True,
             )
+        logger.debug(f"[LearningPipeline] Persisted {len(stored_item_ids)} learning items")
         return stored_item_ids
 
     def _persist_to_memory(self, candidate, items, _suppress_improvement_event=False):
