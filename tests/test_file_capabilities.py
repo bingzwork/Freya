@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 
 import pytest
 
@@ -53,6 +54,30 @@ def test_file_input_accepts_valid_file_and_returns_normalized_reference(tmp_path
     assert reference["file_type"] == "text"
     assert reference["size_bytes"] == len("Freya file input")
 
+
+def test_file_reference_uri_normalization_preserves_windows_drive_and_spaces():
+    reference = "file:///C:/Users/Test User/report%20draft.pdf"
+    normalized = FileInputCapability._path_from_reference(reference)
+    expected = "C:/Users/Test User/report draft.pdf"
+    if os.name == "nt":
+        expected = expected.replace("/", "\\")
+    assert normalized == expected
+
+
+
+def test_file_reference_uri_normalization_preserves_posix_file_uri():
+    reference = "file:///tmp/report%20draft.pdf"
+    normalized = FileInputCapability._path_from_reference(reference)
+    expected = "/tmp/report draft.pdf"
+    if os.name == "nt":
+        expected = expected.replace("/", "\\")
+    assert normalized == expected
+
+
+
+def test_file_reference_normalization_leaves_ordinary_path_unchanged():
+    ordinary_path = os.path.join("workspace", "report draft.pdf")
+    assert FileInputCapability._path_from_reference(ordinary_path) == ordinary_path
 
 def test_file_input_rejects_missing_file(tmp_path):
     capability = FileInputCapability(file_allowlist=_file_allowlist(tmp_path))

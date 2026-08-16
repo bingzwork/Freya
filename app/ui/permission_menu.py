@@ -163,6 +163,18 @@ class ArrowKeyMenu:
 
     def _get_key_windows(self) -> str:
         """Get key press on Windows using msvcrt."""
+        # Scripted CLI sessions do not provide a Windows console handle for
+        # msvcrt.getch(). Read an explicit choice instead, defaulting to the
+        # menu default on invalid or empty input so the gate remains fail-closed.
+        if not sys.stdin.isatty():
+            reply = sys.stdin.readline().strip().lower()
+            if reply in {"yes", "y", "1"}:
+                self._selected_index = 0
+                return "ENTER"
+            if reply in {"no", "n", "2"} and len(self.options) > 1:
+                self._selected_index = 1
+                return "ENTER"
+            return "ESCAPE"
         key = msvcrt.getch()
 
         # Handle special keys (escape sequences)

@@ -256,6 +256,12 @@ class Executor:
                             if name in step_lower:
                                 args["path"] = name
                                 break
+                elif tool == "delete_file":
+                    for word in step.split():
+                        candidate = word.rstrip(".,;:)")
+                        if any(candidate.lower().endswith(ext) for ext in _READ_PATH_EXTENSIONS):
+                            args["path"] = candidate
+                            break
                 elif tool in ("write_file", "create_file", "replace_in_file"):
                     # Write/create/replace all share the same source-format extension set.
                     for word in step.split():
@@ -263,6 +269,9 @@ class Executor:
                             args["path"] = word
                             break
 
+                    if " containing " in step_lower:
+                        content_start = step_lower.index(" containing ") + len(" containing ")
+                        args["content"] = step[content_start:].strip()
                 # Log a concise per-step tool selection
                 logger.info("[Tool Selector]")
                 logger.info(tool)

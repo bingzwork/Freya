@@ -1523,7 +1523,13 @@ class _FileCapabilityBase(BaseCapability):
         if isinstance(reference, str):
             if reference.startswith("file://"):
                 parsed = urlparse(reference)
-                return unquote(parsed.path)
+                path = parsed.path if parsed.netloc.lower() in ("", "localhost") else f"//{parsed.netloc}{parsed.path}"
+                path = unquote(path)
+                if os.name == "nt":
+                    if len(path) >= 3 and path[0] == "/" and path[2] == ":":
+                        path = path[1:]
+                    path = path.replace("/", "\\")
+                return path
             return reference
         if isinstance(reference, dict):
             for key in ("path", "local_path", "file_path", "uri"):

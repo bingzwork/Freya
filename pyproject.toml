@@ -33,3 +33,10 @@ include = ["app*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q --cache-clear -p no:cacheprovider --disable-warnings"
+markers = [
+    "core: deterministic core regression tests",
+    "llm: requires a local or external language model",
+    "integration: requires external services or long-running integration behavior",
+    "environment: depends on subprocess, hardware, or machine state",
+    "slow: deterministic but long-running tests",
+]

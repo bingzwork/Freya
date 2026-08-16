@@ -63,6 +63,7 @@ def test_direct_tool_mapping():
         action = executor._map_step_to_tool("Delete temp.py")
         assert action is not None
         assert action["tool"] == "delete_file"
+        assert action["args"]["path"] == "temp.py"
         
         # Test git operations
         action = executor._map_step_to_tool("Git status")

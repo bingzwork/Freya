@@ -42,12 +42,14 @@ class Planner(PlannerProtocol):
     # Risk and difficulty weights for plan scoring
     _RISK_WEIGHT = 0.5
     _DIFFICULTY_WEIGHT = 0.5
+    _MODEL_PLAN_TIMEOUT_SECONDS = 8.0
 
     def __init__(self, llm, memory=None, engineering_lessons=None, plan_manager: PlanManager = None):
         self.llm = llm
         self.memory = memory
         self.engineering_lessons = engineering_lessons
         self.plan_manager = plan_manager or PlanManager()
+        self._model_fallback_used = False
 
     def create_plan(
         self,
@@ -57,6 +59,7 @@ class Planner(PlannerProtocol):
     ) -> Plan:
         logger.info("[Planner]")
         logger.info("Started")
+        self._model_fallback_used = False
 
         # Classify planning horizon first
         horizon = self._classify_planning_horizon(task)
@@ -143,7 +146,7 @@ Examples:
         # Only generate a second plan if the task seems complex enough to warrant alternatives.
         # We consider a task complex if the first plan has more than 2 steps or if the task
         # description contains certain keywords that suggest complexity.
-        if self._should_generate_alternative(task, plan1):
+        if not self._model_fallback_used and self._should_generate_alternative(task, plan1):
             plan2 = self._generate_plan(task, name + " (Alternative)", horizon, max_steps,
                 f"""Plan a SHORT execution for this engineering task: {task}
 
@@ -183,9 +186,35 @@ Examples:
         logger.info(f"[Planner] Selected plan with score {best_score:.3f}")
         return best_plan
 
+    def _ask_plan(self, prompt: str, task: str) -> str:
+        """Return a bounded plan response or a safe original-task fallback."""
+        outcome_reader = getattr(self.llm, "ask_outcome", None)
+        try:
+            if callable(outcome_reader):
+                outcome = outcome_reader(
+                    prompt, timeout=self._MODEL_PLAN_TIMEOUT_SECONDS
+                )
+                if not getattr(outcome, "is_success", False):
+                    raise RuntimeError(
+                        getattr(outcome, "reason", "") or str(getattr(outcome, "kind", "unknown"))
+                    )
+                return outcome.content or json.dumps({"steps": [task]})
+            try:
+                return self.llm.ask(
+                    prompt, timeout=self._MODEL_PLAN_TIMEOUT_SECONDS
+                )
+            except TypeError as error:
+                if "timeout" not in str(error).lower():
+                    raise
+                return self.llm.ask(prompt)
+        except Exception as error:
+            self._model_fallback_used = True
+            logger.warning(f"[Planner] Model planning failed; using the original task before safety checks: {error}")
+            return json.dumps({"steps": [task]})
+
     def _generate_plan(self, task: str, name: str, horizon: PlanningHorizon, max_steps: int, prompt: str) -> Plan:
         """Generate a single plan from the given prompt."""
-        answer = self.llm.ask(prompt)
+        answer = self._ask_plan(prompt, task)
         # remove markdown fences if model adds them
         answer = re.sub(
             r"```json|```", "", answer
@@ -193,15 +222,16 @@ Examples:
         try:
             plan_dict = json.loads(answer)
         except Exception:
-            plan_dict = {"steps": [answer]}
+            self._model_fallback_used = True
+            plan_dict = {"steps": [task]}
         # Ensure we have a list of steps
         if isinstance(plan_dict, dict) and isinstance(plan_dict.get("steps"), list):
             # Limit to at most max_steps steps based on planning horizon
             if len(plan_dict["steps"]) > max_steps:
                 plan_dict["steps"] = plan_dict["steps"][:max_steps]
         else:
-            # Fallback: wrap the whole response as a single step
-            plan_dict = {"steps": [str(plan_dict)]}
+            self._model_fallback_used = True
+            plan_dict = {"steps": [task]}
 
         # Generate rationale for the plan and each step
         step_rationales = self._generate_step_rationales(task, plan_dict.get("steps", []), horizon)

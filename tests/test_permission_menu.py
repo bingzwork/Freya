@@ -83,3 +83,17 @@ class TestPermissionPromptFunction(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+class TestNonTtyPermissionInput(unittest.TestCase):
+    def test_non_tty_yes_and_no_are_explicit_choices(self):
+        menu = PermissionMenu(options=["Yes", "No"], default="No")
+        with patch("os.name", "nt"), patch("sys.stdin", StringIO("No\n")):
+            with patch("app.ui.permission_menu.msvcrt.getch") as getch:
+                self.assertEqual(menu.show(), "No")
+                getch.assert_not_called()
+
+        menu = PermissionMenu(options=["Yes", "No"], default="No")
+        with patch("os.name", "nt"), patch("sys.stdin", StringIO("Yes\n")):
+            with patch("app.ui.permission_menu.msvcrt.getch") as getch:
+                self.assertEqual(menu.show(), "Yes")
+                getch.assert_not_called()

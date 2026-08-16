@@ -75,21 +75,21 @@ def test_planner_caps_steps_by_horizon():
     assert plan.tasks[0].title == "step 0"
 
 
-def test_planner_wraps_garbage_response_in_fallback_step():
+def test_planner_replaces_garbage_response_with_original_task_step():
     plan = Planner(StubLLM("not json at all")).create_plan("do thing")
-    # Garbage is wrapped into a single string step rather than blowing up.
+    # Malformed model output must not become an executable instruction.
     assert isinstance(plan, Plan)
     assert len(plan.tasks) == 1
     assert isinstance(plan.tasks[0].title, str)
-    assert plan.tasks[0].title == "not json at all"
+    assert plan.tasks[0].title == "do thing"
 
 
 def test_planner_handles_dict_response_without_steps_key():
     plan = Planner(StubLLM('{"foo": "bar"}')).create_plan("weird output")
-    # Falls back to wrapping the whole decoded object as a string step.
+    # Invalid plan objects must fall back to the original task.
     assert isinstance(plan, Plan)
     assert len(plan.tasks) == 1
-    assert "foo" in plan.tasks[0].title
+    assert plan.tasks[0].title == "weird output"
 
 
 # ---------- Prompt construction ----------
@@ -408,3 +408,18 @@ def test_completed_tasks_preserved_for_replanning():
     topo_order = plan._graph.topological_sort()
     assert len(topo_order) == 3
     assert topo_order[0] == first_task_id  # Completed task still in order
+
+class TimeoutLLM:
+    def __init__(self):
+        self.timeout = None
+
+    def ask_outcome(self, prompt, timeout=None):
+        self.timeout = timeout
+        raise TimeoutError("model unavailable")
+
+def test_planner_bounds_model_wait_and_falls_back_to_original_task():
+    llm = TimeoutLLM()
+    plan = Planner(llm).create_plan("Create file data/freya_probe.txt")
+    assert llm.timeout == Planner._MODEL_PLAN_TIMEOUT_SECONDS
+    assert len(plan.tasks) == 1
+    assert plan.tasks[0].title == "Create file data/freya_probe.txt"
