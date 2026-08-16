@@ -1,6 +1,7 @@
 // Style reminder: compose the reference as a calm, asymmetric command room.
 // Keep the portrait atmospheric, actions tactile, and Signal Violet purposeful.
 import { useState, type CSSProperties } from "react";
+import AvatarPanel from "../avatar/AvatarPanel";
 import {
   Bell,
   BrainCircuit,
@@ -208,6 +209,22 @@ export default function Home() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [message, setMessage] = useState("");
   const [notice, setNotice] = useState("");
+  const [avatarEnabled, setAvatarEnabled] = useState(() => {
+    try {
+      return window.localStorage.getItem("freya.avatar.enabled") !== "false";
+    } catch {
+      return true;
+    }
+  });
+
+  const updateAvatarEnabled = (enabled: boolean) => {
+    setAvatarEnabled(enabled);
+    try {
+      window.localStorage.setItem("freya.avatar.enabled", String(enabled));
+    } catch {
+      // A storage failure must never affect the primary Freya UI.
+    }
+  };
 
   const startNewChat = () => {
     setMessage("");
@@ -238,6 +255,7 @@ export default function Home() {
         <div className="workspace-ambient" />
         <Topbar onOpenMenu={() => setMenuOpen(true)} />
         <div className="hero-art" aria-hidden="true" />
+        <AvatarPanel enabled={avatarEnabled} onEnabledChange={updateAvatarEnabled} />
 
         <section className="welcome" aria-labelledby="greeting">
           <div className="welcome-mark"><FreyaMark /></div>

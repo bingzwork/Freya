@@ -134,6 +134,17 @@ def parse_args() -> argparse.Namespace:
         help="Disable observability hub",
     )
     parser.add_argument(
+        "--no-avatar",
+        action="store_true",
+        help="Disable the optional in-process avatar observer and UI bridge",
+    )
+    parser.add_argument(
+        "--avatar-model",
+        type=Path,
+        default=None,
+        help="Override the VRM mannequin path used by the primary UI",
+    )
+    parser.add_argument(
         "--execute",
         "-e",
         action="store_true",
@@ -161,6 +172,8 @@ def main() -> int:
         enable_orchestrator=not args.no_orchestrator,
         enable_file_watcher=not args.no_file_watcher,
         enable_observability=not args.no_observability,
+        enable_avatar=not args.no_avatar,
+        avatar_model_path=args.avatar_model,
         workspace=args.workspace,
     )
 

@@ -121,6 +121,8 @@ class SystemConfig:
         shutdown_timeout_seconds: float = 10.0,
         workspace: Optional[Path] = None,
         autonomy_config: Optional[Any] = None,
+        enable_avatar: bool = True,
+        avatar_model_path: Optional[Path] = None,
     ):
         self.enable_autonomy = enable_autonomy
         self.enable_orchestrator = enable_orchestrator
@@ -132,6 +134,8 @@ class SystemConfig:
         self.shutdown_timeout_seconds = max(0.1, float(shutdown_timeout_seconds))
         self.workspace = workspace
         self.autonomy_config = autonomy_config
+        self.enable_avatar = bool(enable_avatar)
+        self.avatar_model_path = avatar_model_path
 
 
 class InfrastructureBundle:
@@ -175,6 +179,8 @@ class InitializedSystem:
         canary_validator: Optional[Any] = None,
         patch_promotion_manager: Optional[Any] = None,
         self_improvement: Optional[Any] = None,
+        avatar: Optional[Any] = None,
+        avatar_bridge: Optional[Any] = None,
     ):
         self.facade = facade
         self.chat_activity = chat_activity
@@ -196,3 +202,5 @@ class InitializedSystem:
         self.canary_validator = canary_validator
         self.patch_promotion_manager = patch_promotion_manager
         self.self_improvement = self_improvement
+        self.avatar = avatar
+        self.avatar_bridge = avatar_bridge

@@ -1,6 +1,4 @@
 @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@400;500;600;700&display=swap');
-@import "tailwindcss";
-
 /* Style reminder: dark cinematic glass, Signal Violet accents, and generous
    asymmetric spacing should remain visible in every responsive state. */
 :root { font-family: 'Manrope', sans-serif; color: #eef0ff; background: #02040c; font-synthesis: none; }
@@ -143,3 +141,36 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid #7657ff; outli
   .system-item:nth-child(4) .system-divider { display: none; }
   .workspace-footer { display: none; }
 }
+
+/* Integrated avatar surface: deliberately small, transparent, and independent
+   from the conversation composer so avatar failure cannot cover primary UI. */
+.avatar-panel { position: absolute; z-index: 4; top: 104px; right: 24px; width: 222px; height: 320px; display: flex; flex-direction: column; overflow: hidden; border: 1px solid rgba(145, 153, 217, .2); border-radius: 18px; background: linear-gradient(180deg, rgba(10, 13, 31, .72), rgba(6, 8, 20, .82)); box-shadow: 0 18px 40px rgba(0,0,0,.22), inset 0 1px rgba(255,255,255,.04); backdrop-filter: blur(12px); }
+.avatar-panel__header { min-height: 53px; display: flex; align-items: center; justify-content: space-between; padding: 10px 12px 8px 15px; }
+.avatar-panel__header > div { display: flex; flex-direction: column; gap: 3px; }
+.avatar-panel__eyebrow { color: #898eae; font-size: 9px; letter-spacing: .08em; text-transform: uppercase; }
+.avatar-panel__header strong { color: #f2f1ff; font-family: 'Space Grotesk', sans-serif; font-size: 13px; font-weight: 500; }
+.avatar-panel__icon, .avatar-retry { display: grid; place-items: center; width: 27px; height: 27px; color: #c3c7e3; border: 1px solid rgba(140, 147, 202, .16); border-radius: 8px; background: rgba(37, 42, 72, .4); cursor: pointer; }
+.avatar-panel__icon:hover, .avatar-retry:hover { color: #fff; border-color: rgba(133,113,250,.6); background: rgba(73,59,140,.3); }
+.avatar-panel__viewport { position: relative; min-height: 0; flex: 1; overflow: hidden; }
+.avatar-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.avatar-fallback { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: #8e92b2; font-size: 10px; }
+.avatar-fallback__head { position: relative; width: 72px; height: 78px; border: 2px solid rgba(150, 131, 255, .82); border-radius: 47% 47% 44% 44%; background: radial-gradient(circle at 50% 38%, rgba(171, 157, 255, .34), rgba(62, 44, 129, .36) 63%, rgba(19, 18, 53, .8)); box-shadow: 0 0 25px rgba(104, 82, 255, .2); }
+.avatar-fallback__head::before, .avatar-fallback__head::after { content: ''; position: absolute; top: -13px; width: 27px; height: 27px; border-radius: 80% 10% 80% 10%; background: #362b86; transform: rotate(25deg); }
+.avatar-fallback__head::before { left: 2px; } .avatar-fallback__head::after { right: 2px; transform: scaleX(-1) rotate(25deg); }
+.avatar-fallback__eye { position: absolute; top: 37px; width: 8px; height: 12px; border-radius: 50%; background: #e7e7ff; box-shadow: 0 0 8px rgba(159, 143, 255, .8); }
+.avatar-fallback__eye--left { left: 19px; } .avatar-fallback__eye--right { right: 19px; }
+.avatar-fallback__body { width: 86px; height: 78px; border-radius: 42px 42px 17px 17px; background: linear-gradient(145deg, rgba(123, 104, 237, .78), rgba(41, 36, 102, .82)); box-shadow: 0 12px 25px rgba(13, 12, 48, .55); }
+.avatar-panel__footer { min-height: 30px; display: flex; align-items: center; gap: 6px; padding: 0 12px 9px; color: #8b90b0; font-size: 9px; }
+.avatar-panel__footer > span:nth-child(2) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.avatar-state-dot { width: 6px; height: 6px; flex: 0 0 6px; border-radius: 50%; background: #61d2a1; box-shadow: 0 0 8px rgba(97,210,161,.7); }
+.avatar-state-dot--thinking, .avatar-state-dot--working, .avatar-state-dot--coding, .avatar-state-dot--reading, .avatar-state-dot--searching { background: #7b68ff; box-shadow: 0 0 8px rgba(123,104,255,.8); }
+.avatar-state-dot--warning, .avatar-state-dot--confused { background: #e2b35d; box-shadow: 0 0 8px rgba(226,179,93,.7); }
+.avatar-state-dot--error { background: #ed718d; box-shadow: 0 0 8px rgba(237,113,141,.75); }
+.avatar-retry { width: 22px; height: 22px; margin-left: auto; }
+.avatar-enable-chip { position: absolute; z-index: 4; top: 105px; right: 24px; display: inline-flex; align-items: center; gap: 7px; padding: 8px 11px; color: #d8d8f2; border: 1px solid rgba(140, 147, 202, .2); border-radius: 9px; background: rgba(14, 17, 37, .7); font-size: 10px; cursor: pointer; }
+.avatar-enable-chip:hover { border-color: rgba(133,113,250,.6); color: #fff; }
+@media (max-width: 900px) { .avatar-panel { top: 84px; right: 18px; width: 184px; height: 270px; } .avatar-enable-chip { top: 85px; right: 18px; } }
+@media (max-width: 620px) { .avatar-panel { top: 78px; right: 14px; width: 152px; height: 218px; border-radius: 14px; } .avatar-panel__header { min-height: 43px; padding: 8px 9px 6px 11px; } .avatar-panel__eyebrow { font-size: 7px; } .avatar-panel__header strong { font-size: 11px; } .avatar-panel__footer { min-height: 24px; padding: 0 9px 7px; font-size: 8px; } .avatar-panel__icon { width: 24px; height: 24px; } .avatar-enable-chip { top: 79px; right: 14px; } }
+
+.avatar-render-target { position: absolute; inset: 0; z-index: 0; }
+.avatar-panel__viewport > .avatar-fallback { z-index: 1; }

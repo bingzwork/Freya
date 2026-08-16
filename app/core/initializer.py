@@ -31,6 +31,7 @@ from app.core.observability import (
 )
 from app.core.config_hot_reload import ConfigHotReload, create_config_hot_reload
 from app.core.file_watcher import FileWatcher
+from app.avatar.runtime import AvatarRuntime
 
 # LLM Stack (replaces LLM + Priority + ChatActivity)
 from app.core.llm_stack import LLMStack
@@ -135,6 +136,19 @@ class SystemInitializer:
         # production component so every service joins this application graph.
         set_event_bus(event_bus)
         logger.debug("[SystemInitializer] EventBus created")
+
+        avatar_runtime = None
+        avatar_bridge = None
+        if self.config.enable_avatar:
+            try:
+                model_path = self.config.avatar_model_path or (self.workspace / "client" / "public" / "avatars" / "current_avatar.vrm")
+                avatar_runtime = AvatarRuntime(event_bus, enabled=True, model_path=model_path)
+                avatar_runtime.start()
+                avatar_bridge = avatar_runtime.create_ui_bridge()
+                logger.debug("[SystemInitializer] AvatarRuntime started")
+            except Exception as exc:
+                # Avatar rendering is non-critical UI; Freya must still start.
+                logger.warning(f"[SystemInitializer] AvatarRuntime unavailable: {exc}")
 
         job_service = BackgroundJobService(event_bus=event_bus)
         set_job_service(job_service)
@@ -732,6 +746,8 @@ class SystemInitializer:
             canary_validator=canary_validator,
             patch_promotion_manager=promotion_manager,
             self_improvement=self_improvement,
+            avatar=avatar_runtime,
+            avatar_bridge=avatar_bridge,
         )
 
     def _bind_registered_capabilities(
@@ -1087,6 +1103,14 @@ class SystemInitializer:
     def shutdown(self, system: InitializedSystem) -> None:
         """Gracefully shutdown all subsystems."""
         logger.info("[SystemInitializer] Shutting down system...")
+
+        if system.avatar_bridge:
+            system.avatar_bridge.close()
+            logger.debug("[SystemInitializer] Avatar UI bridge closed")
+
+        if system.avatar:
+            system.avatar.stop()
+            logger.debug("[SystemInitializer] AvatarRuntime stopped")
 
         if system.autonomy:
             system.autonomy.stop()
