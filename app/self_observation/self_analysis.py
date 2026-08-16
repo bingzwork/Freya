@@ -1,4 +1,4 @@
-﻿"""Centralized Self-Analysis Service for Self Observation.
+"""Centralized Self-Analysis Service for Self Observation.
 
 Continuously evaluates Freya's operational state across multiple dimensions:
 - Current capabilities
@@ -505,29 +505,30 @@ class CentralizedSelfAnalysis:
             mem = snapshot.resources.memory_percent
             disk = snapshot.resources.disk_percent
 
-            findings.append(f"CPU: {cpu:.0f}%, Memory: {mem:.0f}%, Disk: {disk:.0f}%")
+            if cpu is not None and mem is not None and disk is not None:
+                findings.append(f"CPU: {cpu:.0f}%, Memory: {mem:.0f}%, Disk: {disk:.0f}%")
 
-            # Score based on resource headroom
-            if cpu < 50 and mem < 60 and disk < 70:
-                strengths.append("Healthy resource headroom")
-                score = 1.0
-            elif cpu < 70 and mem < 75 and disk < 80:
-                strengths.append("Adequate resource headroom")
-                score = 0.8
-            elif cpu < 85 and mem < 85 and disk < 90:
-                weaknesses.append("Limited resource headroom")
-                recommendations.append("Monitor resource trends; consider optimization")
-                score = 0.5
-            else:
-                weaknesses.append("Critical resource pressure")
-                recommendations.append("Urgent: Reduce workload or scale resources")
-                score = 0.2
+                # Score based on resource headroom
+                if cpu < 50 and mem < 60 and disk < 70:
+                    strengths.append("Healthy resource headroom")
+                    score = 1.0
+                elif cpu < 70 and mem < 75 and disk < 80:
+                    strengths.append("Adequate resource headroom")
+                    score = 0.8
+                elif cpu < 85 and mem < 85 and disk < 90:
+                    weaknesses.append("Limited resource headroom")
+                    recommendations.append("Monitor resource trends; consider optimization")
+                    score = 0.5
+                else:
+                    weaknesses.append("Critical resource pressure")
+                    recommendations.append("Urgent: Reduce workload or scale resources")
+                    score = 0.2
 
-            # Check for trends
-            if cpu > 80:
-                recommendations.append("High CPU sustained; evaluate workload efficiency")
-            if mem > 80:
-                recommendations.append("High memory sustained; check for leaks or cache issues")
+                # Check for trends
+                if cpu > 80:
+                    recommendations.append("High CPU sustained; evaluate workload efficiency")
+                if mem > 80:
+                    recommendations.append("High memory sustained; check for leaks or cache issues")
         else:
             findings.append("World model not available for resource data")
             score = 0.0

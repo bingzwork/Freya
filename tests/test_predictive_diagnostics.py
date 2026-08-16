@@ -236,3 +236,15 @@ class TestPredictiveDiagnosticsIntegration:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+def test_prepare_prediction_input_handles_unknown_gpu_metrics():
+    from app.self_observation.models import RuntimeAwarenessState
+    diagnostics = object.__new__(PredictiveDiagnostics)
+    diagnostics._observability = None
+    diagnostics._runtime_awareness = Mock()
+    diagnostics._runtime_awareness.get_all_trends.return_value = []
+    diagnostics._config = Mock(trend_window_seconds=3600)
+    diagnostics._get_gpu_metrics = lambda: {}
+    state = RuntimeAwarenessState()
+    result = diagnostics._prepare_prediction_input(PredictionType.RESOURCE_EXHAUSTION, next(iter(PredictionHorizon)), state, [])
+    assert isinstance(result.source_data, dict)
+    assert 'gpu_memory_percent' not in result.source_data

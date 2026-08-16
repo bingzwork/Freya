@@ -452,7 +452,7 @@ class PredictiveDiagnostics:
                 ctx["gpu_utilization"] = state.gpu_utilization_percent
                 ctx["gpu_memory_percent"] = (
                     (state.gpu_memory_used_mb / state.gpu_memory_total_mb * 100)
-                    if state.gpu_memory_total_mb > 0 else 0.0
+                    if state.gpu_memory_total_mb is not None and state.gpu_memory_used_mb is not None and state.gpu_memory_total_mb > 0 else 0.0
                 )
                 ctx["disk_io_mb_s"] = state.disk_io_mb_s
                 ctx["network_io_mb_s"] = state.network_io_mb_s
@@ -507,7 +507,7 @@ class PredictiveDiagnostics:
 
             # Memory usage (system-wide percentage)
             memory_percent = system_metrics.get("system.memory.percent", 0.0)
-            if memory_percent == 0.0 and awareness_state.memory_usage_mb > 0:
+            if memory_percent == 0.0 and awareness_state.memory_usage_mb is not None and awareness_state.memory_usage_mb > 0:
                 # Fallback: estimate from process memory
                 mem_total = system_metrics.get("system.memory.total_gb", 0.0)
                 if mem_total > 0:
@@ -566,7 +566,7 @@ class PredictiveDiagnostics:
                             "active_workflows": exec_stats.get("active_workflows", 0),
                         }
                         # Calculate throughput (completed per minute)
-                        if exec_stats.get("total_workflows", 0) > 0 and awareness_state.session_duration_seconds > 60:
+                        if exec_stats.get("total_workflows", 0) > 0 and awareness_state.session_duration_seconds is not None and awareness_state.session_duration_seconds > 60:
                             task_metrics["workflows_completed_per_min"] = (
                                 exec_stats.get("completed_workflows", 0) / (awareness_state.session_duration_seconds / 60)
                             )
@@ -603,7 +603,7 @@ class PredictiveDiagnostics:
                 "gpu_utilization": awareness_state.gpu_utilization_percent,
                 "gpu_memory_percent": (
                     (awareness_state.gpu_memory_used_mb / awareness_state.gpu_memory_total_mb * 100)
-                    if awareness_state.gpu_memory_total_mb > 0 else 0.0
+                    if awareness_state.gpu_memory_total_mb is not None and awareness_state.gpu_memory_used_mb is not None and awareness_state.gpu_memory_total_mb > 0 else 0.0
                 ),
 
                 # Scheduler/worker metrics from job service
