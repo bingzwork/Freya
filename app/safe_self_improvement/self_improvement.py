@@ -31,7 +31,12 @@ from app.safe_self_improvement.approval_gates import ApprovalGateManager, Approv
 from app.safe_self_improvement.prioritization import ImprovementPrioritizer, PrioritizationCriteria, create_balanced_prioritizer
 from app.safe_self_improvement.rollback import RollbackManager, RollbackReason, create_rollback_manager
 from app.safe_self_improvement.promotion import PatchPromotionManager, PromotionStage, create_patch_promotion_manager
-from app.safe_self_improvement.measurement import ImprovementMeasurement
+from app.safe_self_improvement.measurement import ImprovementEvidence, ImprovementMeasurement
+from app.safe_self_improvement.promotion_contract import (
+    PromotionProvenance,
+    PromotionRequest,
+    RollbackEvidence,
+)
 from app.safe_self_improvement.policies import PolicyEngine, PolicyAction, create_policy_engine
 from app.core.events import Event, EventBus
 from app.core.logger import logger
@@ -352,7 +357,7 @@ class SafeSelfImprovementEngine:
 
             # Attach comparable before/after evidence before any promotion decision.
             processing_state = self._processing_candidates.get(candidate.id, {})
-            self._attach_improvement_evidence(
+            improvement_evidence = self._attach_improvement_evidence(
                 candidate,
                 execution_result,
                 processing_state.get("baseline_measurements", {}),
@@ -411,7 +416,32 @@ class SafeSelfImprovementEngine:
                 if self.config.promotion_require_tests or self.config.promotion_require_lint:
                     if checkpoint:
                         execution_result.metadata["rollback_checkpoint_id"] = checkpoint.id
-                    promo_result = self.promotion_manager.promote(candidate, execution_result)
+                    rollback_evidence = RollbackEvidence(
+                        candidate_id=candidate.id,
+                        checkpoint_id=checkpoint.id if checkpoint else str(
+                            execution_result.metadata.get("rollback_checkpoint_id", "")
+                        ),
+                        rollback_plan=(
+                            f"checkpoint:{checkpoint.id}" if checkpoint else str(
+                                execution_result.metadata.get("rollback_plan", "")
+                            )
+                        ),
+                        available=bool(checkpoint or execution_result.metadata.get("rollback_checkpoint_id") or execution_result.metadata.get("rollback_plan")),
+                    )
+                    request = PromotionRequest.from_execution(
+                        candidate,
+                        execution_result,
+                        improvement_evidence=improvement_evidence,
+                        rollback_evidence=rollback_evidence,
+                        provenance=PromotionProvenance(
+                            candidate_id=candidate.id,
+                            execution_id=execution_result.executed_at,
+                            verification_source="ExecutionResult.verification_results",
+                            measurement_source=improvement_evidence.provenance if improvement_evidence else "",
+                            rollback_checkpoint_id=rollback_evidence.checkpoint_id,
+                        ),
+                    )
+                    promo_result = self.promotion_manager.promote(request)
                     if promo_result.success:
                         self._stats["promoted"] += 1
                         self._trigger_callbacks("on_promoted", promo_result)
@@ -469,22 +499,24 @@ class SafeSelfImprovementEngine:
         candidate: ImprovementCandidate,
         execution_result: ExecutionResult,
         baseline: Dict[str, Any],
-    ) -> None:
-        """Add explicit, typed before/after evidence for candidates that require it."""
+    ) -> Optional[ImprovementEvidence]:
+        """Add typed before/after evidence and retain a serialized compatibility mirror."""
         if not (getattr(candidate, "metadata", {}) or {}).get("measurement_required"):
-            return
+            return None
         after = self._collect_measurements(candidate)
         definitions = (getattr(candidate, "metadata", {}) or {}).get("measurement_definitions")
         if self.improvement_measurement is None:
             execution_result.metadata["improvement_evidence"] = {"valid": False, "reason": "measurement provider unavailable"}
-            return
+            return None
         evidence = self.improvement_measurement.compare(
             baseline,
             after,
             tolerance=float((getattr(candidate, "metadata", {}) or {}).get("measurement_tolerance", 0.0)),
             provenance="ObservabilityHub",
+            candidate_id=candidate.id,
         )
         execution_result.metadata["improvement_evidence"] = evidence.to_dict()
+        return evidence
 
     def process_pending_approvals(self) -> int:
         """Process pending approval requests (check timeouts, etc.)."""

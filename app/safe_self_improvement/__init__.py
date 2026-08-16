@@ -19,6 +19,13 @@ from app.safe_self_improvement.approval_gates import ApprovalGateManager, Approv
 from app.safe_self_improvement.prioritization import ImprovementPrioritizer, PrioritizationCriteria
 from app.safe_self_improvement.rollback import RollbackManager, RollbackCheckpoint, RollbackAction
 from app.safe_self_improvement.promotion import PatchPromotionManager, PromotionResult, PromotionStage
+from app.safe_self_improvement.promotion_contract import (
+    PromotionRequest,
+    PromotionProvenance,
+    PromotionValidation,
+    RollbackEvidence,
+    VerificationEvidence,
+)
 from app.safe_self_improvement.policies import SelfImprovementPolicy, PolicyEngine
 from app.safe_self_improvement.self_improvement import SafeSelfImprovementEngine, create_self_improvement_engine
 from app.safe_self_improvement.canary import CanaryDecision, CanaryEvidence, CanaryValidator
@@ -70,6 +77,11 @@ __all__ = [
     "PatchPromotionManager",
     "PromotionResult",
     "PromotionStage",
+    "PromotionRequest",
+    "PromotionProvenance",
+    "PromotionValidation",
+    "RollbackEvidence",
+    "VerificationEvidence",
     # Policies
     "SelfImprovementPolicy",
     "PolicyEngine",

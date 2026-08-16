@@ -78,17 +78,28 @@ def test_required_measurement_evidence_is_fail_closed():
 def test_required_measurement_evidence_can_support_promotion_gate():
     from app.safe_self_improvement.models import ImprovementCandidate, ExecutionResult
     from app.safe_self_improvement.promotion import PatchPromotionManager, PromotionPipelineConfig, PromotionStage
+    from app.safe_self_improvement.promotion_contract import PromotionRequest, RollbackEvidence
 
     candidate = ImprovementCandidate(title="measured", confidence=1.0, metadata={"measurement_required": True, "rollback_plan": "checkpoint"})
+    evidence = measure_improvement(
+        {"latency": 10},
+        {"latency": 5},
+        definitions={"latency": {"direction": MetricDirection.LOWER_IS_BETTER, "unit": "ms"}},
+        candidate_id=candidate.id,
+        provenance="focused-test",
+    )
     execution = ExecutionResult(
         candidate_id=candidate.id,
         success=True,
         verification_results={"verification": {"passed": True}},
-        metadata={"improvement_evidence": {
-            "valid": True,
-            "comparisons": {"latency": {"status": "improved"}},
-        }},
+        metadata={"improvement_evidence": {"valid": False, "comparisons": {"latency": {"status": "regressed"}}}},
+    )
+    request = PromotionRequest.from_execution(
+        candidate,
+        execution,
+        improvement_evidence=evidence,
+        rollback_evidence=RollbackEvidence(candidate_id=candidate.id, rollback_plan="checkpoint"),
     )
     manager = PatchPromotionManager(config=PromotionPipelineConfig(stages=[PromotionStage.VERIFICATION]))
-    result = manager.promote(candidate, execution)
+    result = manager.promote(request)
     assert result.success is True

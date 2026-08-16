@@ -23,7 +23,12 @@ from app.safe_self_improvement.models import (
 )
 from app.core.safety_gates import SafetyPromotionGates, PromotionDecision, PromotionContext
 from app.core.logger import logger
-from app.safe_self_improvement.canary import CanaryValidator
+from app.safe_self_improvement.canary import CanaryValidator, CanaryEvidence
+from app.safe_self_improvement.measurement import ImprovementEvidence
+from app.safe_self_improvement.promotion_contract import (
+    PromotionRequest,
+    RollbackEvidence,
+)
 from app.safe_self_improvement.rollback import RollbackManager
 
 
@@ -124,32 +129,63 @@ class PatchPromotionManager:
 
     def promote(
         self,
-        candidate: ImprovementCandidate,
-        execution_result: ExecutionResult,
+        request: PromotionRequest | ImprovementCandidate,
+        execution_result: Optional[ExecutionResult] = None,
         skip_stages: Optional[List[PromotionStage]] = None,
     ) -> PromotionResult:
-        """
-        Promote a successfully executed improvement through the pipeline.
+        """Promote a validated evidence package through the canonical pipeline.
 
-        Args:
-            candidate: The improvement candidate
-            execution_result: Result of the execution
-            skip_stages: Stages to skip (for emergency promotions)
-
-        Returns:
-            PromotionResult with outcome
+        ``PromotionRequest`` is the authoritative API.  The legacy
+        ``promote(candidate, execution_result)`` shape is retained only as a
+        narrow adapter so existing callers cannot bypass request validation;
+        notably, serialized metadata is never converted into improvement
+        evidence by that adapter.
         """
-        with self._lock:
-            if not execution_result.success:
+        if isinstance(request, PromotionRequest):
+            if execution_result is not None:
                 return PromotionResult(
-                    candidate_id=candidate.id,
+                    candidate_id=getattr(request.candidate, "id", ""),
                     success=False,
                     stage=PromotionStage.STAGING,
                     decision=PromotionDecision.REJECTED,
-                    details={},
-                    error="Execution was not successful",
+                    details={"validation_errors": ["PromotionRequest received an unexpected execution result"]},
+                    error="Malformed promotion call",
                 )
+        else:
+            if not isinstance(request, ImprovementCandidate) or not isinstance(execution_result, ExecutionResult):
+                return PromotionResult(
+                    candidate_id=getattr(request, "id", ""),
+                    success=False,
+                    stage=PromotionStage.STAGING,
+                    decision=PromotionDecision.REJECTED,
+                    details={"validation_errors": ["Promotion requires a PromotionRequest"]},
+                    error="Malformed promotion call",
+                )
+            request = self._legacy_request(request, execution_result)
 
+        validation = request.validate(require_rollback=self.config.rollback_on_failure)
+        candidate = request.candidate
+        execution_result = request.execution_result
+        if not validation.valid:
+            self._stats["total_promotions"] += 1
+            self._stats["failed_promotions"] += 1
+            rollback_result = self._rollback_request(request, RollbackReason.VERIFICATION_FAILED)
+            result = PromotionResult(
+                candidate_id=candidate.id,
+                success=False,
+                stage=PromotionStage.STAGING,
+                decision=PromotionDecision.REJECTED,
+                details={
+                    "validation_errors": list(validation.errors),
+                    "safety_gates": {"rejection_reasons": list(validation.errors)},
+                    "rollback": rollback_result,
+                },
+                error="Promotion request validation failed",
+            )
+            self._promotion_history.append(result)
+            return result
+
+        with self._lock:
             self._stats["total_promotions"] += 1
 
             # Track active promotion
@@ -165,19 +201,17 @@ class PatchPromotionManager:
         try:
             # A promotion must always pass the authoritative safety gate,
             # even when callers request skipped stages.
-            safety_result = self._evaluate_safety_gates(candidate, execution_result)
+            safety_result = self._evaluate_safety_gates(request)
             if safety_result.decision != PromotionDecision.APPROVED:
+                rollback_result = self._rollback_request(request, RollbackReason.RISK_EXCEEDED)
                 result = PromotionResult(
                     candidate_id=candidate.id,
                     success=False,
                     stage=PromotionStage.STAGING,
                     decision=PromotionDecision.REJECTED,
-                    details={"safety_gates": safety_result.to_dict()},
+                    details={"safety_gates": safety_result.to_dict(), "rollback": rollback_result},
                     error="Safety promotion gates rejected the candidate",
                 )
-                if self.config.rollback_on_failure and self.rollback_manager:
-                    self.rollback_manager.rollback(candidate.id, RollbackReason.RISK_EXCEEDED)
-                    self._stats["rolled_back_promotions"] += 1
                 self._stats["failed_promotions"] += 1
                 self._promotion_history.append(result)
                 return result
@@ -198,7 +232,7 @@ class PatchPromotionManager:
                         self._active_promotions[candidate.id]["current_stage"] = stage.value
 
                 # Run stage
-                stage_result = self._run_stage(candidate, execution_result, stage)
+                stage_result = self._run_stage(request, stage)
                 stage_results[stage.value] = stage_result
 
                 if not stage_result.get("passed", False):
@@ -216,9 +250,9 @@ class PatchPromotionManager:
                 decision = PromotionDecision.APPROVED if all_passed else PromotionDecision.REJECTED
 
             # Rollback on failure if configured
-            if not success and self.config.rollback_on_failure and self.rollback_manager:
-                self.rollback_manager.rollback(candidate.id, RollbackReason.VERIFICATION_FAILED)
-                self._stats["rolled_back_promotions"] += 1
+            rollback_result = None
+            if not success:
+                rollback_result = self._rollback_request(request, RollbackReason.VERIFICATION_FAILED)
 
             final_stage = self.config.stages[-1] if all_passed else stage
             result = PromotionResult(
@@ -229,6 +263,7 @@ class PatchPromotionManager:
                 details={
                     "stages": stage_results,
                     "promotion_id": promotion_id,
+                    "rollback": rollback_result,
                 },
                 error=None if success else stage_results.get(final_stage.value, {}).get("error"),
             )
@@ -240,12 +275,13 @@ class PatchPromotionManager:
 
         except Exception as e:
             logger.error(f"[PatchPromotionManager] Promotion error: {e}")
+            rollback_result = self._rollback_request(request, RollbackReason.SYSTEM_ERROR)
             result = PromotionResult(
                 candidate_id=candidate.id,
                 success=False,
                 stage=PromotionStage.STAGING,
                 decision=PromotionDecision.REJECTED,
-                details={},
+                details={"rollback": rollback_result},
                 error=str(e),
             )
             self._stats["failed_promotions"] += 1
@@ -261,14 +297,61 @@ class PatchPromotionManager:
 
         return result
 
-    def _evaluate_safety_gates(
+    def _rollback_request(
+        self,
+        request: PromotionRequest,
+        reason: RollbackReason,
+    ) -> Optional[Dict[str, Any]]:
+        """Use the canonical rollback manager for every post-application rejection."""
+        if not self.config.rollback_on_failure or self.rollback_manager is None:
+            return None
+        rollback = request.rollback_evidence
+        checkpoint_id = rollback.checkpoint_id if isinstance(rollback, RollbackEvidence) else None
+        try:
+            result = self.rollback_manager.rollback(request.candidate_identity, reason, checkpoint_id)
+        except Exception as error:
+            logger.error("[PatchPromotionManager] Rollback failed: %s", error)
+            return {"success": False, "error": str(error), "reason": reason.value}
+        self._stats["rolled_back_promotions"] += 1
+        return result
+
+    def _legacy_request(
         self,
         candidate: ImprovementCandidate,
         execution_result: ExecutionResult,
-    ):
-        """Evaluate promotion safety and reject malformed evidence."""
+    ) -> PromotionRequest:
+        """Adapt the old call shape without treating metadata as typed evidence."""
+        candidate_metadata = getattr(candidate, "metadata", {}) or {}
+        execution_metadata = getattr(execution_result, "metadata", {}) or {}
+        checkpoint_id = str(
+            execution_metadata.get("rollback_checkpoint_id")
+            or candidate_metadata.get("rollback_checkpoint_id", "")
+        )
+        rollback_plan = str(
+            execution_metadata.get("rollback_plan")
+            or candidate_metadata.get("rollback_plan", "")
+        )
+        rollback_evidence = None
+        if checkpoint_id or rollback_plan:
+            rollback_evidence = RollbackEvidence(
+                candidate_id=candidate.id,
+                checkpoint_id=checkpoint_id,
+                rollback_plan=rollback_plan,
+                available=True,
+            )
+        return PromotionRequest.from_execution(
+            candidate,
+            execution_result,
+            improvement_evidence=None,
+            rollback_evidence=rollback_evidence,
+        )
+
+    def _evaluate_safety_gates(self, request: PromotionRequest):
+        """Evaluate promotion safety using only validated typed request evidence."""
         from app.core.safety_gates import PromotionResult as SafetyPromotionResult
 
+        candidate = request.candidate
+        execution_result = request.execution_result
         evidence_errors: List[str] = []
         if execution_result.candidate_id != candidate.id:
             evidence_errors.append("Execution result does not match candidate")
@@ -286,20 +369,15 @@ class PatchPromotionManager:
         if execution_result.failed_modifications:
             evidence_errors.append("Execution contains failed modifications")
 
-        metadata = {}
-        metadata.update(getattr(candidate, "metadata", {}) or {})
-        execution_metadata = getattr(execution_result, "metadata", {}) or {}
-        metadata.update(execution_metadata)
-        rollback_plan = metadata.get("rollback_plan") or metadata.get("rollback_checkpoint_id", "")
+        rollback = request.rollback_evidence
+        rollback_plan = ""
+        if isinstance(rollback, RollbackEvidence):
+            rollback_plan = rollback.checkpoint_id or rollback.rollback_plan
 
-        # Before/after evidence is additional promotion evidence.  When a
-        # candidate explicitly requires it, malformed, missing, regressed, or
-        # inconclusive comparisons fail closed before the safety evaluator runs.
+        # ImprovementEvidence is authoritative here; the serialized metadata
+        # mirror is deliberately not consulted for safety decisions.
         if (getattr(candidate, "metadata", {}) or {}).get("measurement_required"):
-            measurement_errors = self._validate_measurement_evidence(
-                execution_metadata.get("improvement_evidence")
-            )
-            evidence_errors.extend(measurement_errors)
+            evidence_errors.extend(self._validate_measurement_evidence(request.improvement_evidence))
 
         try:
             confidence = candidate.confidence
@@ -332,7 +410,8 @@ class PatchPromotionManager:
             source=candidate.source or "SafeSelfImprovement",
             payload=candidate,
             metadata={
-                "execution_verification": execution_result.verification_results,
+                "execution_verification": request.verification_evidence.to_dict(),
+                "promotion_provenance": request.provenance.to_dict(),
                 "safety_evidence_errors": evidence_errors,
             },
             confidence=confidence,
@@ -365,60 +444,57 @@ class PatchPromotionManager:
 
     @staticmethod
     def _validate_measurement_evidence(evidence: Any) -> List[str]:
-        if not isinstance(evidence, dict):
+        if not isinstance(evidence, ImprovementEvidence):
             return ["Required improvement measurement evidence is missing or malformed"]
-        if evidence.get("valid") is not True:
-            return ["Improvement measurement evidence is invalid or inconclusive"]
-        comparisons = evidence.get("comparisons")
-        if not isinstance(comparisons, dict) or not comparisons:
-            return ["Improvement measurement comparisons are missing"]
-        statuses = {item.get("status") for item in comparisons.values() if isinstance(item, dict)}
+        validation_errors = []
+        if evidence.valid is not True:
+            validation_errors.append("Improvement measurement evidence is invalid or inconclusive")
+        if not evidence.comparisons:
+            validation_errors.append("Improvement measurement comparisons are missing")
+            return validation_errors
+        statuses = {item.status.value for item in evidence.comparisons.values()}
         if "inconclusive" in statuses:
-            return ["Improvement measurement contains inconclusive metrics"]
+            validation_errors.append("Improvement measurement contains inconclusive metrics")
         if "regressed" in statuses:
-            return ["Improvement measurement detected a regression"]
+            validation_errors.append("Improvement measurement detected a regression")
         if "improved" not in statuses:
-            return ["Improvement measurement provides no improvement evidence"]
-        return []
+            validation_errors.append("Improvement measurement provides no improvement evidence")
+        return validation_errors
 
     def _run_stage(
         self,
-        candidate: ImprovementCandidate,
-        execution_result: ExecutionResult,
+        request: PromotionRequest,
         stage: PromotionStage,
     ) -> Dict[str, Any]:
-        """Run a promotion stage."""
+        """Run a promotion stage using the validated request."""
         result = {"stage": stage.value, "passed": False, "details": {}}
 
         if stage == PromotionStage.VERIFICATION:
-            result = self._run_verification_stage(candidate, execution_result)
+            result = self._run_verification_stage(request)
         elif stage == PromotionStage.TESTING:
-            result = self._run_testing_stage(candidate, execution_result)
+            result = self._run_testing_stage(request.candidate, request.execution_result)
         elif stage == PromotionStage.CANARY:
-            result = self._run_canary_stage(candidate, execution_result)
+            result = self._run_canary_stage(request)
         elif stage == PromotionStage.PRODUCTION:
-            result = self._run_production_stage(candidate, execution_result)
+            result = self._run_production_stage(request)
 
         return result
 
     def _run_verification_stage(
         self,
-        candidate: ImprovementCandidate,
-        execution_result: ExecutionResult,
+        request: PromotionRequest,
     ) -> Dict[str, Any]:
-        """Run verification stage - check execution verification results."""
-        details = {}
-        if execution_result.metadata.get("improvement_evidence") is not None:
-            details["improvement_evidence"] = execution_result.metadata["improvement_evidence"]
-
-        # The mandatory safety preflight has already validated this evidence.
-        verification = execution_result.verification_results
-        details["execution_verification"] = verification
-        passed = isinstance(verification, dict) and isinstance(
-            verification.get("verification"), dict
-        ) and verification["verification"].get("passed") is True
-
-        return {"stage": "verification", "passed": passed, "details": details}
+        """Run verification stage using typed evidence, not metadata."""
+        details = {
+            "execution_verification": request.verification_evidence.to_dict(),
+            "improvement_evidence": request.improvement_evidence.to_dict()
+            if request.improvement_evidence else None,
+        }
+        return {
+            "stage": "verification",
+            "passed": request.verification_evidence.passed is True,
+            "details": details,
+        }
 
     def _run_testing_stage(
         self,
@@ -476,15 +552,27 @@ class PatchPromotionManager:
 
     def _run_canary_stage(
         self,
-        candidate: ImprovementCandidate,
-        execution_result: ExecutionResult,
+        request: PromotionRequest,
     ) -> Dict[str, Any]:
-        """Run a real controlled canary and fail closed without evidence."""
+        """Run a real controlled canary and fail closed without exact PASS evidence."""
+        candidate = request.candidate
+        execution_result = request.execution_result
         validator = self.config.canary_validator
         if not isinstance(validator, CanaryValidator):
             evidence = CanaryValidator().validate(candidate, execution_result)
         else:
             evidence = validator.validate(candidate, execution_result)
+        if evidence.candidate_id != request.candidate_identity:
+            evidence = CanaryEvidence(
+                candidate_id=evidence.candidate_id,
+                tested=evidence.tested,
+                environment=evidence.environment,
+                executed=evidence.executed,
+                outcome=evidence.outcome,
+                metrics=evidence.metrics,
+                baseline=evidence.baseline,
+                failures=[*evidence.failures, "canary candidate identity does not match request"],
+            )
         details = {
             "canary_percentage": self.config.canary_percentage,
             "duration_seconds": self.config.canary_duration_seconds,
@@ -500,15 +588,14 @@ class PatchPromotionManager:
 
     def _run_production_stage(
         self,
-        candidate: ImprovementCandidate,
-        execution_result: ExecutionResult,
+        request: PromotionRequest,
     ) -> Dict[str, Any]:
         """Run production stage - final validation."""
         details = {"final_validation": True}
 
         # Final safety gate check. Never default to approval when an
         # evaluator is unavailable or the gate API fails.
-        gate_result = self._evaluate_safety_gates(candidate, execution_result)
+        gate_result = self._evaluate_safety_gates(request)
         details["final_safety_gates"] = gate_result.to_dict()
 
         passed = gate_result.decision == PromotionDecision.APPROVED

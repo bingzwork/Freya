@@ -63,9 +63,11 @@ class ImprovementEvidence:
     comparisons: Dict[str, MetricComparison]
     valid: bool
     provenance: str = ""
+    candidate_id: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return {
+            "candidate_id": self.candidate_id,
             "before": {name: value.to_dict() for name, value in self.before.items()},
             "after": {name: value.to_dict() for name, value in self.after.items()},
             "comparisons": {name: value.to_dict() for name, value in self.comparisons.items()},
@@ -118,6 +120,7 @@ class ImprovementMeasurement:
         *,
         tolerance: float = 0.0,
         provenance: str = "",
+        candidate_id: str = "",
     ) -> ImprovementEvidence:
         comparisons: Dict[str, MetricComparison] = {}
         for name in sorted(set(before) | set(after)):
@@ -140,7 +143,7 @@ class ImprovementMeasurement:
                 status = ComparisonStatus.INCONCLUSIVE
             comparisons[name] = MetricComparison(name, old, new, status, delta=delta)
         valid = bool(comparisons) and all(item.status != ComparisonStatus.INCONCLUSIVE for item in comparisons.values())
-        return ImprovementEvidence(dict(before), dict(after), comparisons, valid, provenance)
+        return ImprovementEvidence(dict(before), dict(after), comparisons, valid, provenance, candidate_id)
 
 
 def measure_improvement(
@@ -150,6 +153,7 @@ def measure_improvement(
     definitions: Optional[Mapping[str, Mapping[str, Any]]] = None,
     tolerance: float = 0.0,
     provenance: str = "",
+    candidate_id: str = "",
 ) -> ImprovementEvidence:
     measurement = ImprovementMeasurement(provenance=provenance)
     return measurement.compare(
@@ -157,6 +161,7 @@ def measure_improvement(
         measurement.collect(after, definitions=definitions),
         tolerance=tolerance,
         provenance=provenance,
+        candidate_id=candidate_id,
     )
 
 
