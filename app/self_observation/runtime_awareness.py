@@ -310,7 +310,7 @@ class RuntimeAwareness:
                         "workflow_id": wf_id,
                         "status": ctx.task_graph.get_status_summary() if hasattr(ctx.task_graph, 'get_status_summary') else "running",
                         "current_step": ctx.current_step_index,
-                        "total_steps": len(ctx.task_graph.nodes) if ctx.task_graph else 0,
+                        "total_steps": ctx.task_graph.count_tasks() if ctx.task_graph else 0,
                         "completed_steps": list(ctx.completed_steps) if ctx.completed_steps else [],
                         "paused": ctx.pause_requested,
                         "cancel_requested": ctx.cancel_requested,

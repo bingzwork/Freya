@@ -328,7 +328,7 @@ class WorkflowOrchestrator:
             to_remove = []
             for wf_id, workflow in self._active_workflows.items():
                 if workflow.status in (WorkflowStatus.COMPLETED, WorkflowStatus.FAILED, WorkflowStatus.CANCELLED):
-                    if workflow.completed_at and (time.time() - workflow.completed_at) > 300:
+                    if workflow.completed_at and (time.time() - datetime.fromisoformat(workflow.completed_at).timestamp()) > 300:
                         to_remove.append(wf_id)
             for wf_id in to_remove:
                 del self._active_workflows[wf_id]

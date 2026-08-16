@@ -1,4 +1,4 @@
-"""Dynamic Workflow Composer for the Central Autonomous Orchestrator.
+﻿"""Dynamic Workflow Composer for the Central Autonomous Orchestrator.
 
 This module composes executable workflows from available capabilities based on
 user intent, goals, context, and capability metadata. It uses the CapabilityRegistry
@@ -559,6 +559,16 @@ class WorkflowComposer:
         task_graph = TaskGraph()
 
         for step in steps:
+            step_inputs = dict(step.inputs)
+            if step.action in {'search', 'search_web'} and not step_inputs.get('query'):
+                for candidate in (
+                    spec.context.get('query'),
+                    spec.context.get('user_query'),
+                    spec.description,
+                ):
+                    if isinstance(candidate, str) and candidate.strip():
+                        step_inputs['query'] = candidate.strip()
+                        break
             task = Task(
                 id=step.step_id,
                 title=f"{step.capability_name}: {step.action}",
@@ -571,7 +581,7 @@ class WorkflowComposer:
                     "capability_name": step.capability_name,
                     "capability_category": step.capability_category.value,
                     "action": step.action,
-                    "inputs": step.inputs,
+                    "inputs": step_inputs,
                     "expected_outputs": step.outputs,
                     "timeout_seconds": step.timeout_seconds,
                     "retry_policy": step.retry_policy,

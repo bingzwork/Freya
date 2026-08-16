@@ -1,4 +1,4 @@
-"""Tests for Runtime Awareness Service."""
+﻿"""Tests for Runtime Awareness Service."""
 
 import pytest
 import time
@@ -334,6 +334,16 @@ class TestRuntimeAwareness:
         awareness.stop()
         set_runtime_awareness(None)
 
+
+    def test_active_workflow_snapshot_uses_task_graph_public_count(self, awareness, mock_orchestrator):
+        from types import SimpleNamespace
+        from app.planner.task import Task, TaskStatus
+        from app.planner.task_graph import TaskGraph
+        graph = TaskGraph()
+        graph.add_task(Task(id='t1', title='Inspect', status=TaskStatus.PENDING))
+        mock_orchestrator.task_executor._active_executions = {'wf': SimpleNamespace(task_graph=graph, current_step_index=0, completed_steps=set(), pause_requested=False, cancel_requested=False)}
+        state = awareness.update_awareness()
+        assert state.running_tasks[0]['total_steps'] == 1
 
 class TestRuntimeAwarenessIntegration:
     """Integration tests for Runtime Awareness with other subsystems."""
