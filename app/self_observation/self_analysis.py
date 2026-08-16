@@ -1,4 +1,4 @@
-"""Centralized Self-Analysis Service for Self Observation.
+﻿"""Centralized Self-Analysis Service for Self Observation.
 
 Continuously evaluates Freya's operational state across multiple dimensions:
 - Current capabilities
@@ -433,11 +433,11 @@ class CentralizedSelfAnalysis:
         # Check resource limitations
         if self._world_model:
             snapshot = self._world_model.get_snapshot()
-            if snapshot.resources.memory_percent > 85:
+            if snapshot.resources.memory_percent is not None and snapshot.resources.memory_percent > 85:
                 limitations.append(f"High memory usage: {snapshot.resources.memory_percent:.0f}%")
-            if snapshot.resources.cpu_percent > 85:
+            if snapshot.resources.cpu_percent is not None and snapshot.resources.cpu_percent > 85:
                 limitations.append(f"High CPU usage: {snapshot.resources.cpu_percent:.0f}%")
-            if snapshot.resources.disk_percent > 90:
+            if snapshot.resources.disk_percent is not None and snapshot.resources.disk_percent > 90:
                 limitations.append(f"High disk usage: {snapshot.resources.disk_percent:.0f}%")
 
         # Check capability limitations

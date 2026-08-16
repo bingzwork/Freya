@@ -1,4 +1,4 @@
-"""
+﻿"""
 Safe Self-Improvement Engine.
 
 Main orchestrator for safe autonomous self-improvement operations.
@@ -491,7 +491,7 @@ class SafeSelfImprovementEngine:
             definitions = (getattr(candidate, "metadata", {}) or {}).get("measurement_definitions")
             return self.improvement_measurement.collect(definitions=definitions)
         except Exception as error:
-            logger.warning("Improvement measurement collection failed: %s", error)
+            logger.warning('Improvement measurement collection failed: {0}'.format(error))
             return {}
 
     def _attach_improvement_evidence(

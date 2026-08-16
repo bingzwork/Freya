@@ -139,6 +139,8 @@ class IntentBasedSelector(CapabilitySelector):
             caps = registry.get_capabilities_by_category(cat)
             for cap in caps:
                 if cap.metadata.name not in spec.excluded_capabilities:
+                    if cap.metadata.name == 'vision' and not any((spec.context or {}).get(key) for key in ('image_path', 'file_reference', 'path')):
+                        continue
                     selected.append(cap)
 
         return selected
