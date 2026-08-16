@@ -238,3 +238,41 @@ The new adapters are nested under the existing `ResearchCapability` workflow cap
 ### Verification Evidence
 
 The focused search/OSINT and existing capability suites passed: **67 tests** covering advanced query generation, archive handling, cross-site reuse, reverse-image safety boundaries, image intelligence, ResearchCapability action exposure, standard research, routing, and production wiring. Application and research-module compilation also passed.
+
+## SimulationCapability Status (2026-08-16)
+
+**SimulationCapability requested scope: 100% implemented and focused-verified.** The implementation adds one canonical, first-class registered capability without introducing a parallel router, scheduler, execution engine, safety gate, verification system, observability system, or memory path.
+
+| Area | Status | Implemented behavior and evidence |
+|---|---|---|
+| SimulationCapability | ✅ COMPLETE | Typed, immutable scenario/result models; deterministic engine; non-mutating default; explicit `PREDICTED` and `verified=False` result markers. |
+| System Simulation | ✅ COMPLETE | Models direct dependencies, downstream propagation, affected components, degraded functionality, recovery information, and unknown relationships without inventing architecture. |
+| Workflow Simulation | ✅ COMPLETE | Models schedule/frequency, duration, horizon, estimated runs, overlap/contention, dependent services, resource use, and rate-limit signals. |
+| Resource Simulation | ✅ COMPLETE | Deterministically calculates CPU, RAM, VRAM, storage, throughput, and concurrency totals, headroom, oversubscription, and likely VRAM offloading. |
+| Financial Simulation | ✅ COMPLETE | Calculates revenue, expenses, net cash flow, ending cash, runway, break-even units, and margin while retaining forecast/assumption distinctions. |
+| Project Simulation | ✅ COMPLETE | Propagates dependency delays, detects cycles, estimates task/project finish, schedule slippage, task order, and exposes capacity/staffing assumptions. |
+| Decision Simulation | ✅ COMPLETE | Compares multiple alternatives and preserves an inconclusive recommendation when comparable evidence is insufficient. |
+| Agent-Action Simulation | ✅ COMPLETE | Previews planned capabilities/actions, mutation count, affected components, resource requirements, rollback availability, expected outputs, and failure points without running the real action. |
+| CapabilityRegistry / CapabilityRouter | ✅ COMPLETE | Registered by `create_all_capabilities()`, projected through the existing `CapabilityRegistrationBridge`, ToolManager adapter, and canonical `CapabilityRouter`; direct simulation requests route through the established path. |
+| WorkflowOrchestrator | ✅ COMPLETE | Added a small optional pre-execution seam. Consequential plans can receive predicted impact before the existing SafetyGate call; trivial/read-only plans retain the fast path. |
+| SafetyGate relationship | ✅ PRESERVED | Simulation results are supplied as risk/impact context only. Simulation never approves execution and never bypasses existing approval requirements. |
+| ExecutionVerifier separation | ✅ PRESERVED | Simulation results remain hypothetical predictions and cannot satisfy actual post-execution verification evidence. |
+| Observability | ✅ COMPLETE | Reuses the existing EventBus path for simulation started/completed/failed/skipped, pre-execution-required, and risk-detected events without logging full sensitive state. |
+| Learning / provenance | ✅ PRESERVED | Provenance is retained on simulation inputs/results; no simulated result is persisted as an observed historical event or automatically promoted into memory. |
+
+### Verification Evidence
+
+| Verification | Result |
+|---|---|
+| `python3 -m pytest -q tests/test_simulation_capability.py tests/test_capability_routing.py` | Passed: **52 tests**. |
+| `python3 -m compileall -q app tests/test_simulation_capability.py` | Passed. |
+| Workflow, SafetyGate, and execution regression selection | The affected selection ran **27 tests with 2 pre-existing module-identity failures**: `test_orchestrator_package_exposes_only_the_canonical_workflow_api` and `test_safety_gate_assess_blocked_operation`. Both failures compare enum/class identities across test-module reloads; the assertions show equal names and values but distinct Python class identities, and are unrelated to the simulation changes. |
+| Broader affected selection | The combined routing/workflow/safety/authoritative-wiring selection ran **8 failures**; the two module-identity failures above plus six existing initializer collaborator-binding failures. The simulation-specific and routing-focused tests passed independently. |
+| Full suite | Not claimed complete in this update. The repository's prior status documents resource/OOM limits for broad suite execution; focused and directly affected simulation/routing evidence is recorded above. |
+
+### Remaining Limitations
+
+The engine is intentionally deterministic and input-driven. It does not fabricate missing runtime metrics, infer unprovided architecture relationships, or provide financial certainty. Existing runtime awareness, observability, scheduling, project, and safety services remain the authoritative sources when callers provide their snapshots or metadata; richer live-state adapters can be added later through the existing collaborator ports without changing the simulation contract.
+
+
+The broader full-suite command `timeout 600s python3 -m pytest -q` was started after installing the missing test-only document imports. It was stopped after approximately **10 minutes 34 seconds**, with collection/execution progress at approximately **18%** and no final suite result. This is recorded as a bounded verification stop under the ten-minute rule; the focused simulation and routing tests remain the authoritative passing evidence for this change.

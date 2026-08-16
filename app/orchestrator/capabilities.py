@@ -1841,6 +1841,7 @@ def create_all_capabilities(agent=None) -> List[Capability]:
     from app.automation.capability import AutomationCapability
     from app.vision.capability import VisionCapability
     from app.api_connector.capability import APIConnectorCapability
+    from app.simulation.capability import SimulationCapability
     capabilities = [
 
         MemoryManagementCapability(),
@@ -1865,6 +1866,7 @@ def create_all_capabilities(agent=None) -> List[Capability]:
         AutomationCapability(),
         VisionCapability(),
         APIConnectorCapability(),
+        SimulationCapability(),
     ]
 
     if agent:

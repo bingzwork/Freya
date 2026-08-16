@@ -333,6 +333,86 @@ class WorkflowOrchestrator:
             for wf_id in to_remove:
                 del self._active_workflows[wf_id]
 
+    def _simulate_before_execution(
+        self,
+        workflow: ComposedWorkflow,
+        spec: WorkflowSpec,
+        capabilities: Dict[str, Capability],
+        correlation_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Optionally predict workflow impact without approving or executing it.
+
+        The existing SafetyGate remains the authority for permission and this
+        result is explicitly attached as predicted metadata only.  Plans with
+        no consequential-plan signal keep the existing fast path.
+        """
+        from app.simulation.capability import SimulationCapability
+
+        signals = dict(spec.context)
+        signals.setdefault("affected_components_count", len(capabilities))
+        signals.setdefault("affected_components", list(capabilities))
+        signals.setdefault("complexity", len(workflow.steps))
+        if not SimulationCapability.requires_pre_execution_simulation(signals):
+            self._publish_event("simulation_skipped", {
+                "workflow_id": workflow.spec.workflow_id,
+                "correlation_id": correlation_id,
+                "reason": SimulationCapability._simulation_reason(signals),
+            })
+            return None
+
+        capability = self._capability_registry.get_capability("simulation_capability") if self._capability_registry else None
+        if capability is None or not capability.supports_action("simulate"):
+            self._publish_event("simulation_failed", {
+                "workflow_id": workflow.spec.workflow_id,
+                "correlation_id": correlation_id,
+                "error": "SimulationCapability is unavailable for a qualifying plan",
+            })
+            raise RuntimeError("SimulationCapability is required but unavailable")
+
+        self._publish_event("pre_execution_simulation_required", {
+            "workflow_id": workflow.spec.workflow_id,
+            "correlation_id": correlation_id,
+        })
+        simulation_inputs = {
+            "simulation_type": "agent_action",
+            "objective": spec.description or spec.name or "Predict workflow impact",
+            "current_state": spec.context.get("current_state", {}),
+            "proposed_change": {
+                "actions": [
+                    {"capability": name, "mutating": True}
+                    for name in capabilities
+                ],
+                "affected_components": list(capabilities),
+                "resource_requirements": spec.context.get("resource_requirements", {}),
+                "rollback_available": spec.context.get("rollback_available", "unknown"),
+                "expected_outputs": spec.context.get("expected_outputs", []),
+                "possible_failure_points": spec.context.get("possible_failure_points", []),
+            },
+            "assumptions": spec.context.get("simulation_assumptions", []),
+            "constraints": spec.context.get("simulation_constraints", []),
+            "provenance": {
+                "source": "WorkflowOrchestrator",
+                "workflow_id": workflow.spec.workflow_id,
+                "correlation_id": correlation_id,
+            },
+        }
+        result = capability.execute("simulate", simulation_inputs)
+        if not isinstance(result, dict) or not result.get("success"):
+            error = result.get("error", "Pre-execution simulation failed") if isinstance(result, dict) else "Pre-execution simulation failed"
+            self._publish_event("simulation_failed", {
+                "workflow_id": workflow.spec.workflow_id,
+                "correlation_id": correlation_id,
+                "error": error,
+            })
+            raise RuntimeError(error)
+        predicted = result.get("simulation")
+        if not isinstance(predicted, dict):
+            raise RuntimeError("Pre-execution simulation returned no structured result")
+        predicted["result_kind"] = "PREDICTED"
+        predicted["verified"] = False
+        workflow.metadata["simulation_result"] = predicted
+        return predicted
+
     def execute_workflow(self, spec: WorkflowSpec, async_mode: bool = True) -> str:
         if self._state != OrchestratorState.RUNNING:
             raise RuntimeError(f"Orchestrator not running (state: {self._state})")
@@ -350,6 +430,13 @@ class WorkflowOrchestrator:
             if cap:
                 capabilities[step.capability_name] = cap
 
+        simulation_result = self._simulate_before_execution(
+            workflow,
+            spec,
+            capabilities,
+            correlation_id,
+        )
+
         try:
             with correlation_scope(correlation_id, prefix="workflow"):
                 self._safety_gate.check_and_enforce(
@@ -362,6 +449,10 @@ class WorkflowOrchestrator:
                         "capabilities": list(capabilities),
                         "context": spec.context,
                         "correlation_id": correlation_id,
+                        # Predicted impact is input to the existing safety
+                        # decision; it cannot approve execution or satisfy
+                        # post-execution verification.
+                        "simulation_result": simulation_result,
                     },
                 )
         except Exception as error:
