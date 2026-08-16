@@ -370,6 +370,7 @@ class BackgroundJobService:
 
         # Execution control
         self._shutdown = False
+        self._shutdown_event = threading.Event()
         self._worker_semaphore = threading.Semaphore(max_workers)
         self._scheduler_thread: Optional[threading.Thread] = None
         self._worker_threads: Set[threading.Thread] = set()
@@ -459,6 +460,7 @@ class BackgroundJobService:
             logger.warning("BackgroundJobService already started")
             return
         self._shutdown = False
+        self._shutdown_event.clear()
         self._start_scheduler()
 
     def is_running(self) -> bool:
@@ -531,10 +533,12 @@ class BackgroundJobService:
 
             except Exception as e:
                 logger.error(f"Error in scheduler loop: {e}")
-                time.sleep(1.0)  # Brief pause before continuing
+                if self._shutdown_event.wait(1.0):
+                    break
 
             # Sleep until next tick
-            time.sleep(self._tick_interval)
+            if self._shutdown_event.wait(self._tick_interval):
+                break
 
     def _get_ready_jobs(self, current_time: float) -> List[Job]:
         """Get jobs ready to run."""
@@ -1262,6 +1266,7 @@ class BackgroundJobService:
         """Shutdown the job service."""
         logger.info("Shutting down BackgroundJobService...")
         self._shutdown = True
+        self._shutdown_event.set()
 
         # Cancel all pending jobs
         with self._lock:

@@ -5,12 +5,6 @@ import sys
 
 class TestWorkflowOrchestrator(unittest.TestCase):
     def test_execute_workflow_approved(self):
-        # Remove cached modules
-        for mod in list(sys.modules.keys()):
-            if 'workflow_orchestrator' in mod or 'orchestrator' in mod or 'core.events' in mod or 'core.background_jobs' in mod or 'core.observability' in mod:
-                if mod in sys.modules:
-                    del sys.modules[mod]
-        
         mock_event_bus = MagicMock()
         mock_job_service = MagicMock()
         mock_observability = MagicMock()
@@ -46,12 +40,6 @@ class TestWorkflowOrchestrator(unittest.TestCase):
             self.assertRegex(str(result), 'exec-123')
 
     def test_execute_workflow_rejected(self):
-        # Remove cached modules
-        for mod in list(sys.modules.keys()):
-            if 'workflow_orchestrator' in mod or 'orchestrator' in mod or 'core.events' in mod or 'core.background_jobs' in mod or 'core.observability' in mod:
-                if mod in sys.modules:
-                    del sys.modules[mod]
-        
         mock_event_bus = MagicMock()
         mock_job_service = MagicMock()
         mock_observability = MagicMock()

@@ -203,6 +203,26 @@ class UnifiedRouter:
             # legacy path.
             classification = self._intent_classifier.classify(user_input, route_context)
             route_context["intent_type"] = classification.intent.value
+
+            # Engineering intents preserve the classifier planning contract.
+            # Knowledge-first answerability is for questions, not project changes.
+            if classification.intent.requires_planning:
+                routing_metadata = dict(intent_classification=classification.to_dict())
+                if classification.should_clarify_engineering:
+                    return RouteResult(
+                        intent=classification.intent,
+                        confidence=classification.confidence,
+                        reason=classification.reason,
+                        is_clarification=True,
+                        routing_metadata=routing_metadata,
+                    )
+                return RouteResult(
+                    intent=classification.intent,
+                    confidence=classification.confidence,
+                    reason=classification.reason,
+                    is_engineering=True,
+                    routing_metadata=routing_metadata,
+                )
             resolution = self._knowledge_first_resolver.resolve(
                 query=user_input,
                 context=route_context,
