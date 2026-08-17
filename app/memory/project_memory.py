@@ -8,6 +8,7 @@ and an optional persistent vector database (FAISS).
 
 import json
 import hashlib
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, List, Dict, Any, Optional
@@ -45,6 +46,7 @@ from app.core.observability import HealthStatus, HealthResult, HealthCheck, Comp
 
 
 class ProjectMemory:
+    _persistence_lock = threading.RLock()
     def __init__(
         self,
         workspace: str = ".",
@@ -575,9 +577,10 @@ class ProjectMemory:
         self.file_allowlist.require_allowed(self.path, FileOperation.WRITE, "ProjectMemory._save")
 
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(entries, indent=2, ensure_ascii=False), encoding="utf-8")
-        temporary.replace(self.path)
+        with self._persistence_lock:
+            temporary = self.path.with_suffix(".tmp")
+            temporary.write_text(json.dumps(entries, indent=2, ensure_ascii=False), encoding="utf-8")
+            temporary.replace(self.path)
 
 
 

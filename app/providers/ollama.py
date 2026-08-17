@@ -53,6 +53,7 @@ class OllamaProvider(BaseLLMProvider):
 
         super().__init__(config)
         self._client = OllamaClient(base_url=self.config.base_url, timeout=self.config.timeout)
+        self._last_health_state: Optional[bool] = None
 
     @property
     def base_url(self) -> str:
@@ -301,7 +302,6 @@ class OllamaProvider(BaseLLMProvider):
         Returns:
             ProviderHealthStatus indicating the current health of the provider.
         """
-        logger.info(f"[Ollama] Checking health for model: {self.model}")
 
         is_reachable = False
         model_available = False
@@ -324,21 +324,16 @@ class OllamaProvider(BaseLLMProvider):
                     model_available = True
                 else:
                     error_message = f"Model '{self.model}' not found. Available: {available_models}"
-                    logger.warning(f"[Ollama] {error_message}")
 
             else:
                 error_message = "Unexpected response format from /api/tags"
-                logger.warning(f"[Ollama] {error_message}")
 
         except urllib.error.URLError as e:
             error_message = self._parse_url_error(e, self.model)
-            logger.error(f"[Ollama] Health check failed: {error_message}")
         except TimeoutError:
             error_message = f"Ollama server at {self.base_url} did not respond within 5 seconds"
-            logger.error(f"[Ollama] Health check timeout: {error_message}")
         except Exception as e:
             error_message = f"Health check failed: {str(e)}"
-            logger.error(f"[Ollama] Health check error: {error_message}")
 
         is_healthy = is_reachable and model_available
 
@@ -352,11 +347,15 @@ class OllamaProvider(BaseLLMProvider):
             details=details,
         )
 
-        if is_healthy:
-            logger.info(f"[Ollama] Health check passed for model: {self.model}")
-        else:
-            logger.warning(f"[Ollama] Health check failed: {error_message}")
-
+        previous_state = self._last_health_state
+        if previous_state is None and is_healthy:
+            logger.info(f"Ollama available: {self.model}")
+        elif previous_state is not None and previous_state != is_healthy:
+            if is_healthy:
+                logger.info("Ollama connection restored")
+            else:
+                logger.warning(f"Ollama health check failed: {error_message or 'provider unavailable'}")
+        self._last_health_state = is_healthy
         return status
 
     def list_models(self) -> List[str]:

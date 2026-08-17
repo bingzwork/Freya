@@ -140,7 +140,7 @@ class IntentClassification:
 
     @property
     def is_ambiguous(self) -> bool:
-        """Confidence in the mid-band — ask a clarifying question."""
+        """Confidence in the mid-band â€” ask a clarifying question."""
         return LOW_CONFIDENCE_THRESHOLD <= self.confidence < ACCEPT_CONFIDENCE_THRESHOLD
 
     @property
@@ -176,7 +176,7 @@ class IntentClassification:
 
     @property
     def is_control(self) -> bool:
-        """Conversational control intent — short-circuit all other routing."""
+        """Conversational control intent â€” short-circuit all other routing."""
         return self.intent.is_conversational_control
 
     def to_dict(self) -> Dict[str, Any]:
@@ -381,6 +381,12 @@ class IntentClassifier:
             )
 
         message_lower = message.lower().strip()
+
+        # Explicit public-web lookups are informational, not engineering tasks.
+        web_search_markers = ("search the web", "search online", "look up online", "research online", "find online")
+        if any(marker in message_lower for marker in web_search_markers):
+            return IntentClassification(intent=IntentType.QUESTION, confidence=0.95, reason="Explicit web-search request", keywords=["web_search"], original_message=message, context=context or {})
+
 
         # Check for exact empty message after stripping
         if not message or not message_lower:

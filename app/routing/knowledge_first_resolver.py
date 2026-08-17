@@ -91,6 +91,13 @@ class KnowledgeFirstResolver:
     ) -> ResolutionResult:
         reasoning = [f"Resolving query: '{query[:100]}...'"]
 
+        direct_matches = self._capability_router.find_matching(query, intent_type.value if intent_type is not None else None)
+        authoritative_matches = [item for item in direct_matches if item[0] in {"show_identity", "show_capabilities", "capability_introspection"}]
+        if authoritative_matches:
+            name, confidence = authoritative_matches[0]
+            result = self._capability_router.execute_named(name, query, **dict(context or {}))
+            return ResolutionResult(action="capability", capability_name=name, capability_confidence=confidence, capability_result=result, routing_metadata={"authoritative_internal": True, "authoritative_source": "CapabilityRegistry"})
+
         # Step 1: Retrieve knowledge from Freya's memory systems
         reasoning.append("Step 1: Retrieving from UnifiedRetrieval...")
         retrieval_query = RetrievalQuery(

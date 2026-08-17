@@ -214,6 +214,16 @@ class AnswerVerifier:
         the local-only policy while recording the supporting evidence source or
         the exact rejected claim for repair and learning.
         """
+        if context and context.get("authoritative_internal"):
+            evidence_records = self._normalise_evidence(context.get("authoritative_evidence") or context.get("evidence") or [])
+            approved = {"identity", "capability_registry", "runtime_metadata", "system_metadata"}
+            if not evidence_records or not any(source in approved or source.startswith("internal:") for source, _ in evidence_records):
+                return GroundingCheck(False, ["Rejected: authoritative internal provenance is missing or not approved."])
+            unsupported = [claim for claim in self._material_claims(answer) if self._find_supporting_evidence(claim, evidence_records) is None]
+            if unsupported:
+                return GroundingCheck(False, [f"Rejected unsupported authoritative claim {claim}."])
+            return GroundingCheck(True, [f"Supported by approved authoritative internal source {source}." for source, _ in evidence_records])
+
         if not context or not context.get("knowledge_first"):
             return GroundingCheck(True, ["No knowledge-first evidence required for legacy direct use."])
 

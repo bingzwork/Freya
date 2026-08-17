@@ -25,6 +25,7 @@ from app.providers.factory import ProviderFactory
 from app.memory.goals.manager import GoalStorage
 from app.memory.task_memory import create_task_memory
 from pathlib import Path
+from app.orchestrator.capability_registry import get_capability_registry
 
 
 # =============================================================================
@@ -51,7 +52,7 @@ def handle_show_capabilities(ctx: Dict[str, Any]) -> CapabilityResult:
         for capability in registry.get_all().values():
             metadata = capability.metadata
             cap_details.append({"name": metadata.name, "description": metadata.description, "category": getattr(metadata.category, "value", str(metadata.category)), "status": getattr(getattr(capability, "state", None), "value", str(getattr(capability, "state", "unknown"))), "actions": list(metadata.supported_actions)})
-        return CapabilityResult(success=True, data={"count": len(cap_details), "capabilities": cap_details}, message=f"{len(cap_details)} registered capabilities")
+        return CapabilityResult(success=True, data={"count": len(cap_details), "capabilities": cap_details}, message=f"{len(cap_details)} registered capabilities: " + ", ".join(item["name"] for item in cap_details))
     capability_router = ctx.get("capability_router", router)
     caps = capability_router.get_capabilities()
     cap_details = []
@@ -69,7 +70,7 @@ def handle_show_capabilities(ctx: Dict[str, Any]) -> CapabilityResult:
             "count": len(cap_details),
             "capabilities": cap_details,
         },
-        message=f"Found {len(cap_details)} registered capabilities",
+        message=f"{len(cap_details)} registered capabilities: " + ", ".join(item["name"] for item in cap_details),
     )
 
 
@@ -1269,3 +1270,16 @@ ConversationalControlHandler.register(router)
 
 
 
+
+def handle_capability_introspection(ctx: Dict[str, Any]) -> CapabilityResult:
+    """Answer self-capability questions from the live canonical registry."""
+    query = str(ctx.get("query", "")).strip()
+    registry = ctx.get("capability_registry") or get_capability_registry()
+    stop_words = {"can", "could", "would", "you", "do", "does", "are", "able", "to", "have", "the", "a", "an", "what", "which", "freya", "please", "not", "registered", "ability", "capability", "capabilities"}
+    tokens = {token.strip("?!.,").rstrip("s") for token in query.lower().split()} - stop_words
+    for capability in registry.get_all().values():
+        metadata = capability.metadata
+        searchable = " ".join([metadata.name, metadata.description, getattr(metadata.category, "value", str(metadata.category)), " ".join(metadata.tags), " ".join(metadata.supported_actions)]).lower()
+        if any(token and token in searchable for token in tokens):
+            return CapabilityResult(success=True, data={"supported": True, "capability": metadata.name, "authoritative_source": "CapabilityRegistry"}, message=f"Yes. I can use the registered capability {metadata.name}.")
+    return CapabilityResult(success=True, data={"supported": False, "authoritative_source": "CapabilityRegistry"}, message=f"No. I could not find a registered capability for {query}.")
