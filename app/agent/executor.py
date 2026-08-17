@@ -247,10 +247,17 @@ class Executor:
                 # Extract arguments based on tool type
                 args = {}
                 if tool == "read_file":
-                    for word in step.split():
-                        if any(word.endswith(ext) for ext in _READ_PATH_EXTENSIONS):
-                            args["path"] = word
-                            break
+                    extension_pattern = "|".join(
+                        re.escape(ext.lstrip(".")) for ext in _READ_PATH_EXTENSIONS
+                    )
+                    quote = chr(34)
+                    path_pattern = rf"(?i)((?:[a-z]:[\\/]|file:///)[^{quote}\r\n]+?\.(?:{extension_pattern})|[^\s{quote}]+\.(?:{extension_pattern}))(?=$|[\s{quote}.,;:)\]])"
+                    path_match = re.search(path_pattern, step)
+                    if path_match:
+                        path = path_match.group(1).rstrip(".,;:)]}'\"")
+                        if path.lower().startswith("file:///"):
+                            path = path[8:]
+                        args["path"] = path
                     if "path" not in args:
                         for name in _COMMON_FILE_NAMES:
                             if name in step_lower:
@@ -321,7 +328,7 @@ Preference order (least powerful first):
 2. Files: create_file, write_file, replace_in_file, delete_file, format_file
 3. Git: git_* tools
 4. HTTP: http_* tools
-5. run_terminal — last resort, only when no other tool can do it
+5. run_terminal ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â last resort, only when no other tool can do it
    (build, test, install/upgrade, package manager, run a script).
 """
 
@@ -553,7 +560,7 @@ Return ONLY this JSON, no markdown, no extra text:
                     # Mark remaining tasks as pending
                     if isinstance(plan, Plan) and hasattr(plan, '_tracker') and plan._tracker:
                         task.mark_pending()
-                        plan._tracker.on_task_status_changed(task, transition="READY → PENDING")
+                        plan._tracker.on_task_status_changed(task, transition="READY ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ PENDING")
                     break
 
             # Check if resources are available
@@ -571,12 +578,12 @@ Return ONLY this JSON, no markdown, no extra text:
             # Mark task as READY (dependencies satisfied, ready to start)
             if isinstance(plan, Plan) and hasattr(plan, '_tracker') and plan._tracker:
                 task.mark_ready()
-                plan._tracker.on_task_status_changed(task, transition="PENDING → READY")
+                plan._tracker.on_task_status_changed(task, transition="PENDING ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ READY")
 
             # Mark task as IN_PROGRESS
             if isinstance(plan, Plan) and hasattr(plan, '_tracker') and plan._tracker:
                 task.mark_in_progress()
-                plan._tracker.on_task_status_changed(task, transition="READY → IN_PROGRESS")
+                plan._tracker.on_task_status_changed(task, transition="READY ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ IN_PROGRESS")
 
             # Execute the task step
             try:
@@ -592,7 +599,7 @@ Return ONLY this JSON, no markdown, no extra text:
                 # Mark task as COMPLETED on success
                 if isinstance(plan, Plan) and hasattr(plan, '_tracker') and plan._tracker:
                     task.mark_completed()
-                    plan._tracker.on_task_status_changed(task, transition="IN_PROGRESS → COMPLETED")
+                    plan._tracker.on_task_status_changed(task, transition="IN_PROGRESS ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ COMPLETED")
 
                 # Release resources after execution
                 self._release_for_task(task)
@@ -608,7 +615,7 @@ Return ONLY this JSON, no markdown, no extra text:
                 # Mark task as FAILED on exception
                 if isinstance(plan, Plan) and hasattr(plan, '_tracker') and plan._tracker:
                     task.mark_failed(str(e))
-                    plan._tracker.on_task_status_changed(task, transition="IN_PROGRESS → FAILED")
+                    plan._tracker.on_task_status_changed(task, transition="IN_PROGRESS ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ FAILED")
 
                 self._release_for_task(task)
                 success = False
@@ -748,12 +755,12 @@ Return ONLY this JSON, no markdown, no extra text:
             # Mark task as READY (dependencies satisfied, ready to start)
             if isinstance(plan, Plan) and hasattr(plan, '_tracker') and plan._tracker:
                 task.mark_ready()
-                plan._tracker.on_task_status_changed(task, transition="PENDING → READY")
+                plan._tracker.on_task_status_changed(task, transition="PENDING ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ READY")
 
             # Mark task as IN_PROGRESS
             if isinstance(plan, Plan) and hasattr(plan, '_tracker') and plan._tracker:
                 task.mark_in_progress()
-                plan._tracker.on_task_status_changed(task, transition="READY → IN_PROGRESS")
+                plan._tracker.on_task_status_changed(task, transition="READY ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ IN_PROGRESS")
 
             # Execute the task step
             try:
@@ -769,7 +776,7 @@ Return ONLY this JSON, no markdown, no extra text:
                 # Mark task as COMPLETED on success
                 if isinstance(plan, Plan) and hasattr(plan, '_tracker') and plan._tracker:
                     task.mark_completed()
-                    plan._tracker.on_task_status_changed(task, transition="IN_PROGRESS → COMPLETED")
+                    plan._tracker.on_task_status_changed(task, transition="IN_PROGRESS ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ COMPLETED")
 
                 # Release resources after execution
                 self._release_for_task(task)
@@ -784,7 +791,7 @@ Return ONLY this JSON, no markdown, no extra text:
                 # Mark task as FAILED on exception
                 if isinstance(plan, Plan) and hasattr(plan, '_tracker') and plan._tracker:
                     task.mark_failed(str(e))
-                    plan._tracker.on_task_status_changed(task, transition="IN_PROGRESS → FAILED")
+                    plan._tracker.on_task_status_changed(task, transition="IN_PROGRESS ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ FAILED")
 
                 self._release_for_task(task)
 

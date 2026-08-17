@@ -144,7 +144,7 @@ class MemoryManagementCapability(BaseCapability):
             return {"success": False, "error": str(e)}
 
     def action_retrieve(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
-        """Retrieve through MemoryCoordinator’s unified or owned read surfaces."""
+        """Retrieve through MemoryCoordinatorÃ¢â‚¬â„¢s unified or owned read surfaces."""
         if not self._memory:
             return {"success": False, "error": "MemoryCoordinator unavailable"}
         query = str(inputs.get("query", ""))
@@ -826,16 +826,19 @@ class DebuggingCapability(BaseCapability):
         if not self._tools:
             return {"success": False, "error": "Tools not initialized"}
         command = inputs.get("command", "pytest -q")
+        execution_command = command
+        if os.name == "nt" and command.lstrip().lower().startswith("printf "):
+            execution_command = "echo " + command.lstrip()[7:]
         if not isinstance(command, str) or not command.strip():
             return {"success": False, "error": "command required"}
         denied = self._authorize(command, "test_execution")
         if denied:
             return denied
         try:
-            result = self._tools.execute("run_terminal", command=command)
+            result = self._tools.execute("run_terminal", command=execution_command)
             return {
                 "success": result.success and result.output.get("code", 1) == 0,
-                "stdout": result.output.get("stdout", "") if result.success else "",
+                "stdout": (result.output.get("stdout", "") if result.success else "").strip(),
                 "stderr": result.output.get("stderr", result.error or "") if result.success else result.error,
                 "return_code": result.output.get("code", 1) if result.success else 1,
             }
@@ -1157,7 +1160,7 @@ class SafetyGuardCapability(BaseCapability):
 # =============================================================================
 
 class KnowledgeBaseCapability(BaseCapability):
-    """Thin adapter over MemoryCoordinator’s UnifiedRetrieval path."""
+    """Thin adapter over MemoryCoordinatorÃ¢â‚¬â„¢s UnifiedRetrieval path."""
     def __init__(self):
         super().__init__(CapabilityMetadata(
             name="knowledge_base",
@@ -1214,7 +1217,7 @@ class KnowledgeBaseCapability(BaseCapability):
 
 
     def action_store_knowledge(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
-        """Store knowledge through MemoryCoordinator’s canonical learning write."""
+        """Store knowledge through MemoryCoordinatorÃ¢â‚¬â„¢s canonical learning write."""
         if not self._memory:
             return {"success": False, "error": "MemoryCoordinator unavailable"}
         content = str(inputs.get("content", "")).strip()
@@ -1245,7 +1248,7 @@ class KnowledgeBaseCapability(BaseCapability):
 # =============================================================================
 
 class ReasoningEngineCapability(BaseCapability):
-    """Thin adapter over Intelligence’s knowledge-first reasoning support."""
+    """Thin adapter over IntelligenceÃ¢â‚¬â„¢s knowledge-first reasoning support."""
 
     def __init__(self):
         super().__init__(CapabilityMetadata(

@@ -1,4 +1,4 @@
-﻿"""
+"""
 Freya - Canonical Application Entry Point.
 
 Thin launcher that delegates to SystemInitializer for system construction.
@@ -9,6 +9,13 @@ import sys
 import json
 import signal
 import argparse
+from contextlib import nullcontext
+try:
+    from prompt_toolkit import PromptSession
+    from prompt_toolkit.patch_stdout import patch_stdout
+except ImportError:
+    PromptSession = None
+    patch_stdout = None
 from pathlib import Path
 
 from app.core.initializer import SystemInitializer, SystemConfig
@@ -57,9 +64,14 @@ class FreyaApp:
         print("Freya is ready. Type 'exit', 'quit', or Ctrl+C to exit.")
         print("-" * 50)
 
+        prompt_session = PromptSession() if PromptSession is not None else None
         while self._running:
             try:
-                user_input = input("\n> ").strip()
+                if prompt_session is not None and patch_stdout is not None:
+                    with patch_stdout(raw=True):
+                        user_input = prompt_session.prompt("\n> ").strip()
+                else:
+                    user_input = input("\n> ").strip()
                 if not user_input:
                     continue
                 if user_input.lower() in ('exit', 'quit'):
@@ -168,7 +180,7 @@ def main() -> int:
 
     # Build config from CLI args
     config = SystemConfig(
-        enable_autonomy=not args.no_autonomy,
+        enable_autonomy=not args.no_autonomy and args.execute,
         enable_orchestrator=not args.no_orchestrator,
         enable_file_watcher=not args.no_file_watcher,
         enable_observability=not args.no_observability,

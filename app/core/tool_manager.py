@@ -317,7 +317,10 @@ class ToolManager:
         Raises:
             PermissionError: If access is denied
         """
-        full_path = (self.workspace / path).resolve()
+        candidate = Path(path)
+        if not candidate.is_absolute():
+            candidate = self.workspace / candidate
+        full_path = candidate.resolve()
 
         # Check if path is within workspace (additional safety)
         try:

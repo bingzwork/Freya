@@ -140,7 +140,7 @@ class IntentClassification:
 
     @property
     def is_ambiguous(self) -> bool:
-        """Confidence in the mid-band â€” ask a clarifying question."""
+        """Confidence in the mid-band ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ask a clarifying question."""
         return LOW_CONFIDENCE_THRESHOLD <= self.confidence < ACCEPT_CONFIDENCE_THRESHOLD
 
     @property
@@ -176,7 +176,7 @@ class IntentClassification:
 
     @property
     def is_control(self) -> bool:
-        """Conversational control intent â€” short-circuit all other routing."""
+        """Conversational control intent ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â short-circuit all other routing."""
         return self.intent.is_conversational_control
 
     def to_dict(self) -> Dict[str, Any]:
@@ -419,6 +419,25 @@ class IntentClassifier:
             score, keywords = self._score_intent(intent, message_lower)
             scores[intent] = (score, keywords)
 
+
+        # A concrete local file request is an engineering operation even
+        # when a follow-up phrase such as "tell me what it contains" looks
+        # like a general question. Keep this narrow: require both an explicit
+        # file action and a recognizable filename/path.
+        file_action = re.search(
+            r"\b(read|open|view|show|display|write|save|create|edit|modify|change|update|delete|remove|rename|move|copy)\b",
+            message_lower,
+        )
+        has_file_path = bool(
+            re.search(r"(?:[a-z]:[\\/]|file:///)[^?\n]+\.[a-z0-9]{1,10}\b", message_lower)
+            or re.search(r"\b[\w.-]+\.(?:txt|md|json|yaml|yml|csv|toml|ini|cfg|py|js|ts|tsx|jsx|html|css|xml|pdf|docx|xlsx)\b", message_lower)
+        )
+        if file_action and has_file_path:
+            current_score, current_keywords = scores[IntentType.FILE_OPERATION]
+            scores[IntentType.FILE_OPERATION] = (
+                max(current_score, 0.99),
+                current_keywords + ["file_action", "file_path"],
+            )
         # Apply follow-up boost after scoring
         if context and context.get('last_intent') == IntentType.SYSTEM_STATUS.value:
             # Check for follow-up indicators and boost SYSTEM_STATUS

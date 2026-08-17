@@ -76,3 +76,14 @@ def test_execute_task_graph(tmp_path: Path) -> None:
     assert results["t2"].output == 20  # 10 * 2
     assert results["t3"].success
     assert results["t3"].output == 40  # 20 * 2
+
+
+def test_read_file_accepts_absolute_workspace_path(tmp_path):
+    target = tmp_path / "nested folder" / "hello.txt"
+    target.parent.mkdir()
+    target.write_text("Hello Freya", encoding="utf-8")
+
+    result = ToolManager(tmp_path).execute("read_file", path=str(target))
+
+    assert result.success
+    assert result.output == "Hello Freya"
