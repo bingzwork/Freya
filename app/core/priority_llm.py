@@ -365,7 +365,7 @@ class PriorityLLMProvider:
             timeout=timeout,
         )
         self._enqueue_request(request)
-        wait_seconds = max(0.01, timeout if timeout is not None else 30.0)
+        wait_seconds = max(0.01, timeout if timeout is not None else 120.0)
         try:
             response = loop.run_until_complete(asyncio.wait_for(future, timeout=wait_seconds))
         except asyncio.TimeoutError:

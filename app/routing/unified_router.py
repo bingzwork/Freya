@@ -142,6 +142,7 @@ class UnifiedRouter:
         """Register query-facing built-ins through the canonical registry."""
         from app.capabilities.handlers import (
             handle_system_status,
+            handle_show_identity,
             handle_show_capabilities,
             handle_show_memory,
             handle_show_goals,
@@ -150,16 +151,23 @@ class UnifiedRouter:
 
         definitions = (
             ("system_status", handle_system_status, "Show system status and health", ["status", "health", "system"], ["system_status", "question"]),
-            ("show_capabilities", handle_show_capabilities, "List available capabilities", ["capabilities", "what can you do", "features"], ["question", "system_status"]),
+            ("show_identity", handle_show_identity, "Answer questions about Freya identity", ["name", "creator", "created", "made", "identity", "role", "what are you", "who are you"], ["question", "chat", "system_status"]),
+            ("show_capabilities", handle_show_capabilities, "List available capabilities", ["capabilities", "what can you do", "features", "tools"], ["question", "chat", "system_status"]),
             ("show_memory", handle_show_memory, "Show memory contents", ["memory", "what do you remember", "recall"], ["question", "system_status"]),
             ("show_goals", handle_show_goals, "Show current goals", ["goals", "objectives", "targets"], ["question", "system_status"]),
             ("show_tasks", handle_show_tasks, "Show active/planned tasks", ["tasks", "plan", "steps", "progress"], ["question", "system_status"]),
         )
         for name, handler, description, keywords, intent_types in definitions:
+            def bound_handler(context, handler=handler):
+                bound_context = dict(context or {})
+                bound_context.setdefault("capability_registry", self._capability_registry)
+                bound_context.setdefault("capability_router", self._capability_router)
+                return handler(bound_context)
+
             if self._capability_bridge is not None:
                 self._capability_bridge.register_query_capability(
                     name=name,
-                    handler=handler,
+                    handler=bound_handler,
                     description=description,
                     keywords=keywords,
                     intent_types=intent_types,

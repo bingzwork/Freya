@@ -1,4 +1,4 @@
-"""
+﻿"""
 KnowledgeFirstResolver - Core component for knowledge-first routing.
 
 Implements the knowledge-first resolution path per TARGET_ARCHITECTURE.md:
@@ -108,11 +108,14 @@ class KnowledgeFirstResolver:
         reasoning.extend(answerability.reasoning)
 
         routing_metadata = self._research_routing_metadata(answerability)
+        intent_str = intent_type.value if intent_type is not None else answerability.recommended_action
+        capability_matches = self._capability_router.find_matching(query, intent_str)
+        local_capability_matches = [match for match in capability_matches if match[0] != "research_capability"]
 
         # Step 3: Fresh, explicit, or insufficient external lookups use the
         # existing registered ResearchCapability before a local answer or LLM
         # fallback can produce stale or unsupported information.
-        if routing_metadata["needs_external_information"]:
+        if routing_metadata["needs_external_information"] and not local_capability_matches:
             reasoning.append(
                 "DECISION: External research required "
                 f"({routing_metadata['research_reason'] or 'knowledge requirement'})"
@@ -143,12 +146,8 @@ class KnowledgeFirstResolver:
 
         # Step 5: Check if a local capability can handle this
         reasoning.append("Step 4: Knowledge insufficient - checking CapabilityRouter...")
-        if intent_type is not None:
-            intent_str = intent_type.value
-        else:
-            intent_str = answerability.recommended_action
-
-        capability_matches = self._capability_router.find_matching(query, intent_str)
+        if local_capability_matches:
+            capability_matches = local_capability_matches
 
         if capability_matches:
             best_name, best_conf = capability_matches[0]
@@ -194,6 +193,10 @@ class KnowledgeFirstResolver:
         ]
         llm_context["knowledge_first"] = True
         llm_context["knowledge_sufficient"] = False
+        llm_context["allow_ungrounded_fallback"] = not (
+            bool(getattr(answerability, "requires_fresh_information", False))
+            or bool(getattr(answerability, "explicit_research_request", False))
+        )
         llm_prompt = self._build_llm_prompt(query, answerability, llm_context)
         reasoning.append(f"  LLM fallback prepared with priority: {llm_priority.name}")
         return ResolutionResult(
@@ -362,15 +365,24 @@ class KnowledgeFirstResolver:
                 context_parts.append(f"{turn['role']}: {turn['content']}")
             context_parts.append("")
         context_str = "\n".join(context_parts)
+        if llm_context.get("allow_ungrounded_fallback"):
+            evidence_instruction = (
+                "Use the supplied context when relevant. For ordinary questions, answer directly "
+                "from your general knowledge when the context is insufficient. Do not present "
+                "time-sensitive claims as current unless supported by fresh research."
+            )
+        else:
+            evidence_instruction = (
+                "Use only claims supported by the supplied evidence. If the evidence is insufficient, "
+                "explicitly state that the answer is unverified rather than presenting unsupported "
+                "details as established knowledge."
+            )
         prompt = f"""{context_str}
 User Query: {query}
-
 Based on the above context from Freya's internal knowledge systems, provide a helpful answer.
-Use only claims supported by the supplied evidence. If the evidence is insufficient, explicitly state that the answer is unverified rather than presenting unsupported details as established knowledge.
+{evidence_instruction}
 """
         return prompt
-
-
 def create_knowledge_first_resolver(
     unified_retrieval: UnifiedRetrieval,
     intelligence: Intelligence,

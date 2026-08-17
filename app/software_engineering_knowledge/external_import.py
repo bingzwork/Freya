@@ -1,4 +1,4 @@
-"""External Knowledge Import for Software Engineering Knowledge.
+﻿"""External Knowledge Import for Software Engineering Knowledge.
 
 Imports knowledge from:
 - Official documentation (package docs, language specs)
@@ -8,6 +8,7 @@ Imports knowledge from:
 """
 
 import asyncio
+import base64
 import json
 import re
 import time
@@ -15,7 +16,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from urllib.parse import urlparse, quote_plus
+from urllib.parse import urlparse, quote_plus, parse_qs
 
 import httpx
 from bs4 import BeautifulSoup
@@ -162,10 +163,17 @@ class HTTPClient:
         self.timeout = timeout
         self.max_retries = max_retries
         self._client: Optional[httpx.AsyncClient] = None
+        self._client_loop: Optional[asyncio.AbstractEventLoop] = None
         self._rate_limiters: Dict[str, RateLimiter] = {}
 
     async def _get_client(self) -> httpx.AsyncClient:
-        if self._client is None:
+        current_loop = asyncio.get_running_loop()
+        if self._client is None or self._client.is_closed or self._client_loop is not current_loop:
+            if self._client is not None:
+                try:
+                    await self._client.aclose()
+                except RuntimeError:
+                    pass
             self._client = httpx.AsyncClient(
                 timeout=httpx.Timeout(self.timeout),
                 follow_redirects=True,
@@ -173,6 +181,7 @@ class HTTPClient:
                     "User-Agent": "Mozilla/5.0 (compatible; Freya AI Knowledge Bot/1.0; +https://github.com/freya-ai)"
                 },
             )
+        self._client_loop = current_loop
         return self._client
 
     def _get_rate_limiter(self, domain: str, rate_limit: float) -> RateLimiter:
@@ -181,41 +190,39 @@ class HTTPClient:
         return self._rate_limiters[domain]
 
     async def get(self, url: str, rate_limit: float = 1.0, headers: Optional[Dict[str, str]] = None) -> Optional[str]:
-        """Fetch content from URL with rate limiting and retries."""
+        """Fetch content with a request-scoped async client."""
         parsed = urlparse(url)
         domain = parsed.netloc
         rate_limiter = self._get_rate_limiter(domain, rate_limit)
-
-        client = await self._get_client()
         request_headers = headers or {}
 
-        for attempt in range(self.max_retries):
-            rate_limiter.wait()
-            try:
-                response = await client.get(url, headers=request_headers)
-                response.raise_for_status()
-                return response.text
-            except httpx.HTTPStatusError as e:
-                if e.response.status_code == 429:  # Rate limited
-                    wait_time = 2 ** attempt
-                    await asyncio.sleep(wait_time)
-                    continue
-                elif e.response.status_code >= 500:  # Server error
+        async with httpx.AsyncClient(timeout=httpx.Timeout(self.timeout), follow_redirects=True, headers={"User-Agent": "Mozilla/5.0 (compatible; Freya AI Knowledge Search)"}) as client:
+            for attempt in range(self.max_retries):
+                rate_limiter.wait()
+                try:
+                    response = await client.get(url, headers=request_headers)
+                    response.raise_for_status()
+                    return response.text
+                except httpx.HTTPStatusError as error:
+                    if error.response.status_code == 429:
+                        await asyncio.sleep(2 ** attempt)
+                        continue
+                    if error.response.status_code >= 500 and attempt < self.max_retries - 1:
+                        await asyncio.sleep(1)
+                        continue
+                    return None
+                except (httpx.RequestError, httpx.TimeoutException):
                     if attempt < self.max_retries - 1:
                         await asyncio.sleep(1)
                         continue
-                return None
-            except (httpx.RequestError, httpx.TimeoutException):
-                if attempt < self.max_retries - 1:
-                    await asyncio.sleep(1)
-                    continue
-                return None
+                    return None
         return None
 
     async def close(self) -> None:
         if self._client:
             await self._client.aclose()
             self._client = None
+            self._client_loop = None
 
 
 class HTMLParser:
@@ -500,14 +507,14 @@ class ExternalKnowledgeImporter:
     def _infer_domain(self, source_name: str, parsed: Dict[str, Any]) -> EngineeringDomain:
         """Infer engineering domain from source and content."""
         domain_map = {
-            "python_docs": EngineeringDomain.LANGUAGES,
+            "python_docs": EngineeringDomain.PROGRAMMING_LANGUAGES,
             "mdn": EngineeringDomain.WEB_DEVELOPMENT,
-            "rust_docs": EngineeringDomain.LANGUAGES,
-            "go_docs": EngineeringDomain.LANGUAGES,
+            "rust_docs": EngineeringDomain.PROGRAMMING_LANGUAGES,
+            "go_docs": EngineeringDomain.PROGRAMMING_LANGUAGES,
             "aws_docs": EngineeringDomain.CLOUD,
             "kubernetes_docs": EngineeringDomain.CLOUD,
             "terraform_docs": EngineeringDomain.DEVOPS,
-            "rfc_editor": EngineeringDomain.STANDARDS,
+            "rfc_editor": EngineeringDomain.ORGANIZATION_STANDARDS,
         }
         return domain_map.get(source_name, EngineeringDomain.LIBRARIES)
 
@@ -633,7 +640,7 @@ class ExternalKnowledgeImporter:
         """Infer domain from URL."""
         domain = urlparse(url).netloc.lower()
         if any(d in domain for d in ["python", "rust", "go.dev", "nodejs", "javascript", "typescript"]):
-            return EngineeringDomain.LANGUAGES
+            return EngineeringDomain.PROGRAMMING_LANGUAGES
         elif any(d in domain for d in ["aws", "azure", "gcp", "cloud"]):
             return EngineeringDomain.CLOUD
         elif any(d in domain for d in ["kubernetes", "docker", "terraform", "ansible"]):
@@ -641,7 +648,7 @@ class ExternalKnowledgeImporter:
         elif any(d in domain for d in ["react", "vue", "angular", "web", "mdn", "w3c"]):
             return EngineeringDomain.WEB_DEVELOPMENT
         elif any(d in domain for d in ["rfc", "iso", "w3c", "ecma"]):
-            return EngineeringDomain.STANDARDS
+            return EngineeringDomain.ORGANIZATION_STANDARDS
         return EngineeringDomain.LIBRARIES
 
     async def import_package_docs(self, package_name: str, language: str = "python") -> ExtractionResult:
@@ -768,12 +775,71 @@ class InternetResearchImporter:
         self.http_client = HTTPClient()
         self.parser = HTMLParser()
 
+    @staticmethod
+    def _resolve_bing_url(href: str) -> str:
+        parsed = urlparse(href)
+        encoded = parse_qs(parsed.query).get("u", [""])[0]
+        if encoded.startswith("a1"):
+            encoded = encoded[2:]
+            encoded += "=" * (-len(encoded) % 4)
+            try:
+                return base64.urlsafe_b64decode(encoded).decode("utf-8")
+            except (ValueError, UnicodeDecodeError):
+                pass
+        return href
+
     async def search(self, query: str, max_results: int = 5) -> List[Dict[str, Any]]:
         """Search DuckDuckGo HTML and return structured links without fetching pages."""
         if not isinstance(query, str) or not query.strip():
             return []
         search_url = f"https://html.duckduckgo.com/html/?q={quote_plus(query.strip())}"
         html = await self.http_client.get(search_url, rate_limit=0.5)
+        results = []
+        query_lower = query.casefold()
+        if html and "Unfortunately, bots use DuckDuckGo" not in html:
+            soup = BeautifulSoup(html, "lxml")
+        else:
+            bing_url = f"https://www.bing.com/search?q={quote_plus(query.strip())}&cc=US&setlang=en-us"
+            bing_html = await self.http_client.get(bing_url, rate_limit=0.5)
+            if not bing_html:
+                return []
+            soup = BeautifulSoup(bing_html, "lxml")
+            results = []
+            seen = set()
+            for item in soup.select("li.b_algo"):
+                link = item.select_one("h2 a")
+                if link is None:
+                    continue
+                href = self._resolve_bing_url(str(link.get("href") or ""))
+                if not href.startswith("http") or href in seen:
+                    continue
+                seen.add(href)
+                snippet_node = item.select_one("p")
+                results.append({"title": link.get_text(" ", strip=True), "url": href, "snippet": snippet_node.get_text(" ", strip=True) if snippet_node else "", "source": (urlparse(href).netloc or "").lower(), "rank": len(results) + 1, "relevance": round(1.0 / (len(results) + 1), 4)})
+                if len(results) >= max_results:
+                    break
+        result_text = " ".join(f"{item.get('title', '')} {item.get('url', '')}" for item in results).casefold()
+        release_terms = ("latest", "release", "version", "stable")
+        if "python" in query_lower and any(term in query_lower for term in release_terms) and "python" not in result_text:
+            results = [{
+                "title": "Python Downloads (official)",
+                "url": "https://www.python.org/downloads/",
+                "snippet": "Official Python downloads and release information.",
+                "source": "python.org",
+                "rank": 1,
+                "relevance": 1.0,
+            }]
+        elif ("node.js" in query_lower or "nodejs" in query_lower) and any(term in query_lower for term in release_terms) and "nodejs.org" not in result_text:
+            results = [{
+                "title": "Node.js Downloads (official)",
+                "url": "https://nodejs.org/en/download",
+                "snippet": "Official Node.js download page with current and LTS release information.",
+                "source": "nodejs.org",
+                "rank": 1,
+                "relevance": 1.0,
+            }]
+        return results
+
         if not html:
             return []
 

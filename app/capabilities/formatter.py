@@ -1,4 +1,4 @@
-"""Response Formatter.
+﻿"""Response Formatter.
 
 Converts structured capability results into natural language responses.
 Hides internal implementation details unless debug mode is enabled.
@@ -313,16 +313,17 @@ class ResponseFormatter:
         if answer:
             response = str(answer)
             citations = data.get("citations") or []
+            source_records = data.get("sources") or []
             source_lines = []
             seen_urls = set()
-            for citation in citations:
+            for citation in [*citations, *source_records]:
                 if not isinstance(citation, dict):
                     continue
-                url = citation.get("source_url")
+                url = citation.get("source_url") or citation.get("url")
                 if not url or url in seen_urls:
                     continue
                 seen_urls.add(url)
-                title = citation.get("source_title") or url
+                title = citation.get("source_title") or citation.get("title") or url
                 source_lines.append(f"- {title}: {url}")
             if source_lines:
                 response += "\n\nSources:\n" + "\n".join(source_lines[:5])

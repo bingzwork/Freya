@@ -42,7 +42,7 @@ class LLMStack:
 
     def __init__(
         self,
-        model: str = "qwen3:8b",
+        model: str = "qwen3.5:4b",
         base_llm: Optional[LLM] = None,
         priority_llm: Optional[PriorityLLMProvider] = None,
         chat_activity: Optional[FreyaChatActivityProvider] = None,
@@ -201,7 +201,7 @@ _llm_stack_lock = Lock()
 
 
 def get_llm_stack(
-    model: str = "qwen3:8b",
+    model: str = "qwen3.5:4b",
     base_llm: Optional[LLM] = None,
     priority_llm: Optional[PriorityLLMProvider] = None,
     chat_activity: Optional[FreyaChatActivityProvider] = None,

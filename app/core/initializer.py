@@ -179,7 +179,8 @@ class SystemInitializer:
         # ------------------------------------------------------------------
         # 2. LLM Stack (replaces LLM + Priority + ChatActivity)
         # ------------------------------------------------------------------
-        llm_stack = LLMStack()
+        from app.core.config import config as global_config
+        llm_stack = LLMStack(model=global_config.model)
         priority_llm = llm_stack.priority_llm
         chat_activity = llm_stack.chat_activity
         # Replace global priority LLM so existing code works

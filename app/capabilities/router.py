@@ -1,4 +1,4 @@
-"""Capability Router.
+﻿"""Capability Router.
 
 Routes user queries to appropriate capability handlers when the query
 can be answered directly without invoking the LLM.
@@ -64,7 +64,8 @@ class Capability:
 
         # Check intent type first (as a filter, not a confidence source)
         if intent_type and self.intent_types:
-            if intent_type not in self.intent_types:
+            normalized_intent_type = getattr(intent_type, "value", intent_type)
+            if normalized_intent_type not in self.intent_types:
                 return (False, 0.0)
             # Intent type matches - this is a prerequisite, not a confidence boost
 
@@ -83,7 +84,8 @@ class Capability:
         # Check keywords (only if no pattern matched at higher confidence)
         if not pattern_matched or confidence < 0.95:
             for keyword in self.keywords:
-                if keyword in query_lower:
+                keyword_lower = str(keyword).strip().lower()
+                if keyword_lower and re.search(rf"(?<!\w){re.escape(keyword_lower)}(?!\w)", query_lower):
                     # Longer keywords = more specific = higher confidence
                     keyword_confidence = 0.4 * (1 + len(keyword) / 10)
                     confidence = min(confidence + keyword_confidence, 0.97)

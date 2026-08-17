@@ -146,7 +146,7 @@ class Config:
 
     def __init__(self):
         self.project_name = os.getenv("PROJECT_NAME", "Freya")
-        self.model = os.getenv("MODEL", "qwen3:8b")
+        self.model = os.getenv("MODEL", "qwen3.5:4b")
         self.workspace = os.getenv("WORKSPACE", str(BASE_DIR))
         self.memory_path = os.getenv("MEMORY_PATH", "data/memory")
         self.vector_path = os.getenv("VECTOR_PATH", "data/vector_db")

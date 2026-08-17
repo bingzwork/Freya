@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional
 from app.capabilities.router import Capability, CapabilityResult, router
 from app.core.config import config
 from app.core.logger import logger
+from app.identity import get_identity
 from app.intent.runtime_context import get_runtime_context
 from app.providers.health import ProviderHealthChecker
 from app.providers.factory import ProviderFactory
@@ -30,12 +31,32 @@ from pathlib import Path
 # Router-facing wrapper handlers (thin wrappers around existing implementations)
 # =============================================================================
 
+def handle_show_identity(ctx: Dict[str, Any]) -> CapabilityResult:
+    """Answer identity questions from immutable local metadata."""
+    identity = get_identity()
+    query = str(ctx.get("query", "")).lower()
+    if any(token in query for token in ("creator", "created", "made", "who built")):
+        message = identity.get_creator_statement()
+    elif "name" in query:
+        message = f"My name is {identity.name}."
+    else:
+        message = identity.get_identity_statement()
+    return CapabilityResult(success=True, data={"name": identity.name, "role": identity.role, "creator": identity.creator, "owner": identity.owner, "project": identity.project, "runtime_model": identity.runtime_model}, message=message)
+
 def handle_show_capabilities(ctx: Dict[str, Any]) -> CapabilityResult:
-    """Show all registered capabilities."""
-    caps = router.get_capabilities()
+    """Show all capabilities from the live canonical registry."""
+    registry = ctx.get("capability_registry")
+    if registry is not None:
+        cap_details = []
+        for capability in registry.get_all().values():
+            metadata = capability.metadata
+            cap_details.append({"name": metadata.name, "description": metadata.description, "category": getattr(metadata.category, "value", str(metadata.category)), "status": getattr(getattr(capability, "state", None), "value", str(getattr(capability, "state", "unknown"))), "actions": list(metadata.supported_actions)})
+        return CapabilityResult(success=True, data={"count": len(cap_details), "capabilities": cap_details}, message=f"{len(cap_details)} registered capabilities")
+    capability_router = ctx.get("capability_router", router)
+    caps = capability_router.get_capabilities()
     cap_details = []
     for name in caps:
-        cap = router.get_capability(name)
+        cap = capability_router.get_capability(name)
         if cap:
             cap_details.append({
                 "name": name,

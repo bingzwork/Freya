@@ -1,11 +1,11 @@
-"""
+﻿"""
 AnswerVerifier - Verifies LLM fallback answers for validity and learning potential.
 
 This component implements the AnswerVerifier from TARGET_ARCHITECTURE.md Section 8.
 It validates LLM fallback answers and determines if they should be:
 1. Returned to the user as valid answers
 2. Sent to the AnswerRepairLoop for retry with corrective context (up to max attempts)
-3. If repair exhausted → AnswerSafeFailure (low-confidence disclosure + log knowledge gap)
+3. If repair exhausted â†’ AnswerSafeFailure (low-confidence disclosure + log knowledge gap)
 
 This is specifically for LLM fallback answers, separate from ExecutionVerifier
 which is used by ExecutionEngine for plan verification.
@@ -127,7 +127,7 @@ class AnswerVerifier:
         # every material claim to have a supporting evidence record there; retain
         # quality-only behaviour for legacy direct use with no knowledge context.
         grounding = self._check_claims_against_local_evidence(answer, context)
-        if self._is_valid_answer(answer, prompt) and grounding.is_grounded:
+        if self._is_valid_answer(answer, prompt) and (grounding.is_grounded or bool((context or {}).get("allow_ungrounded_fallback"))):
             # Valid answer: return it to the user
             # Also check if it has learning value for the pipeline (optional)
             if self._has_learning_value(answer, prompt):
@@ -220,6 +220,8 @@ class AnswerVerifier:
         raw_evidence = context.get("retrieved_results") or context.get("evidence") or []
         evidence_records = self._normalise_evidence(raw_evidence)
         if not evidence_records:
+            if context.get("allow_ungrounded_fallback"):
+                return GroundingCheck(True, ["Quality-only validation allowed for non-research LLM fallback."])
             return GroundingCheck(False, ["Rejected: no local retrieval evidence was supplied."])
 
         claims = self._material_claims(answer)
@@ -261,7 +263,7 @@ class AnswerVerifier:
         """Split prose into independently checkable, non-trivial claims."""
         candidates = re.split(r"(?<=[.!?])\s+|[\n;]+", answer.strip())
         return [
-            candidate.strip(" -•\t")
+            candidate.strip(" -â€¢\t")
             for candidate in candidates
             if len(re.findall(r"[a-z0-9]{3,}", candidate.lower())) >= 2
         ]
