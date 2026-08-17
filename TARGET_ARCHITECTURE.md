@@ -1,319 +1,259 @@
-flowchart TD
-%% SIMPLE FREYA WIRING
-%% Every node name below is retained from the original diagram.
-%% No new components have been added: only the critical edges are simplified/corrected.
-%% =========================================================
-%% 1. BOOTSTRAP
-%% =========================================================
-subgraph BOOT["1. BOOTSTRAP"]
-direction TB
-A["main.py"]
-B["SystemInitializer"]
-A --> B
-end
-%% =========================================================
-%% 2. FREYA INTERFACE
-%% =========================================================
-subgraph INTERFACE["2. FREYA INTERFACE"]
-direction TB
-K["AgentFacadeImpl"]
-J["ConversationControl"]
-K --> J
-end
-%% =========================================================
-%% 3. FREYA KNOWLEDGE + MEMORY
-%% =========================================================
-subgraph MEMORY["3. FREYA KNOWLEDGE + MEMORY"]
-direction TB
-E["MemoryCoordinator"]
-E3["UnifiedRetrieval"]
-E2["GoalManager"]
-E1["Core Memory Modules<br/>Working · Task · Long-Term<br/>Semantic · Episodic · Project"]
-E4["ExperienceMemory"]
-E5["ConversationMemory"]
-E6["EngineeringLessons"]
-E --> E3
-E --> E2
-E --> E1
-E --> E4
-E --> E5
-E --> E6
-E3 --> E1
-E3 --> E4
-E3 --> E5
-E3 --> E6
-end
-%% =========================================================
-%% 4. FREYA INTELLIGENCE
-%% =========================================================
-subgraph INTELLIGENCE["4. FREYA INTELLIGENCE"]
-direction TB
-G["IntelligenceEngine"]
-G1["Reasoning + Decision Logic"]
-G2["Confidence / Answerability"]
-G3["Context + Goal Awareness"]
-G --> G1
-G --> G2
-G --> G3
-end
-%% =========================================================
-%% 5. KNOWLEDGE-FIRST ROUTING
-%% =========================================================
-subgraph ROUTING["5. KNOWLEDGE-FIRST ROUTING"]
-direction TB
-H["UnifiedRouter"]
-H0["KnowledgeFirstResolver"]
-H5{"Can Freya Answer?"}
-H6{"Local Capability Available?"}
-RESULT["Freya Answer"]
-H --> H0
-H0 -->|"Search Freya first"| E3
-E3 --> H5
-H5 -->|"Yes: grounded and confident"| RESULT
-H5 -->|"No / insufficient"| H6
-H6 -->|"Yes"| H1
-H6 -->|"No"| D2
-end
-%% =========================================================
-%% 6. MODULAR CAPABILITY SYSTEM
-%% =========================================================
-subgraph CAPABILITY["6. MODULAR CAPABILITY SYSTEM"]
-direction TB
-M2["CapabilityRegistry"]
-H1["CapabilityRouter"]
-H2["Capability Handlers"]
-F["ToolManager"]
-M2 --> H1 --> H2 --> F
-end
-%% =========================================================
-%% 7. LOCAL LLM FALLBACK ONLY
-%% =========================================================
-subgraph LLM["7. LOCAL LLM FALLBACK ONLY"]
-direction TB
-D["LLMStack"]
-D2["PriorityLLMProvider"]
-D1["Ollama / Local Model"]
-D3["ChatActivityProvider"]
-D --> D2
-D --> D3
-D2 --> D1
-end
-%% =========================================================
-%% 8. SELF-LEARNING PIPELINE
-%% =========================================================
-subgraph LEARNING["8. SELF-LEARNING PIPELINE"]
-direction TB
-LP["LearningPipeline"]
-LP1["Observe"]
-LP2["Evaluate"]
-LP3["Extract Learning"]
-LP4["Validate Learning"]
-LP5{"Worth Remembering?"}
-LP6["Classify<br/>KNOWLEDGE · EXPERIENCE · SKILL"]
-LP7["KnowledgeDistiller"]
-LP8["ExperienceDistiller"]
-LP9["SkillDistiller"]
-LP10["Better Knowledge & Skills<br/>normalized DistilledLearning"]
-TEMP["Discard / Keep Temporary"]
-LP --> LP1 --> LP2 --> LP3 --> LP4 --> LP5
-LP5 -->|"No"| TEMP
-LP5 -->|"Yes"| LP6
-LP6 -->|"KNOWLEDGE"| LP7
-LP6 -->|"EXPERIENCE"| LP8
-LP6 -->|"SKILL"| LP9
-LP8 -->|"Reusable experience evidence"| LP9
-LP7 --> LP10
-LP8 --> LP10
-LP9 --> LP10
-%% Critical learning rule: only source-backed, validated learning is written to memory.
-LP10 -->|"Validated learning only"| E
-end
-%% =========================================================
-%% 9. WORKFLOW + EXECUTION
-%% =========================================================
-subgraph EXECUTION["9. WORKFLOW + EXECUTION"]
-direction TB
-M["WorkflowOrchestrator"]
-M1["SafetyGate"]
-I["ExecutionEngine"]
-I1["UnifiedPlanner"]
-I2["UnifiedExecutor"]
-I3["ExecutionVerifier"]
-I4["RepairLoop"]
-V1["AnswerVerifier"]
-DONE["Task Complete"]
-AR["AnswerRepairLoop"]
-SF1["AnswerSafeFailure"]
-SF2["ExecutionSafeFailure"]
-M --> M1
-I --> I1 --> I2 --> I3
-I3 -->|"Passed"| DONE
-I3 -->|"Failed / Partial"| I4
-I4 -->|"Repair / Replan (Attempt < Max)"| I1
-I4 -->|"Retries Exhausted"| SF2
-V1 -->|"Valid"| RESULT
-V1 -->|"Invalid / Low Confidence"| AR
-AR -->|"Retry w/ Corrective Context (Attempt < Max)"| D2
-AR -->|"Retries Exhausted"| SF1
-end
-%% =========================================================
-%% 11. AUTONOMY + OBSERVATION
-%% =========================================================
-subgraph AUTONOMY["11. AUTONOMY + OBSERVATION"]
-direction TB
-L["AutonomyManager"]
-L1["Watchdog"]
-L3["SelfInitiatedWorkManager"]
-L4["MaintenanceManager"]
-L --> L1
-L --> L3
-L --> L4
-end
-%% =========================================================
-%% 12. DIAGNOSTICS + SAFE SELF-IMPROVEMENT
-%% =========================================================
-subgraph IMPROVEMENT["12. DIAGNOSTICS + SAFE SELF-IMPROVEMENT"]
-direction TB
-Q1["Diagnostics"]
-Q2["Safe Self-Improvement"]
-Q1 --> Q2
-end
-%% =========================================================
-%% 13. SHARED INFRASTRUCTURE
-%% =========================================================
-subgraph INFRA["13. SHARED INFRASTRUCTURE"]
-direction TB
-C["Infrastructure"]
-C1["EventBus"]
-C2["BackgroundJobService"]
-C3["ObservabilityHub"]
-C --> C1
-C --> C2
-C --> C3
-end
-%% =========================================================
-%% 14. FUTURE EXTENSION PORTS
-%% =========================================================
-subgraph EXTENSIONS["14. FUTURE EXTENSION PORTS"]
-direction TB
-X["Future Capability / Feature"]
-X1["Callable Capability"]
-X2["Event / Observer"]
-X3["Background / Autonomous"]
-X4["Memory-Aware Feature"]
-X --> X1
-X --> X2
-X --> X3
-X --> X4
-end
-%% =========================================================
-%% THE ESSENTIAL CROSS-GROUP WIRING
-%% =========================================================
-%% Conversation and local-knowledge-first answer flow
-J -->|"Question / Knowledge Request"| H
-J -->|"Task / Action Request"| M
-J -->|"Context / Memory Read"| E
-J -->|"Intelligence Context"| G
-J -->|"Chat Activity"| D3
-J -->|"Goal Updates"| E2
-RESULT -->|"Final Answer"| J
-DONE -->|"Task Result"| J
-%% Answerability uses local retrieval, goal context, and confidence
-E2 -->|"Active Goals"| G3
-E2 -->|"Goal Context"| I1
-E3 -->|"Retrieved Knowledge"| G
-G -->|"Intent / Plan Hints"| I1
-G1 -->|"Reasoned Decisions"| I1
-G2 -->|"Confidence Score"| H5
-G3 -->|"Context Snapshot"| I1
-%% The LLM produces a draft; AnswerVerifier decides whether it is safe to return.
-D2 -->|"Fallback draft"| V1
-SF1 -->|"Low-Confidence Disclosure"| RESULT
-SF1 -->|"Log Knowledge Gap"| LP
-%% The LLM may propose learning; it never writes straight to memory.
-D2 -->|"LLM learning candidate"| LP
-V1 -->|"Learning Candidate"| LP
-%% Planner still asks Freya knowledge first; tools run only through the safety gate.
-I1 -->|"Knowledge / Capability Query"| H
-I2 -->|"Proposed Action"| M1
-M1 -->|"Approved Action"| H1
-F -->|"Tool Result"| I2
-I3 -->|"Outcome / Experience"| LP
-%% Execution failure and task completion
-SF2 -->|"Request Compensation"| M1
-SF2 -->|"Partial Failure Report"| J
-SF2 -->|"Log Failure Pattern"| Q1
-%% Autonomy is routed through the same workflow and learning path.
-L3 -->|"Read Goals"| E2
-L3 -->|"Autonomous Work Request"| M
-L4 -->|"Maintenance Work Request"| M
-L1 -->|"Observations / Anomalies"| LP
-L1 -->|"Health Events"| C1
-%% Diagnostics and improvement remain behind the workflow safety gate.
-LP -->|"Improvement Candidate"| Q2
-Q1 -->|"Failure Patterns"| Q2
-Q2 -->|"Approved Improvement Proposal"| M
-%% Eventing, observation, and extensions
-M -->|"Events / Commands"| C1
-M -->|"Schedule Background"| C2
-I -->|"Metrics / Traces"| C3
-C1 -->|"System Events"| L1
-C1 -->|"Learning Events"| LP
-C1 -->|"Autonomy Triggers"| L3
-C1 -->|"Maintenance Triggers"| L4
-C3 -->|"Metrics / Health"| L1
-C3 -->|"Diagnostics Data"| Q1
-C3 -->|"Execution Metrics"| M
-L -->|"Background Jobs"| C2
-X1 -.->|"Register Capability"| M2
-X2 -.->|"Publish / Subscribe"| C1
-X3 -.->|"Schedule Background"| C2
-X4 -.->|"Stable Memory API"| E
-%% =========================================================
-%% INITIALIZATION
-%% =========================================================
-B -->|"1. Init Infrastructure"| C
-B -->|"2. Init LLM Stack"| D
-B -->|"3. Init Memory"| E
-B -->|"4. Init Intelligence"| G
-B -->|"5. Init Capability Registry"| M2
-B -->|"6. Init Router"| H
-B -->|"7. Init Execution Engine"| I
-B -->|"8. Init Orchestrator"| M
-B -->|"9. Init Interface"| J
-B -->|"10. Init Facade"| K
-B -->|"11. Init Autonomy"| L
-B -->|"12. Init Learning Pipeline"| LP
-B -->|"13. Init Diagnostics"| Q1
-B -->|"14. Init Self-Improvement"| Q2
-%% =========================================================
-%% STYLING
-%% =========================================================
-classDef bootstrap fill:#263238,color:#ffffff,stroke:#546e7a,stroke-width:2px;
-classDef interface fill:#6a1b9a,color:#ffffff,stroke:#ab47bc;
-classDef memory fill:#00695c,color:#ffffff,stroke:#26a69a,stroke-width:2px;
-classDef intelligence fill:#1565c0,color:#ffffff,stroke:#42a5f5;
-classDef routing fill:#00838f,color:#ffffff,stroke:#26c6da;
-classDef capability fill:#0277bd,color:#ffffff,stroke:#29b6f6;
-classDef llm fill:#4527a0,color:#ffffff,stroke:#7e57c2;
-classDef learning fill:#558b2f,color:#ffffff,stroke:#9ccc65;
-classDef execution fill:#2e7d32,color:#ffffff,stroke:#66bb6a;
-classDef workflow fill:#ef6c00,color:#ffffff,stroke:#ffa726;
-classDef safety fill:#c62828,color:#ffffff,stroke:#ef5350,stroke-width:3px;
-classDef infrastructure fill:#37474f,color:#ffffff,stroke:#78909c;
-classDef improvement fill:#ad1457,color:#ffffff,stroke:#ec407a;
-classDef extension fill:#455a64,color:#ffffff,stroke:#90a4ae,stroke-dasharray:5 5;
-class A,B bootstrap;
-class K,J interface;
-class E,E1,E2,E3,E4,E5,E6 memory;
-class G,G1,G2,G3 intelligence;
-class H,H0,H5,H6,RESULT routing;
-class M2,H1,H2,F capability;
-class D,D1,D2,D3 llm;
-class LP,LP1,LP2,LP3,LP4,LP5,LP6,LP7,LP8,LP9,LP10,TEMP learning;
-class I,I1,I2,I3,I4,V1,DONE,AR execution;
-class M,L,L1,L3,L4 workflow;
-class M1,SF1,SF2 safety;
-class C,C1,C2,C3 infrastructure;
-class Q1,Q2 improvement;
-class X,X1,X2,X3,X4 extension;
+# Freya Target Architecture
+
+**Status:** Intended next-state direction
+
+**Baseline:** Current implemented V2 documented in [`CURRENT_ARCHITECTURE.md`](CURRENT_ARCHITECTURE.md)
+
+**Repository revision used for this baseline:** `03b0a78`
+
+> This document describes Freya's intended architectural direction.
+>
+> `CURRENT_ARCHITECTURE.md` describes implemented runtime reality.
+>
+> When documentation and production code disagree, do not automatically refactor code to match documentation. Inspect the discrepancy, determine whether the code or documentation is stale, and report the mismatch before making architectural changes.
+
+## 1. Scope and design rule
+
+The target is **Current V2 plus clearly justified intentional improvements**. It is not a replacement architecture. The initializer-owned graph, local-first routing, canonical memory owner, capability registry and bridge, workflow/execution separation, fail-closed safety, evidence-based learning, and typed promotion boundary remain the foundation.
+
+The target document must never be used as evidence that a component or edge already exists. Implementation status is always read from the production code and from `CURRENT_ARCHITECTURE.md` after a fresh verification pass.
+
+## 2. Target invariants
+
+Freya should continue to maintain the following invariants:
+
+| Invariant | Target meaning |
+|---|---|
+| Local knowledge first | Retrieval and answerability precede LLM fallback for question handling. |
+| Canonical runtime ownership | `SystemInitializer` constructs one authoritative instance of each core service. |
+| One memory write boundary | Durable learning and memory mutations remain coordinated by `MemoryCoordinator`. |
+| Capabilities separate from orchestration | Capabilities declare callable behavior; workflows compose and execute them. |
+| Execution separate from verification | Actions may produce results, but only verification establishes an accepted outcome. |
+| Observation separate from diagnosis | Runtime measurements and lifecycle events are inputs; diagnostic analysis is a distinct boundary. |
+| Diagnosis separate from repair authority | Diagnostics may produce candidates or reports; they do not directly mutate production. |
+| Verification separate from promotion | Verification evidence is necessary but is not itself a promotion decision. |
+| Promotion fail-closed | Invalid evidence, failed gates, unacceptable risk, or missing rollback capability cannot approve a change. |
+| Learning from outcomes | Verified success and failure outcomes may enter the validated learning pipeline. |
+| Provenance preserved | Candidate identity, verification, measurement, rollback, and promotion provenance remain linked. |
+| UI/avatar isolated from backend core | Avatar and UI bridges observe or present runtime state without becoming backend owners. |
+
+## 3. Target composition
+
+The intended composition remains the current graph, with explicit boundaries and no parallel owners.
+
+```mermaid
+flowchart TB
+    INIT[SystemInitializer\ncomposition root]
+    INF[Shared infrastructure\nEventBus + BackgroundJobService + ObservabilityHub]
+    LLM[LLMStack]
+    MEMORY[MemoryCoordinator\nmodules + UnifiedRetrieval]
+    INTEL[Intelligence + DecisionManager]
+    CAP[CapabilityRegistry\nCapabilityRegistrationBridge\nCapabilityRouter + ToolManager]
+    SAFETY[Runtime SafetyGate]
+    ROUTE[UnifiedRouter\nKnowledgeFirstResolver]
+    EXEC[ExecutionEngine\nPlanner + Executor + Verification + Repair]
+    WF[WorkflowOrchestrator\noptional mode]
+    CONV[ConversationControl + AgentFacade]
+    LEARN[LearningPipeline]
+    OBS[RuntimeAwareness + SystemAnatomy]
+    DIAG[Diagnostics + PredictiveDiagnostics]
+    IMPROVE[SafeSelfImprovement]
+    PROMOTE[Typed PromotionRequest\nPromotionManager + SafetyPromotionGates\nCanary + Rollback]
+
+    INIT --> INF --> LLM --> MEMORY --> INTEL --> CAP --> SAFETY --> ROUTE --> EXEC
+    EXEC --> WF
+    EXEC --> CONV
+    CONV --> ROUTE
+    EXEC --> LEARN
+    WF --> OBS
+    OBS --> DIAG
+    LEARN --> IMPROVE
+    DIAG --> IMPROVE
+    IMPROVE --> PROMOTE
+```
+
+The diagram is intentionally smaller than the historical target. Internal construction details, optionality, readiness, and shutdown remain documented in the current architecture because the target must not pretend that a future simplification has already happened.
+
+## 4. KEEP — current V2 behavior that should remain
+
+| Area | Keep | Reason |
+|---|---|---|
+| Composition | Initializer-owned construction, late binding, final audit, readiness registration, and centralized shutdown | This is the verified ownership spine. |
+| Question routing | `UnifiedRouter` plus `KnowledgeFirstResolver` with local retrieval, external research, capability routing, and verified local-model fallback | This is the actual local-first behavior. |
+| Capability integration | One registry projected through `CapabilityRegistrationBridge` into `CapabilityRouter` and ToolManager-backed handlers | It avoids parallel registries and preserves auditability. |
+| Memory | `MemoryCoordinator` as the single coordinated write facade and `UnifiedRetrieval` as the read aggregation path | It keeps storage, retrieval, cross-memory references, and learning writes distinct. |
+| Execution | `ExecutionEngine`, `WorkflowOrchestrator`, `SafetyGate`, `ExecutionVerifier`, `RepairLoop`, and safe-failure reporting | It separates action authorization, execution, verification, repair, and reporting. |
+| Learning | Deterministic validation/distillation before `MemoryCoordinator` persistence | It prevents raw or unverified output from becoming durable learning. |
+| Observation | `RuntimeAwareness`, `SystemAnatomy`, `ObservabilityHub`, and event-driven diagnostic consumers | It makes current runtime state measurable without giving observers mutation authority. |
+| Self-improvement | Workflow-gated application followed by typed evidence, promotion gates, canary validation, and rollback | It preserves a fail-closed promotion boundary. |
+| Safety | Runtime SafetyGate and promotion SafetyPromotionGates remain separate | Execution authorization and patch promotion answer different safety questions. |
+
+## 5. FORMALIZE — current behavior that needs clearer contracts
+
+These are not new subsystems. They are contracts that already exist in code and should be made more explicit through tests, type-level documentation, readiness metadata, or focused design notes.
+
+| Contract to formalize | Existing evidence | Intended clarification |
+|---|---|---|
+| Initializer ownership | `SystemInitializer` constructs and returns the graph | State that module-level accessors are compatibility references, never the canonical owner. |
+| Optional subsystem semantics | Orchestrator, autonomy, diagnostics, avatar, watcher, hot reload, and self-improvement are configuration-controlled | Document which services are passive when disabled and what readiness means in each mode. |
+| Capability admission | Registry startup audit and late binding already validate collaborator requirements | Make the registration-to-router projection and late-registration requirement explicit. |
+| Correlation propagation | Router and workflow code attach request/workflow identifiers | Define the minimum identifier fields retained through capability, job, safety, verification, learning, and promotion events. |
+| Evidence boundaries | `PromotionRequest` separates verification, improvement, rollback, and provenance evidence | Keep typed evidence authoritative and reject metadata-only substitutes. |
+| Simulation semantics | Workflow pre-execution simulation marks output `PREDICTED` and `verified=false` | Keep prediction context separate from authorization and post-execution verification. |
+| Readiness | Initializer registers target-path, diagnostics, self-improvement, and lifecycle checks | Keep readiness as a runtime report, not as a second service registry. |
+| Documentation maintenance | Current and target documents now have separate roles | Require code evidence before adding a current-architecture edge. |
+
+## 6. FIX — evidence-backed defects or risks
+
+The following changes are justified because the current code exposes concrete lifecycle or interpretation risk. They should be implemented as focused changes with regression coverage, not as a broad rewrite.
+
+| Priority | Fix | Evidence and acceptance condition |
+|---|---|---|
+| Medium | Remove or contain unbound accessor fallback creation | `BackgroundJobService` and similar compatibility accessors can create or expose a service outside initializer ownership. Acceptance: unbound access fails clearly or requires an explicit test-only factory; production startup retains one canonical instance. |
+| Medium | Make private polling ownership and shutdown semantics explicit | `RuntimeAwareness` and `PredictiveDiagnostics` own private daemon threads. Acceptance: readiness exposes running state, stop joins are bounded, and shutdown tests prove no thread survives the initializer lifecycle. |
+| Medium | Prevent placeholder predictive results from being treated as forecasts | Predictive diagnostics explicitly emits framework placeholders when no model exists. Acceptance: consumers and reports must distinguish placeholder, prediction, and validated outcome states. |
+| Medium | Add focused lifecycle tests for event-bus shutdown ordering | Shutdown stops observability and jobs before the EventBus. Acceptance: producers are stopped/unsubscribed before EventBus shutdown, and shutdown remains within the configured budget. |
+| Low/Medium | Reduce ambiguity between canonical and compatibility orchestration paths | A workflow singleton and legacy modules coexist with injected runtime ownership. Acceptance: new production call sites use initializer-injected services and compatibility paths are marked or tested as adapters. |
+| Low | Normalize high-value event vocabulary | The repository contains overlapping legacy and canonical event names. Acceptance: architecture-critical events have documented producers, consumers, and payload identity fields. |
+
+## 7. REMOVE — confirmed legacy or duplicate structures, only after migration proof
+
+Removal is conditional. Nothing in this section should be deleted merely because it is old or conceptually similar. Each item requires a repository-wide call-site audit, compatibility plan, focused tests, and an explicit migration decision.
+
+| Candidate for eventual removal | Current status | Removal condition |
+|---|---|---|
+| Legacy agent-owned collaborators that are not injected into `InitializedSystem` | Compatibility or legacy unless proven otherwise | No production call sites, no public compatibility promise, and replacement behavior covered by canonical services. |
+| Duplicate orchestration singleton access paths | Compatibility surface around initializer-owned workflow orchestration | All production call sites use injected `WorkflowOrchestrator`; compatibility consumers have an explicit adapter or are retired. |
+| Metadata-only promotion evidence mirrors | Compatibility serialization retained beside typed evidence | All consumers use typed `PromotionRequest` evidence and serialized fields are no longer used for decisions. |
+| Stale architecture diagrams and historical target claims | Archived in `docs/archive/TARGET_ARCHITECTURE_V1.md` | Keep the archive for history; remove only if repository policy explicitly permits historical deletion. |
+
+## 8. FUTURE — desired behavior not yet proven to exist
+
+These are intentionally future items. They are not current runtime claims.
+
+| Future item | Why it is future | Constraint |
+|---|---|---|
+| Shared scheduling for runtime-awareness and predictive polling | Current services own private polling threads | Any replacement must preserve bounded shutdown, readiness, event ordering, and no duplicate scheduler. |
+| A fully realized forecasting model | Current predictive diagnostics can return explicit framework placeholders | Never label placeholders as predictions; retain validation against actual outcomes. |
+| Automatic safe projection of late-registered capabilities | Current late registration requires explicit bridge synchronization | Extend the existing registry/bridge/audit path; do not add a second router or registry. |
+| Operator control surface | Project status identifies this as future growth | Use canonical readiness, correlation, approval, workflow, and capability APIs. |
+| Scenario benchmarks and regression dashboards | Project status identifies benchmark/reporting work as future growth | Measure grounded answers, capability execution, provider outage recovery, and learning quality without changing ownership. |
+| Mature autonomous policy and review queues | Current autonomy is bounded but not a full operator policy product | Preserve budgets, correlation, explicit approval, and pause/review behavior. |
+
+## 9. Target runtime paths
+
+The target keeps the verified paths below. It does not introduce replacement names for current owners.
+
+### Conversation
+
+```text
+AgentFacadeImpl
+→ ConversationControlHandler
+→ UnifiedRouter
+→ UnifiedRouter control/planning decision
+→ KnowledgeFirstResolver
+→ UnifiedRetrieval + Intelligence
+→ local answer OR registered research/capability OR verified PriorityLLM fallback
+→ AnswerVerifier or safe failure
+→ conversation record through MemoryCoordinator boundary
+```
+
+### Capability execution
+
+```text
+Capability implementation
+→ CapabilityRegistry
+→ startup audit / CapabilityRegistrationBridge
+→ CapabilityRouter
+→ registered handler
+→ ToolManager
+```
+
+For approved actions, `tool_dispatch` remains the internal bridge and is still subject to the runtime workflow and SafetyGate path. No direct capability-owned mutation bypass is part of the target.
+
+### Workflow and execution
+
+```text
+WorkflowOrchestrator or ExecutionEngine
+→ planning/composition
+→ optional predicted simulation context
+→ runtime SafetyGate
+→ executor / TaskExecutor
+→ ExecutionVerifier
+→ bounded repair or safe failure
+→ LearningPipeline outcome
+```
+
+Simulation remains prediction only. It does not authorize work or satisfy verification.
+
+### Memory and learning
+
+```text
+observed outcome or candidate
+→ LearningPipeline
+→ validation / worth remembering
+→ classification / distillation
+→ MemoryCoordinator
+→ canonical memory store and UnifiedRetrieval
+→ improvement-candidate event only after successful persistence
+```
+
+### Self-improvement
+
+```text
+learning or diagnostic candidate
+→ SafeSelfImprovementEngine validation and approval
+→ rollback checkpoint
+→ WorkflowOrchestrator + runtime SafetyGate
+→ candidate execution and verification
+→ ImprovementMeasurement
+→ typed PromotionRequest
+→ PatchPromotionManager
+→ SafetyPromotionGates
+→ verification/testing/canary/production
+→ promotion or rollback
+```
+
+## 10. Target lifecycle rule
+
+The target lifecycle remains:
+
+```text
+construct
+→ inject
+→ subscribe
+→ audit
+→ activate
+→ readiness
+→ operate
+→ stop active producers
+→ stop shared jobs
+→ stop EventBus/providers
+→ clear compatibility accessors
+```
+
+Any future lifecycle change must demonstrate that no event producer, private polling thread, or compatibility accessor continues to use a stopped shared service. Lifecycle changes should be verified with focused clean-process tests before broad refactoring.
+
+## 11. Change governance
+
+Architecture changes should be proposed against the current code, not against this target document alone. A proposed change must identify the canonical owner, the construction/injection edge, the activation and shutdown owner, the safety boundary, the verification evidence, and the compatibility impact. A new registry, memory system, scheduler, executor, router, or promotion path requires explicit architectural approval because it would violate the one-owner invariants above.
+
+Production code must not be refactored merely to make a stale document look correct. When a discrepancy is found, first classify it as code drift, documentation drift, or an intentional compatibility surface. Then update the appropriate document or open a focused implementation change with tests.
+
+## References
+
+[1]: https://github.com/bingzwork/Freya/blob/03b0a78/CURRENT_ARCHITECTURE.md "Freya current implemented architecture"
+[2]: https://github.com/bingzwork/Freya/blob/03b0a78/PROJECT_STATUS.md "Project status and future growth priorities"
+[3]: https://github.com/bingzwork/Freya/blob/03b0a78/app/core/initializer.py "SystemInitializer"
+[4]: https://github.com/bingzwork/Freya/blob/03b0a78/app/routing/unified_router.py "UnifiedRouter"
+[5]: https://github.com/bingzwork/Freya/blob/03b0a78/app/routing/knowledge_first_resolver.py "KnowledgeFirstResolver"
+[6]: https://github.com/bingzwork/Freya/blob/03b0a78/app/execution/engine.py "ExecutionEngine"
+[7]: https://github.com/bingzwork/Freya/blob/03b0a78/app/orchestrator/workflow_orchestrator.py "WorkflowOrchestrator"
+[8]: https://github.com/bingzwork/Freya/blob/03b0a78/app/memory/coordinator.py "MemoryCoordinator"
+[9]: https://github.com/bingzwork/Freya/blob/03b0a78/app/learning/pipeline.py "LearningPipeline"
+[10]: https://github.com/bingzwork/Freya/blob/03b0a78/app/safe_self_improvement/promotion_contract.py "PromotionRequest"
+[11]: https://github.com/bingzwork/Freya/blob/03b0a78/app/safe_self_improvement/promotion.py "PatchPromotionManager"
+[12]: https://github.com/bingzwork/Freya/blob/03b0a78/app/core/safety_gates.py "SafetyPromotionGates"
+[13]: https://github.com/bingzwork/Freya/blob/03b0a78/app/orchestrator/safety_gate.py "SafetyGate"
+[14]: https://github.com/bingzwork/Freya/blob/03b0a78/app/self_observation/runtime_awareness.py "RuntimeAwareness"
+[15]: https://github.com/bingzwork/Freya/blob/03b0a78/app/self_observation/predictive_diagnostics.py "PredictiveDiagnostics"
