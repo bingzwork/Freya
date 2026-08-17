@@ -9,6 +9,7 @@ from app.core.events import EventBus, EventPriority
 from app.core.initializer import SystemInitializer
 from app.core.protocols import SystemConfig
 from app.diagnostics.diagnostic_engine import DiagnosticEngine
+from app.diagnostics.grouping import CausalRelation, DiagnosticEvent, DiagnosticGrouper
 from app.diagnostics.issue import Issue, IssueCollection, IssueSeverity, IssueType
 from app.learning.models import LearningCandidate, LearningCandidateType
 from app.learning.pipeline import LearningPipeline
@@ -51,7 +52,8 @@ def test_self_improvement_factory_uses_the_injected_event_bus():
 
     assert self_improvement._event_bus is event_bus
     assert event_bus.get_subscriptions("learning.improvement_candidate")["learning.improvement_candidate"] == 1
-    assert event_bus.get_subscriptions("diagnostics.completed")["diagnostics.completed"] == 1
+    assert event_bus.get_subscriptions("diagnostics.completed")["diagnostics.completed"] == 0
+    assert event_bus.get_subscriptions("diagnostics.grouped")["diagnostics.grouped"] == 1
 
 
 def test_self_improvement_factory_requires_an_event_bus():
@@ -85,7 +87,7 @@ def test_learning_pipeline_publishes_to_shared_bus_and_creates_candidate(shared_
     assert event_bus.history().get_by_name("learning.improvement_candidate")
 
 
-def test_diagnostics_publishes_to_shared_bus_and_creates_candidate(monkeypatch, tmp_path, shared_improvement_flow):
+def test_raw_diagnostics_remain_observable_without_parallel_candidate(monkeypatch, tmp_path, shared_improvement_flow):
     event_bus, self_improvement, submissions = shared_improvement_flow
 
     class ErrorDiagnosticAnalyzer:
@@ -114,15 +116,50 @@ def test_diagnostics_publishes_to_shared_bus_and_creates_candidate(monkeypatch, 
     diagnostic_engine.run()
 
     assert diagnostic_engine._event_bus is self_improvement._event_bus is event_bus
+    assert submissions == []
+    diagnostic_events = event_bus.history().get_by_name("diagnostics.completed")
+    assert len(diagnostic_events) == 1
+    assert diagnostic_events[0].priority is EventPriority.NORMAL
+
+
+def test_grouped_diagnostics_create_one_evidence_preserving_candidate(shared_improvement_flow):
+    event_bus, self_improvement, submissions = shared_improvement_flow
+    grouper = DiagnosticGrouper(dependencies={"api": ["database"]})
+    report = grouper.group([
+        DiagnosticEvent(
+            event_id="root",
+            source="runtime",
+            failure_type="bug",
+            component="database",
+            operation="query",
+            message="database unavailable",
+            fingerprint="db-unavailable",
+            metadata={"severity": "error"},
+        ),
+        DiagnosticEvent(
+            event_id="symptom-1",
+            source="runtime",
+            failure_type="bug",
+            component="api",
+            operation="request",
+            message="upstream request failed",
+            fingerprint="api-upstream",
+            dependencies=["database"],
+            metadata={"severity": "error"},
+        ),
+    ])
+
+    event_bus.emit("diagnostics.grouped", {"report": report.to_dict()}, source="DiagnosticGrouper")
+
+    assert len(report.groups) == 1
+    assert report.groups[0].relation == CausalRelation.LIKELY_CAUSE
     assert len(submissions) == 1
     improvement_candidate, auto_execute = submissions[0]
     assert auto_execute is False
     assert improvement_candidate.source == "diagnostics"
     assert improvement_candidate.category is ImprovementCategory.CORRECTNESS
-    assert improvement_candidate.metadata["diagnostic_issue"]["id"] == "diagnostic-error-1"
-    diagnostic_events = event_bus.history().get_by_name("diagnostics.completed")
-    assert len(diagnostic_events) == 1
-    assert diagnostic_events[0].priority is EventPriority.NORMAL
+    assert improvement_candidate.metadata["diagnostic_group_id"] == report.groups[0].group_id
+    assert improvement_candidate.metadata["member_diagnostic_ids"] == ["root", "symptom-1"]
 
 
 def test_diagnostic_event_publication_failure_is_propagated(tmp_path):

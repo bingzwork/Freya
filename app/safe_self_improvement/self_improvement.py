@@ -6,6 +6,8 @@ Integrates all components: allowlist, boundaries, risk execution, approval gates
 prioritization, rollback, promotion, and policies.
 """
 
+import hashlib
+import json
 import logging
 import threading
 from dataclasses import dataclass, field
@@ -125,6 +127,9 @@ class SafeSelfImprovementEngine:
         self._processing_candidates: Dict[str, Dict[str, Any]] = {}
         self._completed_candidates: Dict[str, ExecutionResult] = {}
         self._submission_queue: List[str] = []
+        # Group identity and evidence signature prevent repeated equivalent
+        # diagnostics.grouped events from reopening the same repair proposal.
+        self._diagnostic_group_candidates: Dict[str, str] = {}
         self._background_thread: Optional[threading.Thread] = None
         self._stop_background = threading.Event()
         if event_bus is None:
@@ -694,11 +699,13 @@ class SafeSelfImprovementEngine:
             )
         )
         
-        # Subscribe to diagnostics completed events from DiagnosticEngine
+        # Raw diagnostic findings remain available to observability and other
+        # consumers.  Grouped evidence is the sole diagnostic-derived input for
+        # autonomous improvement-candidate consideration.
         self._subscriptions.append(
             self._event_bus.subscribe(
-                "diagnostics.completed",
-                self._on_diagnostics_completed,
+                "diagnostics.grouped",
+                self._on_diagnostics_grouped,
             )
         )
 
@@ -726,27 +733,176 @@ class SafeSelfImprovementEngine:
 
         self.submit_improvement(candidate, auto_execute=True)
 
-    def _on_diagnostics_completed(self, event: Event) -> None:
-        """Convert significant diagnostic issues into improvement candidates."""
-        data = event.data
-        issues = data.get("issues", [])
+    def _on_diagnostics_grouped(self, event: Event) -> None:
+        """Consider one candidate per eligible causal diagnostic group.
 
-        for issue in issues:
-            if issue.get("severity") not in ("error", "critical"):
+        Raw ``diagnostics.completed`` findings are intentionally not handled
+        here.  They remain observable evidence, while the initializer-owned
+        DiagnosticGrouper is the authoritative diagnostic-to-candidate seam.
+        Invalid or unresolved groups are ignored rather than converted into
+        speculative repair proposals.
+        """
+        data = event.data if isinstance(event.data, dict) else {}
+        report = data.get("report", data)
+        groups = report.get("groups", []) if isinstance(report, dict) else []
+
+        for group in groups:
+            if not isinstance(group, dict):
+                continue
+            candidate = self._candidate_from_diagnostic_group(group)
+            if candidate is None:
                 continue
 
-            candidate = ImprovementCandidate(
-                title=f"Fix: {issue.get('title', 'Diagnostic issue')}",
-                description=issue.get("description", ""),
-                category=ImprovementCategory.CORRECTNESS,
-                source="diagnostics",
-                metadata={
-                    "diagnostic_issue": issue,
-                    "severity": issue.get("severity"),
-                },
-            )
+            group_key = self._diagnostic_group_key(group)
+            evidence_signature = self._diagnostic_group_signature(group)
+            with self._lock:
+                if self._diagnostic_group_candidates.get(group_key) == evidence_signature:
+                    continue
 
             self.submit_improvement(candidate, auto_execute=False)
+            with self._lock:
+                self._diagnostic_group_candidates[group_key] = evidence_signature
+
+    @staticmethod
+    def _diagnostic_group_key(group: Dict[str, Any]) -> str:
+        """Reuse the grouper's stable group identity whenever available."""
+        group_id = group.get("group_id")
+        if group_id:
+            return str(group_id)
+        root = group.get("root", {})
+        representative = root.get("representative", {}) if isinstance(root, dict) else {}
+        stable_material = {
+            "root": representative,
+            "symptoms": group.get("symptoms", []),
+        }
+        return "group_" + hashlib.sha256(
+            json.dumps(stable_material, sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest()[:16]
+
+    @staticmethod
+    def _diagnostic_group_signature(group: Dict[str, Any]) -> str:
+        """Describe stable evidence state that justifies reconsideration."""
+        evidence = []
+        for occurrence in SafeSelfImprovementEngine._group_occurrences(group):
+            representative = occurrence.get("representative", {})
+            if not isinstance(representative, dict):
+                representative = {}
+            evidence.append(
+                {
+                    "stable_fields": {
+                        "source": representative.get("source"),
+                        "failure_type": representative.get("failure_type"),
+                        "component": representative.get("component"),
+                        "operation": representative.get("operation"),
+                        "fingerprint": representative.get("fingerprint"),
+                    },
+                    "occurrence_count": int(occurrence.get("occurrence_count", 0) or 0),
+                }
+            )
+        payload = {
+            "group_id": SafeSelfImprovementEngine._diagnostic_group_key(group),
+            "relation": group.get("relation"),
+            "evidence": evidence,
+        }
+        return hashlib.sha256(
+            json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest()
+
+    @staticmethod
+    def _group_occurrences(group: Dict[str, Any]) -> List[Dict[str, Any]]:
+        occurrences = []
+        root = group.get("root")
+        if isinstance(root, dict):
+            occurrences.append(root)
+        symptoms = group.get("symptoms", [])
+        if isinstance(symptoms, list):
+            occurrences.extend(item for item in symptoms if isinstance(item, dict))
+        return occurrences
+
+    @classmethod
+    def _candidate_from_diagnostic_group(cls, group: Dict[str, Any]) -> Optional[ImprovementCandidate]:
+        """Build a normal candidate while retaining the complete group evidence."""
+        from app.diagnostics.grouping import CausalRelation
+
+        relation = str(group.get("relation") or CausalRelation.UNRESOLVED)
+        occurrences = cls._group_occurrences(group)
+        root_occurrence_count = int((group.get("root") or {}).get("occurrence_count", 0) or 0)
+        is_exact_duplicate_group = (
+            relation == CausalRelation.UNRESOLVED
+            and len(occurrences) == 1
+            and root_occurrence_count > 1
+        )
+        if relation not in {
+            CausalRelation.KNOWN_CAUSE,
+            CausalRelation.LIKELY_CAUSE,
+            CausalRelation.RELATED,
+        } and not is_exact_duplicate_group:
+            # An unresolved single finding cannot authorize a repair.  Exact
+            # duplicates are the narrow exception: they yield one evidence-
+            # preserving proposal without asserting a root cause.
+            return None
+
+        representatives = [
+            item.get("representative", {})
+            for item in occurrences
+            if isinstance(item.get("representative", {}), dict)
+        ]
+        actionable_severities = set()
+        for rep in representatives:
+            metadata = rep.get("metadata", {}) if isinstance(rep.get("metadata"), dict) else {}
+            severity = rep.get("severity") or metadata.get("severity") or rep.get("failure_type")
+            if severity is not None:
+                actionable_severities.add(str(severity).lower())
+        if not actionable_severities.intersection({"error", "critical"}):
+            return None
+
+        root = group.get("root", {})
+        root_rep = root.get("representative", {}) if isinstance(root, dict) else {}
+        root_title = root_rep.get("title") or root_rep.get("failure_type") or "diagnostic group"
+        group_id = cls._diagnostic_group_key(group)
+        occurrence_count = sum(int(item.get("occurrence_count", 0) or 0) for item in occurrences)
+        member_ids = []
+        affected_files = []
+        for item in occurrences:
+            representative = item.get("representative", {})
+            if isinstance(representative, dict):
+                if representative.get("file_path"):
+                    affected_files.append(str(representative["file_path"]))
+            ids = item.get("event_ids", [])
+            if isinstance(ids, list):
+                member_ids.extend(str(identifier) for identifier in ids)
+
+        if relation == CausalRelation.KNOWN_CAUSE:
+            description_prefix = "Grouped diagnostics identify a known causal relationship."
+        elif relation == CausalRelation.LIKELY_CAUSE:
+            description_prefix = "Grouped diagnostics indicate a likely causal relationship; causality remains uncertain."
+        elif is_exact_duplicate_group:
+            description_prefix = "Grouped diagnostics are exact duplicate occurrences; no root cause is asserted."
+        else:
+            description_prefix = "Grouped diagnostics are related, but no root cause is asserted."
+
+        metadata: Dict[str, Any] = {
+            "diagnostic_group_id": group_id,
+            "causal_relation": relation,
+            "diagnostic_group": group,
+            "member_diagnostic_ids": member_ids,
+            "occurrence_count": occurrence_count,
+            "severity": sorted(actionable_severities),
+        }
+        causal_confidence = group.get("causal_confidence")
+        if causal_confidence is None and isinstance(root_rep.get("metadata"), dict):
+            causal_confidence = root_rep["metadata"].get("causal_confidence")
+        if causal_confidence is not None:
+            metadata["causal_confidence"] = causal_confidence
+
+        return ImprovementCandidate(
+            title=f"Fix grouped diagnostic: {root_title}",
+            description=f"{description_prefix} Evidence contains {len(member_ids)} diagnostic occurrences across {len(occurrences)} grouped findings.",
+            category=ImprovementCategory.CORRECTNESS,
+            source="diagnostics",
+            affected_files=sorted(set(affected_files)),
+            metadata=metadata,
+        )
 
 
 def create_self_improvement_engine(

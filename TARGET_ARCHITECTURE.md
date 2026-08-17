@@ -41,38 +41,57 @@ Freya should continue to maintain the following invariants:
 
 The intended composition remains the current graph, with explicit boundaries and no parallel owners.
 
+The composition diagram below shows **initializer ownership/construction**, not a claim that each component owns or depends on the next component. The separate dashed arrows show only the major runtime relationships represented by the target direction; detailed edges remain subject to production verification.
+
 ```mermaid
 flowchart TB
     INIT[SystemInitializer\ncomposition root]
-    INF[Shared infrastructure\nEventBus + BackgroundJobService + ObservabilityHub]
-    LLM[LLMStack]
-    MEMORY[MemoryCoordinator\nmodules + UnifiedRetrieval]
-    INTEL[Intelligence + DecisionManager]
-    CAP[CapabilityRegistry\nCapabilityRegistrationBridge\nCapabilityRouter + ToolManager]
-    SAFETY[Runtime SafetyGate]
-    ROUTE[UnifiedRouter\nKnowledgeFirstResolver]
-    EXEC[ExecutionEngine\nPlanner + Executor + Verification + Repair]
-    WF[WorkflowOrchestrator\noptional mode]
-    CONV[ConversationControl + AgentFacade]
-    LEARN[LearningPipeline]
-    OBS[RuntimeAwareness + SystemAnatomy]
-    DIAG[Diagnostics + PredictiveDiagnostics]
-    IMPROVE[SafeSelfImprovement]
-    PROMOTE[Typed PromotionRequest\nPromotionManager + SafetyPromotionGates\nCanary + Rollback]
+    subgraph COMPONENTS[Initializer-owned runtime components]
+        INF[Shared infrastructure\nEventBus + BackgroundJobService + ObservabilityHub]
+        LLM[LLMStack]
+        MEMORY[MemoryCoordinator\nmodules + UnifiedRetrieval]
+        INTEL[Intelligence + DecisionManager]
+        CAP[CapabilityRegistry\nCapabilityRegistrationBridge\nCapabilityRouter + ToolManager]
+        SAFETY[Runtime SafetyGate]
+        ROUTE[UnifiedRouter\nKnowledgeFirstResolver]
+        EXEC[ExecutionEngine\nPlanner + Executor + Verification + Repair]
+        WF[WorkflowOrchestrator\noptional mode]
+        CONV[ConversationControl + AgentFacade]
+        LEARN[LearningPipeline]
+        OBS[RuntimeAwareness + SystemAnatomy]
+        DIAG[Diagnostics + PredictiveDiagnostics]
+        IMPROVE[SafeSelfImprovement]
+        PROMOTE[Typed PromotionRequest\nPromotionManager + SafetyPromotionGates\nCanary + Rollback]
+    end
 
-    INIT --> INF --> LLM --> MEMORY --> INTEL --> CAP --> SAFETY --> ROUTE --> EXEC
-    EXEC --> WF
-    EXEC --> CONV
-    CONV --> ROUTE
-    EXEC --> LEARN
-    WF --> OBS
-    OBS --> DIAG
-    LEARN --> IMPROVE
-    DIAG --> IMPROVE
-    IMPROVE --> PROMOTE
+    INIT --> INF
+    INIT --> LLM
+    INIT --> MEMORY
+    INIT --> INTEL
+    INIT --> CAP
+    INIT --> SAFETY
+    INIT --> ROUTE
+    INIT --> EXEC
+    INIT --> WF
+    INIT --> CONV
+    INIT --> LEARN
+    INIT --> OBS
+    INIT --> DIAG
+    INIT --> IMPROVE
+    INIT --> PROMOTE
+
+    EXEC -. runtime execution .-> WF
+    EXEC -. runtime ingress .-> CONV
+    CONV -. routing .-> ROUTE
+    EXEC -. verified outcomes .-> LEARN
+    WF -. observation .-> OBS
+    OBS -. diagnostic evidence .-> DIAG
+    LEARN -. candidate evidence .-> IMPROVE
+    DIAG -. grouped diagnostic evidence .-> IMPROVE
+    IMPROVE -. typed promotion evidence .-> PROMOTE
 ```
 
-The diagram is intentionally smaller than the historical target. Internal construction details, optionality, readiness, and shutdown remain documented in the current architecture because the target must not pretend that a future simplification has already happened.
+The diagram is intentionally smaller than the historical target. Internal construction details, optionality, readiness, and shutdown remain documented in the current architecture because the target must not pretend that a future simplification has already happened. Dashed arrows are runtime relationships; solid arrows from `SystemInitializer` represent composition-root ownership only.
 
 ## 4. KEEP — current V2 behavior that should remain
 

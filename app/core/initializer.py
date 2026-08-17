@@ -18,7 +18,7 @@ from app.core.protocols import (
 )
 
 # Infrastructure (no deps)
-from app.core.events import EventBus, set_event_bus
+from app.core.events import Event, EventBus, set_event_bus
 from app.core.background_jobs import BackgroundJobService, set_job_service
 from app.core.observability import (
     ObservabilityHub,
@@ -456,7 +456,7 @@ class SystemInitializer:
             }
             diagnostic_grouper = DiagnosticGrouper(dependencies=dependencies)
 
-            def _group_completed_diagnostics(event):
+            def _group_completed_diagnostics(event: Event):
                 grouped_events = []
                 for index, issue in enumerate((event.data or {}).get("issues", [])):
                     if not isinstance(issue, dict):
@@ -469,13 +469,34 @@ class SystemInitializer:
                         operation=str(issue.get("operation") or "diagnostic"),
                         message=str(issue.get("description") or issue.get("message") or ""),
                         fingerprint=str(issue.get("fingerprint") or issue.get("code") or ""),
+                        timestamp=str(issue.get("timestamp") or event.timestamp),
                         dependencies=list(issue.get("dependencies", [])) if isinstance(issue.get("dependencies", []), list) else [],
+                        workflow_id=str(issue.get("workflow_id") or ""),
+                        causal_parent=(str(issue["causal_parent"]) if issue.get("causal_parent") else None),
                         metadata=issue,
                     ))
-                self._last_diagnostic_grouping = diagnostic_grouper.group(grouped_events)
+                try:
+                    self._last_diagnostic_grouping = diagnostic_grouper.group(grouped_events)
+                except Exception as error:
+                    self._last_diagnostic_grouping = None
+                    logger.error(f"[SystemInitializer] Diagnostic grouping failed: {error}")
+                    event_bus.emit(
+                        "diagnostics.grouping_failed",
+                        {
+                            "error": str(error),
+                            "raw_event_id": event.event_id,
+                            "issue_count": len(grouped_events),
+                        },
+                        source="DiagnosticGrouper",
+                    )
+                    return
+
                 event_bus.emit(
                     "diagnostics.grouped",
-                    {"report": self._last_diagnostic_grouping.to_dict()},
+                    {
+                        "report": self._last_diagnostic_grouping.to_dict(),
+                        "raw_event_id": event.event_id,
+                    },
                     source="DiagnosticGrouper",
                 )
 

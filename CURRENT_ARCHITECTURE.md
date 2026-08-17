@@ -308,10 +308,13 @@ flowchart LR
     PRED --> PREDOUT[predictive_diagnostics.completed]
     PREDOUT --> VALID[predictive_diagnostics.validated]
     CODE[DiagnosticEngine.run] --> DONE[diagnostics.completed]
+    DONE --> RAW[Raw evidence for observability, history, and debugging]
     DONE --> GROUP[DiagnosticGrouper]
     GROUP --> GROUPED[diagnostics.grouped]
-    DONE --> SSI[SafeSelfImprovement candidate input]
+    GROUPED --> SSI[SafeSelfImprovement candidate consideration]
 ```
+
+Raw `diagnostics.completed` findings remain available to non-repair consumers. For diagnostic-originated autonomous improvement, `diagnostics.grouped` is the single authoritative input: grouped evidence can produce at most one evidence-preserving candidate per eligible causal group, while unresolved evidence does not trigger speculative repair. If grouping fails, raw diagnostics remain observable and no raw-event repair fallback is enabled.
 
 ## 11. Self-improvement architecture
 

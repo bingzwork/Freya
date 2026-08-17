@@ -93,7 +93,7 @@ class DiagnosticGrouper:
         for event in ordered:
             occurrence = by_key.setdefault(event.stable_key(), DiagnosticOccurrence(event))
             occurrence.occurrences.append(event)
-        occurrences = [by_key[key] for key in sorted(by_key)]
+        occurrences = sorted(by_key.values(), key=lambda item: self._root_sort_key(item, by_key.values()))
         groups: List[CausalGroup] = []
         assigned: set[str] = set()
         for occurrence in occurrences:
@@ -115,6 +115,22 @@ class DiagnosticGrouper:
             groups.append(CausalGroup(group_id, root, sorted(symptoms, key=lambda item: item.representative.stable_key()), relation))
         proposals = [group.root.representative.component + ":" + group.root.representative.failure_type for group in groups]
         return DiagnosticGroupingReport(occurrences, groups, proposals)
+
+    def _root_sort_key(
+        self,
+        occurrence: DiagnosticOccurrence,
+        all_occurrences: Iterable[DiagnosticOccurrence],
+    ) -> tuple[int, str]:
+        """Prefer findings with explicit or dependency evidence downstream."""
+        event = occurrence.representative
+        others = [item.representative for item in all_occurrences if item is not occurrence]
+        is_explicit_root = any(other.causal_parent == event.event_id for other in others)
+        is_dependency_root = any(
+            event.component in self.dependencies.get(other.component, set())
+            or event.component in other.dependencies
+            for other in others
+        )
+        return (0 if is_explicit_root or is_dependency_root else 1, event.stable_key())
 
     def _relationship(self, root: DiagnosticEvent, symptom: DiagnosticEvent) -> Optional[str]:
         if symptom.causal_parent == root.event_id:
