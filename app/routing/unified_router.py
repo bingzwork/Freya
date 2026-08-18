@@ -21,7 +21,7 @@ from app.conversational_control import ControlCommand
 from app.core.protocols import MemoryProvider, ToolProvider, RouterProtocol
 from app.core.priority_llm import PriorityLLMProvider
 from app.core.protocols import ChatActivityProvider
-from app.routing.knowledge_first_resolver import KnowledgeFirstResolver, ResolutionResult
+from app.routing.knowledge_first_resolver import KnowledgeFirstResolver, ResolutionResult, _classify_conversational_request
 from app.memory.unified_retrieval import UnifiedRetrieval
 from app.intelligence.intelligence import Intelligence
 from app.core.correlation import correlation_scope
@@ -212,6 +212,32 @@ class UnifiedRouter:
             # surfaced to the caller rather than silently selecting a conflicting
             # legacy path.
             classification = self._intent_classifier.classify(user_input, route_context)
+
+            # Stable explanatory questions must bypass the legacy engineering
+            # planner guard. The task classifier is intentionally conservative
+            # and may label "what is Python?" as TASK because of its wording,
+            # even though it is a normal local-knowledge explanation.
+            stable_intent = _classify_conversational_request(user_input)
+            if stable_intent == "stable_explanation":
+                resolution = self._knowledge_first_resolver.resolve(
+                    query=user_input,
+                    context=route_context,
+                    intent_type=IntentType.QUESTION,
+                )
+                if resolution.action == "llm_fallback":
+                    llm_context = dict(resolution.llm_context or {})
+                    llm_context.setdefault("correlation_id", correlation_id)
+                    llm_context.setdefault("request_id", correlation_id)
+                    return RouteResult(
+                        intent=IntentType.QUESTION,
+                        confidence=resolution.confidence,
+                        reason="Stable explanatory question routed to local chat",
+                        is_direct_answer=True,
+                        llm_prompt=resolution.llm_prompt,
+                        llm_priority=resolution.llm_priority,
+                        llm_context=llm_context,
+                        routing_metadata=resolution.routing_metadata,
+                    )
             route_context["intent_type"] = classification.intent.value
 
             # Deterministic capability matches take precedence over generic planning when the router has a strong semantic match.

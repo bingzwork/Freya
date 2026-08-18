@@ -109,3 +109,24 @@ class VerificationRunner:
         logger.info("[Verification]")
         logger.info("Passed" if result.success else "Failed")
         return result
+from app.verification.coalescing import run as _coalesced_run 
+VerificationRunner._legacy_run = VerificationRunner.run 
+VerificationRunner._fingerprint = staticmethod(lambda command: hashlib.sha256(chr(0).join(command).encode('utf-8')).hexdigest()) 
+VerificationRunner.run = _coalesced_run
+def _runner_fingerprint(self, command): 
+    from app.verification.coalescing import fingerprint 
+    return fingerprint(self, command) 
+VerificationRunner._fingerprint = _runner_fingerprint
+def _runner_terminate(self, process): 
+    if process.poll() is None: 
+        try: process.kill() 
+        except OSError: pass 
+VerificationRunner._terminate_process = _runner_terminate
+def _targeted_run_tests(self, paths=None, *, full_suite=False, extra_args=None): 
+    if paths is None: 
+        paths = [] if full_suite else ['tests/test_verification_runner.py'] 
+    command = [sys.executable, '-m', 'pytest', '-q', *[str(path) for path in paths]] 
+    if extra_args: 
+        command.extend(extra_args) 
+    return self.run(command) 
+VerificationRunner.run_tests = _targeted_run_tests

@@ -311,14 +311,24 @@ class RecoveryOrchestrator:
         """Health check for RecoveryOrchestrator."""
         from app.core.observability import HealthResult, HealthStatus
         try:
-            success_rate = self._stats["successful"] / max(1, self._stats["total_recoveries"])
+            total_recoveries = self._stats["total_recoveries"]
+            successful = self._stats["successful"]
+            if total_recoveries == 0:
+                status = HealthStatus.HEALTHY
+                message = "RecoveryOrchestrator operational (no recovery attempts yet)"
+                success_rate = None
+            else:
+                success_rate = successful / total_recoveries
+                status = HealthStatus.HEALTHY if success_rate > 0.5 else HealthStatus.DEGRADED
+                message = f"RecoveryOrchestrator operational (success_rate={success_rate:.2f})"
             return HealthResult(
                 name="failure_recovery_health",
                 component="failure_recovery",
-                status=HealthStatus.HEALTHY if success_rate > 0.5 else HealthStatus.DEGRADED,
-                message=f"RecoveryOrchestrator operational (success_rate={success_rate:.2f})",
+                status=status,
+                message=message,
                 metadata={
-                    "total_recoveries": self._stats["total_recoveries"],
+                    "total_recoveries": total_recoveries,
+                    "successful": successful,
                     "success_rate": success_rate,
                     "recovery_history_size": len(self._recovery_history),
                     "recovery_events_size": len(self._recovery_events),

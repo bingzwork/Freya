@@ -4,7 +4,7 @@ AgentFacade - Public API Protocol for Freya.
 Sole public interface; orchestrates internal components.
 """
 
-from typing import Protocol, Optional
+from typing import Any, Dict, Optional, Protocol
 from dataclasses import dataclass
 
 
@@ -24,7 +24,7 @@ class AgentStatus:
 class AgentFacade(Protocol):
      """Public API for Freya agent."""
 
-     def chat(self, user_input: str) -> str: ...
+     def chat(self, user_input: str, context: Optional[Dict[str, Any]] = None) -> str: ...
      def execute_task(self, task: str, allow_mutations: bool = True) -> str: ...
      def get_status(self) -> AgentStatus: ...
      def shutdown(self) -> None: ...

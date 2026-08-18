@@ -70,6 +70,7 @@ class CapabilityRegistrationBridge:
         "safety_guard": ["check whether safe", "check whether this action is safe", "safety check", "is this safe"],
         "vision": ["inspect image", "inspect this image", "inspect what is in this image", "image contents", "visual inspection"],
         "voice": ["speak aloud", "speak this response", "speak this response aloud", "read aloud", "text to speech", "say this aloud"],
+        "database": ["database", "sqlite", "sql query", "database table", "database records", "database schema", "show records", "show all records", "show me all records", "records in"],
     }
 
     def __init__(

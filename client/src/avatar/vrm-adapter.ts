@@ -1,229 +1,35 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { VRMLoaderPlugin } from "@pixiv/three-vrm";
-import type {
-  AvatarAdapter,
-  AvatarExpression,
-  AvatarGazeTarget,
-  AvatarState,
-} from "./avatar-controller";
-
-const EXPRESSION_ALIASES: Record<AvatarExpression, string[]> = {
-  neutral: ["neutral", "Neutral"],
-  happy: ["happy", "joy", "Happy"],
-  concerned: ["concerned", "sad", "Sad"],
-  confused: ["confused", "Confused"],
-  focused: ["focused", "serious", "Neutral"],
-  surprised: ["surprised", "Surprised"],
-  excited: ["excited", "happy", "joy", "Happy"],
-};
-
-const GAZE_POINTS: Record<AvatarGazeTarget, [number, number, number]> = {
-  USER: [0, 1.45, 1.7],
-  CHAT_PANEL: [-0.25, 1.35, 1.5],
-  RESULTS_PANEL: [0.35, 1.25, 1.5],
-  CODE_PANEL: [0.55, 1.15, 1.4],
-  BROWSER_PANEL: [0.65, 1.3, 1.5],
-  NOTIFICATION: [0, 1.7, 1.3],
-  CUSTOM_POINT: [0, 1.45, 1.7],
-};
-
-export interface VrmLoadResult {
-  renderer: any;
-  vrm: any;
-}
-
+import type { AvatarAdapter, AvatarExpression, AvatarGazeTarget, AvatarPosition, AvatarState, LocomotionState } from "./avatar-controller";
+const EXPRESSION_ALIASES: Record<AvatarExpression,string[]>={neutral:["neutral","Neutral"],happy:["happy","joy","Happy"],concerned:["concerned","sad","Sad"],confused:["confused","Confused"],focused:["focused","serious","Neutral"],surprised:["surprised","Surprised"],excited:["excited","happy","joy","Happy"]};
+const GAZE_POINTS: Record<AvatarGazeTarget,[number,number,number]>={USER:[0,1.45,2],CHAT_PANEL:[-1.7,1.2,2],RESULTS_PANEL:[1.2,1.3,2],CODE_PANEL:[1.5,1.2,2],BROWSER_PANEL:[1.5,1.2,2],NOTIFICATION:[0,1.8,2],CUSTOM_POINT:[0,1.4,2]};
+const BONE_NAMES=["hips","spine","chest","upperChest","neck","head","leftUpperArm","rightUpperArm","leftLowerArm","rightLowerArm","leftHand","rightHand","leftUpperLeg","rightUpperLeg","leftLowerLeg","rightLowerLeg","leftFoot","rightFoot"];const TASK_STATES=new Set<AvatarState>(["LISTENING","THINKING","WORKING","SPEAKING","SEARCHING","READING","MEMORY_RECALL","CODING","RUNNING_TESTS","BROWSING","WARNING","ERROR"]);
+type BoneMap=Record<string,any>;
 export class VrmAvatarAdapter implements AvatarAdapter {
-  private THREE: any;
-  private renderer: any;
-  private vrm: any;
-  private gazeObject: any;
-  private root: HTMLElement;
-  private canvas: HTMLCanvasElement | null = null;
-  private raf = 0;
-  private lastTime = 0;
-  private elapsed = 0;
-  private heavyActivity = false;
-  private speaking = false;
-  private currentState: AvatarState = "IDLE";
-  private disposed = false;
-  private blinkAt = 2.4;
-  private blinkRemaining = 0;
-  private gestureUntil = 0;
-  private gestureName = "";
-
-  public modelStatus: "loading" | "ready" | "unavailable" | "error" = "loading";
-
-  private constructor(root: HTMLElement) {
-    this.root = root;
-  }
-
-  static async create(root: HTMLElement, modelUrl: string): Promise<VrmAvatarAdapter> {
-    const adapter = new VrmAvatarAdapter(root);
-    await adapter.load(modelUrl);
-    return adapter;
-  }
-
-  private async load(modelUrl: string): Promise<void> {
-    try {
-      this.THREE = THREE;
-
-      const canvas = document.createElement("canvas");
-      canvas.setAttribute("aria-label", "Freya avatar renderer");
-      canvas.className = "avatar-canvas";
-      this.canvas = canvas;
-      this.root.appendChild(canvas);
-      const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: false, powerPreference: "low-power" });
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
-      renderer.setSize(this.root.clientWidth || 320, this.root.clientHeight || 360, false);
-      renderer.setClearColor(0x000000, 0);
-      this.renderer = renderer;
-
-      const scene = new THREE.Scene();
-      const camera = new THREE.PerspectiveCamera(22, 1, 0.1, 100);
-      camera.position.set(0, 1.35, 3.6);
-      camera.lookAt(0, 1.3, 0);
-      scene.add(new THREE.HemisphereLight(0xbfc8ff, 0x101228, 1.35));
-      const key = new THREE.DirectionalLight(0xb7a9ff, 1.1);
-      key.position.set(-1.5, 2.5, 3);
-      scene.add(key);
-
-      const loader = new GLTFLoader();
-      loader.register((parser: any) => new VRMLoaderPlugin(parser));
-      const gltf = await loader.loadAsync(modelUrl);
-      this.vrm = gltf.userData.vrm;
-      if (!this.vrm) throw new Error("VRM loader returned no avatar model");
-      this.vrm.scene.rotation.y = 0;
-      scene.add(this.vrm.scene);
-      this.gazeObject = new THREE.Object3D();
-      scene.add(this.gazeObject);
-      this.vrm.lookAt?.target && (this.vrm.lookAt.target = this.gazeObject);
-      this.root.dataset.avatarModel = "ready";
-      this.modelStatus = "ready";
-      this.startRenderLoop(scene, camera);
-      this.resize(scene, camera);
-      window.addEventListener("resize", () => this.resize(scene, camera), { passive: true });
-    } catch (error) {
-      this.modelStatus = "error";
-      this.root.dataset.avatarModel = "error";
-      throw error;
-    }
-  }
-
-  setState(state: AvatarState): void {
-    this.currentState = state;
-  }
-
-  setExpression(expression: AvatarExpression, intensity: number): void {
-    const manager = this.vrm?.expressionManager;
-    if (!manager) return;
-    const names = Object.keys(manager.expressionMap || {});
-    const requested = EXPRESSION_ALIASES[expression] || ["neutral"];
-    const resolved = requested.find((name) => names.includes(name) || names.includes(name.toLowerCase())) || names.find((name) => name.toLowerCase() === "neutral");
-    if (!resolved) return;
-    for (const name of names) manager.setValue(name, 0);
-    manager.setValue(resolved, Math.max(0, Math.min(1, intensity)));
-  }
-
-  setGazeTarget(target: AvatarGazeTarget): void {
-    if (!this.gazeObject || !this.THREE) return;
-    const [x, y, z] = GAZE_POINTS[target] || GAZE_POINTS.USER;
-    this.gazeObject.position.set(x, y, z);
-  }
-
-  setSpeaking(speaking: boolean): void {
-    this.speaking = speaking;
-    if (!speaking) this.updateLipSync(0);
-  }
-
-  updateLipSync(openness: number): void {
-    const manager = this.vrm?.expressionManager;
-    if (!manager) return;
-    const names = Object.keys(manager.expressionMap || {});
-    const mouth = names.find((name) => ["aa", "a", "A"].includes(name)) || names.find((name) => name.toLowerCase() === "aa");
-    if (mouth) manager.setValue(mouth, this.speaking ? Math.max(0, Math.min(1, openness)) : 0);
-  }
-
-  playGesture(name: string): boolean {
-    const supported = ["NOD", "ACKNOWLEDGE", "CELEBRATE_SUBTLE"].includes(name);
-    this.gestureName = name;
-    this.gestureUntil = this.elapsed + (supported ? 0.8 : 0.45);
-    return supported;
-  }
-
-  update(deltaSeconds: number): void {
-    if (this.disposed || !this.vrm) return;
-    this.elapsed += deltaSeconds;
-    const scene = this.vrm.scene;
-    const breathing = Math.sin(this.elapsed * 1.4) * 0.006;
-    const sway = Math.sin(this.elapsed * 0.55) * 0.012;
-    scene.position.y = breathing;
-    scene.rotation.z = sway;
-    if (this.gestureUntil > this.elapsed) {
-      const nod = Math.sin((this.elapsed - (this.gestureUntil - 0.8)) * Math.PI * 3) * 0.035;
-      scene.rotation.x = this.gestureName === "NOD" || this.gestureName === "ACKNOWLEDGE" ? nod : 0;
-    } else {
-      scene.rotation.x = 0;
-    }
-    this.updateBlink(deltaSeconds);
-    this.vrm.update(deltaSeconds);
-  }
-
-  dispose(): void {
-    if (this.disposed) return;
-    this.disposed = true;
-    if (this.raf) cancelAnimationFrame(this.raf);
-    this.renderer?.dispose?.();
-    this.renderer?.renderLists?.dispose?.();
-    this.vrm?.scene?.traverse?.((object: any) => {
-      object.geometry?.dispose?.();
-      const materials = Array.isArray(object.material) ? object.material : [object.material];
-      materials.filter(Boolean).forEach((material: any) => {
-        Object.values(material).forEach((value: any) => value?.isTexture && value.dispose?.());
-        material.dispose?.();
-      });
-    });
-    if (this.canvas?.parentElement === this.root) this.canvas.remove();
-    this.canvas = null;
-  }
-
-  setHeavyActivity(heavy: boolean): void {
-    this.heavyActivity = heavy;
-  }
-
-  private startRenderLoop(scene: any, camera: any): void {
-    const frame = (time: number) => {
-      if (this.disposed) return;
-      const delta = Math.min(0.1, this.lastTime ? (time - this.lastTime) / 1000 : 1 / 60);
-      this.lastTime = time;
-      this.update(delta);
-      this.renderer.render(scene, camera);
-      this.raf = window.setTimeout(() => requestAnimationFrame(frame), this.heavyActivity ? 33 : 16);
-    };
-    this.raf = requestAnimationFrame(frame);
-  }
-
-  private resize(scene: any, camera: any): void {
-    if (!this.renderer) return;
-    const width = Math.max(1, this.root.clientWidth);
-    const height = Math.max(1, this.root.clientHeight);
-    camera.aspect = width / height;
-    camera.updateProjectionMatrix();
-    this.renderer.setSize(width, height, false);
-  }
-
-  private updateBlink(deltaSeconds: number): void {
-    const manager = this.vrm?.expressionManager;
-    if (!manager) return;
-    this.blinkAt -= deltaSeconds;
-    if (this.blinkAt <= 0 && this.blinkRemaining <= 0) this.blinkRemaining = 0.16;
-    if (this.blinkRemaining > 0) {
-      this.blinkRemaining -= deltaSeconds;
-      const value = this.blinkRemaining < 0.08 ? this.blinkRemaining / 0.08 : 1;
-      const names = Object.keys(manager.expressionMap || {});
-      const blink = names.find((name) => name.toLowerCase() === "blink");
-      if (blink) manager.setValue(blink, Math.max(0, Math.min(1, value)));
-      if (this.blinkRemaining <= 0) this.blinkAt = 2.5 + Math.random() * 3.5;
-    }
-  }
+ private root:HTMLElement; private canvas:HTMLCanvasElement|null=null; private renderer:any=null; private scene:any=null; private camera:any=null; private vrm:any=null; private gazeObject:any=null; private resizeObserver:ResizeObserver|null=null; private raf=0; private lastTime=0; private elapsed=0; private heavyActivity=false; private speaking=false; private currentState:AvatarState="IDLE"; private locomotion:LocomotionState="STANDING"; private disposed=false; private blinkAt=2.2; private blinkRemaining=0; private mouthOpen=0; private targetGaze=new THREE.Vector3(0,1.45,2); private position=new THREE.Vector3(0,0,0); private targetPosition=new THREE.Vector3(0,0,0); private facing=0; private action=""; private actionUntil=0; private roamAt=7+Math.random()*9; private bones:BoneMap={}; private baseRotations:Record<string,THREE.Euler>={}; private baseHipY=0;
+ public modelStatus:"loading"|"ready"|"unavailable"|"error"="loading";
+ private constructor(root:HTMLElement){this.root=root;}
+ static async create(root:HTMLElement,modelUrl:string):Promise<VrmAvatarAdapter>{const adapter=new VrmAvatarAdapter(root);await adapter.load(modelUrl);return adapter;}
+ private async load(modelUrl:string):Promise<void>{try{const canvas=document.createElement("canvas");canvas.className="avatar-canvas";canvas.setAttribute("aria-label","Freya avatar renderer");this.canvas=canvas;this.root.appendChild(canvas);this.renderer=new THREE.WebGLRenderer({canvas,alpha:true,antialias:true,powerPreference:"low-power"});this.renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,1.6));this.renderer.outputColorSpace=THREE.SRGBColorSpace;this.scene=new THREE.Scene();this.scene.fog=new THREE.Fog(0x070719,7,24);this.camera=new THREE.PerspectiveCamera(24,1,.1,100);this.camera.position.set(0,2.2,16);this.camera.lookAt(0,1.05,0);this.scene.add(new THREE.HemisphereLight(0xb9b4ff,0x121128,1.5));const key=new THREE.DirectionalLight(0xc8c1ff,2.2);key.position.set(-3,6,5);this.scene.add(key);const rim=new THREE.PointLight(0x806bff,6,10);rim.position.set(2,2.5,-1);this.scene.add(rim);const floor=new THREE.Mesh(new THREE.CircleGeometry(7,64),new THREE.MeshBasicMaterial({color:0x0b0a24,transparent:true,opacity:.72}));floor.rotation.x=-Math.PI/2;floor.position.y=-.015;this.scene.add(floor);const grid=new THREE.GridHelper(12,12,0x40367e,0x191637);(grid.material as any).opacity=.25;(grid.material as any).transparent=true;this.scene.add(grid);this.gazeObject=new THREE.Object3D();this.gazeObject.position.copy(this.targetGaze);this.scene.add(this.gazeObject);const loader=new GLTFLoader();loader.register((parser:any)=>new VRMLoaderPlugin(parser));const gltf=await loader.loadAsync(modelUrl);this.vrm=gltf.userData.vrm;if(!this.vrm)throw new Error("VRM model data was not found");this.vrm.scene.traverse((object:any)=>{if(object.isMesh){object.frustumCulled=false;if(object.material)object.material.needsUpdate=true;}});this.scene.add(this.vrm.scene);this.prepareModel();this.modelStatus="ready";this.resize();this.resizeObserver=new ResizeObserver(()=>this.resize());this.resizeObserver.observe(this.root);this.startRenderLoop();}catch(error){this.modelStatus="error";throw error;}}
+ private prepareModel():void{const humanoid=this.vrm?.humanoid;if(humanoid?.resetNormalizedPose)humanoid.resetNormalizedPose();for(const name of BONE_NAMES){const bone=humanoid?.getNormalizedBoneNode?.(name);if(bone){this.bones[name]=bone;this.baseRotations[name]=bone.rotation.clone();}}this.baseHipY=this.bones.hips?.position.y||0;const l=this.bones.leftUpperArm,r=this.bones.rightUpperArm,lf=this.bones.leftLowerArm,rf=this.bones.rightLowerArm;if(l)l.rotation.z=this.baseRotations.leftUpperArm.z-.78;if(r)r.rotation.z=this.baseRotations.rightUpperArm.z+.78;if(lf)lf.rotation.z=this.baseRotations.leftLowerArm.z-.08;if(rf)rf.rotation.z=this.baseRotations.rightLowerArm.z+.08;const box=new THREE.Box3().setFromObject(this.vrm.scene);const height=Math.max(.1,box.max.y-box.min.y);const scale=2.15/height;this.vrm.scene.scale.setScalar(scale);this.vrm.scene.position.y-=box.min.y*scale;}
+ setHeavyActivity(heavy:boolean):void{this.heavyActivity=heavy;}
+ setState(state:AvatarState):void{this.currentState=state;if(TASK_STATES.has(state)){this.targetPosition.copy(this.position);this.locomotion="STANDING";this.action="";this.actionUntil=0;}if(["SUCCESS","EXCITED"].includes(state))this.setExpression("excited",1);else if(["ERROR","WARNING"].includes(state))this.setExpression("concerned",1);else if(["THINKING","WORKING","CODING","RUNNING_TESTS","READING","SEARCHING"].includes(state))this.setExpression("focused",.8);else if(state==="CONFUSED")this.setExpression("confused",1);else this.setExpression("neutral",.7);if(state==="LISTENING")this.playGesture("listening");if(state==="SUCCESS")this.playGesture("celebrate");if(state==="ERROR")this.playGesture("error");}
+ setExpression(expression:AvatarExpression,intensity:number):void{const manager=this.vrm?.expressionManager;if(!manager)return;const names=Object.keys(manager.expressionMap||{});for(const name of names)manager.setValue(name,0);const resolved=(EXPRESSION_ALIASES[expression]||["neutral"]).find(name=>names.includes(name))||names.find(name=>name.toLowerCase()==="neutral");if(resolved)manager.setValue(resolved,Math.max(0,Math.min(1,intensity)));}
+ setGazeTarget(target:AvatarGazeTarget):void{const point=GAZE_POINTS[target]||GAZE_POINTS.USER;this.targetGaze.set(point[0],point[1],point[2]);}
+ setSpeaking(speaking:boolean):void{this.speaking=speaking;if(!speaking)this.updateLipSync(0);}
+ updateLipSync(openness:number):void{this.mouthOpen=Math.max(0,Math.min(1,openness));const manager=this.vrm?.expressionManager;if(!manager)return;const names=Object.keys(manager.expressionMap||{});const mouth=names.find(name=>["aa","a","A"].includes(name))||names.find(name=>name.toLowerCase().includes("mouth"));if(mouth)manager.setValue(mouth,this.speaking?this.mouthOpen:0);}
+ setLocomotion(state:LocomotionState):void{this.locomotion=state;}
+ setTargetPosition(position:AvatarPosition):void{this.targetPosition.set(THREE.MathUtils.clamp(position.x,-3.3,3.3),0,THREE.MathUtils.clamp(position.z,-1.5,1.7));}
+ playGesture(name:string):boolean{const known=["turn","stop","walk","run","roll","look_around","head_tilt","nod","shake_head","wave","gesture","point","stretch","crouch","celebrate","confused","error","thinking","listening","speaking"];const normalized=name.toLowerCase().replace(/\s+/g,"_");if(!known.includes(normalized))return false;this.action=normalized;this.actionUntil=this.elapsed+(normalized==="roll"?1.2:.9);if(normalized==="walk")this.locomotion="WALKING";if(normalized==="run")this.locomotion="RUNNING";if(normalized==="stop"){this.locomotion="STANDING";this.targetPosition.copy(this.position);}return true;}
+ private updateMovement(delta:number):void{const dx=this.targetPosition.x-this.position.x,dz=this.targetPosition.z-this.position.z,distance=Math.hypot(dx,dz);if(distance>.025){const desired=Math.atan2(dx,dz);let turn=desired-this.facing;while(turn>Math.PI)turn-=Math.PI*2;while(turn<-Math.PI)turn+=Math.PI*2;this.facing+=turn*Math.min(1,delta*7);const pace=this.locomotion==="RUNNING"?1.8:this.locomotion==="WALKING"?.72:.35;const step=Math.min(distance,pace*delta);this.position.x+=(dx/distance)*step;this.position.z+=(dz/distance)*step;}else if(this.locomotion!=="ROLLING")this.locomotion="STANDING";if(this.vrm?.scene){this.vrm.scene.position.x=this.position.x;this.vrm.scene.position.z=this.position.z;this.vrm.scene.rotation.y=this.facing;}}
+ private bone(name:string):any{return this.bones[name];}
+ private animateSkeleton(delta:number):void{const t=this.elapsed,speed=this.locomotion==="RUNNING"?10:this.locomotion==="WALKING"?6.5:1.1,moving=this.locomotion==="WALKING"||this.locomotion==="RUNNING",stride=moving?Math.sin(t*speed):0,bounce=moving?Math.abs(Math.sin(t*speed))*(this.locomotion==="RUNNING"?.035:.018):0,breathe=Math.sin(t*1.6)*.018,sway=Math.sin(t*.72)*.025;const spine=this.bone("spine"),chest=this.bone("chest"),head=this.bone("head"),neck=this.bone("neck"),hips=this.bone("hips"),la=this.bone("leftUpperArm"),ra=this.bone("rightUpperArm"),lf=this.bone("leftLowerArm"),rf=this.bone("rightLowerArm"),ll=this.bone("leftUpperLeg"),rl=this.bone("rightUpperLeg"),ls=this.bone("leftLowerLeg"),rs=this.bone("rightLowerLeg");if(spine)spine.rotation.x=(this.baseRotations.spine?.x||0)+breathe;if(chest){chest.rotation.x=(this.baseRotations.chest?.x||0)+breathe*.7;chest.rotation.z=(this.baseRotations.chest?.z||0)+sway;}if(hips)hips.position.y=this.baseHipY+bounce;if(ll)ll.rotation.x=(this.baseRotations.leftUpperLeg?.x||0)+stride*.38;if(rl)rl.rotation.x=(this.baseRotations.rightUpperLeg?.x||0)-stride*.38;if(ls)ls.rotation.x=(this.baseRotations.leftLowerLeg?.x||0)+Math.max(0,-stride)*.48;if(rs)rs.rotation.x=(this.baseRotations.rightLowerLeg?.x||0)+Math.max(0,stride)*.48;if(la)la.rotation.x=(this.baseRotations.leftUpperArm?.x||0)-stride*.18;if(ra)ra.rotation.x=(this.baseRotations.rightUpperArm?.x||0)+stride*.18;if(lf)lf.rotation.x=(this.baseRotations.leftLowerArm?.x||0)-stride*.08;if(rf)rf.rotation.x=(this.baseRotations.rightLowerArm?.x||0)+stride*.08;if(head){head.rotation.x=(this.baseRotations.head?.x||0)+Math.sin(t*.55)*.035;head.rotation.z=(this.baseRotations.head?.z||0)+Math.sin(t*.8)*.025;}if(neck)neck.rotation.y=(this.baseRotations.neck?.y||0)+(this.targetGaze.x-this.position.x)*.035;this.applyAction(t,delta);this.updateBlink(delta);this.updateLipSync(this.speaking?.35+Math.max(0,Math.sin(t*12))*.3:0);}
+ private applyAction(t:number,delta:number):void{const p=this.actionUntil>this.elapsed?Math.max(0,Math.min(1,(this.actionUntil-this.elapsed)/.9)):0;if(!this.action||!p)return;const head=this.bone("head"),la=this.bone("leftUpperArm"),ra=this.bone("rightUpperArm"),spine=this.bone("spine");if(this.action==="wave"&&ra)ra.rotation.z+=Math.sin(t*12)*.22*p;if(this.action==="nod"&&head)head.rotation.x+=Math.sin(t*10)*.16*p;if(this.action==="shake_head"&&head)head.rotation.y+=Math.sin(t*9)*.16*p;if(this.action==="head_tilt"&&head)head.rotation.z+=.15*p;if(this.action==="stretch"&&la&&ra){la.rotation.z-=.3*p;ra.rotation.z+=.3*p;}if(this.action==="point"&&ra)ra.rotation.x-=.45*p;if(this.action==="thinking"&&head)head.rotation.z+=.08*p;if(this.action==="celebrate"&&la&&ra){la.rotation.z-=.25*p;ra.rotation.z+=.25*p;}if(this.action==="crouch"&&spine)spine.rotation.x+=.22*p;if(this.action==="look_around"&&head)head.rotation.y+=Math.sin(t*2.2)*.18*p;if(this.action==="turn"&&this.vrm?.scene)this.vrm.scene.rotation.y+=delta*2.2*p;if(this.action==="roll"&&this.vrm?.scene){this.vrm.scene.rotation.z+=delta*10;this.position.z=THREE.MathUtils.clamp(this.position.z+delta*.75,-1.5,1.7);}}
+ private updateBlink(delta:number):void{const manager=this.vrm?.expressionManager;if(!manager)return;this.blinkAt-=delta;if(this.blinkAt<=0&&this.blinkRemaining<=0)this.blinkRemaining=.16;if(this.blinkRemaining>0){this.blinkRemaining-=delta;const value=this.blinkRemaining<.08?this.blinkRemaining/.08:1;const blink=Object.keys(manager.expressionMap||{}).find(name=>name.toLowerCase()==="blink");if(blink)manager.setValue(blink,Math.max(0,Math.min(1,value)));if(this.blinkRemaining<=0)this.blinkAt=2.5+Math.random()*3.5;}}
+ private maybeRoam():void{if(this.currentState!=="IDLE"||this.actionUntil>this.elapsed||this.locomotion!=="STANDING")return;if(this.elapsed<this.roamAt)return;this.roamAt=this.elapsed+8+Math.random()*14;if(Math.random()<.58){this.setTargetPosition({x:(Math.random()*2-1)*2.7,z:(Math.random()*2-1)*1.2});this.locomotion=Math.random()<.18?"RUNNING":"WALKING";}else this.playGesture(Math.random()<.5?"look_around":"stretch");}
+ update(deltaSeconds:number):void{if(this.disposed||!this.vrm)return;const delta=Math.min(.08,Math.max(.001,deltaSeconds));this.elapsed+=delta;this.maybeRoam();this.updateMovement(delta);this.animateSkeleton(delta);this.vrm.update?.(delta);}
+ private resize():void{if(!this.renderer||!this.camera)return;const width=Math.max(1,this.root.clientWidth),height=Math.max(1,this.root.clientHeight);this.camera.aspect=width/height;this.camera.updateProjectionMatrix();this.renderer.setSize(width,height,false);}
+ private startRenderLoop():void{const frame=(time:number)=>{if(this.disposed)return;const delta=this.lastTime?(time-this.lastTime)/1000:1/60;this.lastTime=time;this.update(delta);this.renderer.render(this.scene,this.camera);this.raf=window.setTimeout(()=>requestAnimationFrame(frame),this.heavyActivity?33:16);};this.raf=requestAnimationFrame(frame);}
+ dispose():void{if(this.disposed)return;this.disposed=true;if(this.raf){window.clearTimeout(this.raf);cancelAnimationFrame(this.raf);}this.resizeObserver?.disconnect();this.renderer?.dispose?.();this.renderer?.renderLists?.dispose?.();this.vrm?.scene?.traverse?.((object:any)=>{object.geometry?.dispose?.();const materials=Array.isArray(object.material)?object.material:[object.material];materials.filter(Boolean).forEach((material:any)=>{Object.values(material).forEach((value:any)=>(value as any)?.isTexture&&(value as any).dispose?.());material.dispose?.();});});if(this.canvas?.parentElement===this.root)this.canvas.remove();this.canvas=null;}
 }

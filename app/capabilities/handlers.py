@@ -1,4 +1,4 @@
-"""Capability Handlers.
+﻿"""Capability Handlers.
 
 These handlers provide direct answers to user queries about runtime state,
 configuration, and system information without invoking the LLM.
@@ -51,7 +51,7 @@ def handle_show_capabilities(ctx: Dict[str, Any]) -> CapabilityResult:
         cap_details = []
         for capability in registry.get_all().values():
             metadata = capability.metadata
-            cap_details.append({"name": metadata.name, "description": metadata.description, "category": getattr(metadata.category, "value", str(metadata.category)), "status": getattr(getattr(capability, "state", None), "value", str(getattr(capability, "state", "unknown"))), "actions": list(metadata.supported_actions)})
+            cap_details.append({"name": metadata.name, "description": metadata.description, "category": getattr(None, "value", str(None)), "status": getattr(getattr(capability, "state", None), "value", str(getattr(capability, "state", "unknown"))), "actions": list(metadata.supported_actions)})
         return CapabilityResult(success=True, data={"count": len(cap_details), "capabilities": cap_details}, message=f"{len(cap_details)} registered capabilities: " + ", ".join(item["name"] for item in cap_details))
     capability_router = ctx.get("capability_router", router)
     caps = capability_router.get_capabilities()
@@ -311,7 +311,7 @@ def get_current_model() -> Dict[str, Any]:
 def _is_git_auth_error(stderr: str) -> bool:
     """Check if the git error is an authentication failure."""
     auth_error_patterns = [
-        "认证失败",  # Chinese
+        "Φ«ñΦ»üσñ▒Φ┤Ñ",  # Chinese
         "authentication failed",
         "permission denied",
         "access denied",
@@ -1279,7 +1279,12 @@ def handle_capability_introspection(ctx: Dict[str, Any]) -> CapabilityResult:
     tokens = {token.strip("?!.,").rstrip("s") for token in query.lower().split()} - stop_words
     for capability in registry.get_all().values():
         metadata = capability.metadata
-        searchable = " ".join([metadata.name, metadata.description, getattr(metadata.category, "value", str(metadata.category)), " ".join(metadata.tags), " ".join(metadata.supported_actions)]).lower()
+        searchable = " ".join([metadata.name, metadata.description, getattr(None, "value", str(None)), " ".join(getattr(metadata, 'aliases', []) + metadata.tags), " ".join(metadata.supported_actions)]).lower()
         if any(token and token in searchable for token in tokens):
-            return CapabilityResult(success=True, data={"supported": True, "capability": metadata.name, "authoritative_source": "CapabilityRegistry"}, message=f"Yes. I can use the registered capability {metadata.name}.")
-    return CapabilityResult(success=True, data={"supported": False, "authoritative_source": "CapabilityRegistry"}, message=f"No. I could not find a registered capability for {query}.")
+            return CapabilityResult(success=True, data={"supported": True, "registered": True, "available": getattr(getattr(capability, "state", None), "value", "unknown") != "inactive", "capability": metadata.name, "authoritative_source": "CapabilityRegistry"}, message=f"Yes. I can use the registered capability {metadata.name}.")
+    return CapabilityResult(success=True, data={"supported": False, "registered": True, "available": False, "authoritative_source": "CapabilityRegistry"}, message=f"No. I could not find a registered capability for {query}.")
+
+
+
+
+

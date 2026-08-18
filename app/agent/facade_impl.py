@@ -5,7 +5,7 @@ Thin facade implementation (< 500 lines); zero subsystem instantiation.
 """
 
 import time
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from app.agent.facade import AgentFacade, AgentStatus
 from app.routing.unified_router import UnifiedRouter, RouteResult
@@ -44,13 +44,14 @@ class AgentFacadeImpl:
         self._answer_verifier = answer_verifier
         self._start_time = time.time()
 
-    def chat(self, user_input: str) -> str:
+    def chat(self, user_input: str, context: Optional[Dict[str, Any]] = None) -> str:
         """Handle a chat message through the canonical control, routing, and memory paths."""
         with correlation_scope(prefix="request") as correlation_id:
             try:
                 route_result = self._control.route_question(
                     user_input,
                     correlation_id=correlation_id,
+                    request_context=context,
                 )
                 if route_result.is_control:
                     response = self._handle_control(route_result.control_command)

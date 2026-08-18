@@ -280,8 +280,9 @@ class Intelligence:
             r"\b(?:latest|newest|current|currently|today|recent|recently|news)\b",
             r"\b(?:price|cost|market|trading)\b",
             r"\bweather\b",
-            r"\b(?:score|result|schedule|release|update|updated)\b",
+            r"\b(?:score|result|schedule|release|update|updated|benchmark|specification|specs|generation|availability|version)\b",
             r"\b(?:last night|this week|this month|this year)\b",
+            r"\b(?:vs\.?|versus|compare|comparison)\b",
         )
         explicit_research_request = any(re.search(pattern, normalized) for pattern in explicit_patterns)
         requires_fresh_information = any(re.search(pattern, normalized) for pattern in fresh_patterns)
@@ -292,6 +293,8 @@ class Intelligence:
         )
         intent_type = str(request_context.get("intent_type", "")).lower()
         is_information_request = bool(information_prefix or "?" in query)
+        if re.search(r"\b(?:vs\.?|versus|compare|comparison|price|cost|benchmark|specs?|specification|release|availability|version|generation)\b", normalized):
+            is_information_request = True
         if intent_type in {"question", "chat"} and not is_information_request:
             is_information_request = normalized.startswith(("find ", "verify ", "research ", "search ", "look up "))
 

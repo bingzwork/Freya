@@ -620,9 +620,6 @@ class LearningPipeline:
                 try:
                     stored_id = store_learned(item)
                     stored_item_ids.append(str(stored_id))
-                    logger.debug(
-                        f"[LearningPipeline] Stored distilled {item.learning_type.value}: {item.title}"
-                    )
                 except Exception as error:
                     logger.warning(f"[LearningPipeline] Failed to persist distilled item: {error}")
                     raise RuntimeError("Failed to persist distilled learning item") from error
@@ -661,12 +658,12 @@ class LearningPipeline:
 
                 # Determine storage type based on category
                 category = item.get("category", "general")
-                
+
                 if category in ("component_interaction", "event_pattern", "tag_pattern", "contextual_learning", "execution_outcome"):
                     # Store as ExperienceMemory entry
                     from app.memory.experience_memory import ExperienceEntry
                     from datetime import datetime, timezone
-                    
+
                     exp_entry = ExperienceEntry(
                         id=item_id,
                         title=item.get("title", ""),
@@ -686,13 +683,12 @@ class LearningPipeline:
                         source=item.get("source", "learning_pipeline"),
                     )
                     self._memory.add_experience(exp_entry)
-                    logger.debug(f"[LearningPipeline] Stored experience: {exp_entry.title}")
-                    
+
                 elif category in ("bug_fix", "pattern", "anti_pattern", "decision", "architecture", "testing", "performance", "security"):
                     # Store as EngineeringLesson
                     from app.memory.engineering_lessons import EngineeringLesson, LessonType, LessonSeverity
                     from datetime import datetime, timezone
-                    
+
                     # Map category to lesson type
                     lesson_type_map = {
                         "bug_fix": LessonType.PATTERN,
@@ -705,7 +701,7 @@ class LearningPipeline:
                         "security": LessonType.PATTERN,
                     }
                     lesson_type = lesson_type_map.get(category, LessonType.PATTERN)
-                    
+
                     lesson_entry = EngineeringLesson(
                         id=item_id,
                         title=item.get("title", ""),
@@ -725,12 +721,12 @@ class LearningPipeline:
                     )
                     self._memory.add_lesson(lesson_entry)
                     logger.debug(f"[LearningPipeline] Stored lesson: {lesson_entry.title}")
-                    
+
                 else:
                     # Default to experience memory for unknown categories
                     from app.memory.experience_memory import ExperienceEntry
                     from datetime import datetime, timezone
-                    
+
                     exp_entry = ExperienceEntry(
                         id=item_id,
                         title=item.get("title", ""),
@@ -750,7 +746,6 @@ class LearningPipeline:
                         source=item.get("source", "learning_pipeline"),
                     )
                     self._memory.add_experience(exp_entry)
-                    logger.debug(f"[LearningPipeline] Stored experience (default): {exp_entry.title}")
 
                 stored_item_ids.append(item_id)
 
@@ -762,6 +757,7 @@ class LearningPipeline:
         if stored_item_ids and not _suppress_improvement_event:
             self._emit_improvement_candidate(candidate, stored_item_ids)
 
+        logger.debug(f"[LearningPipeline] Persisted {len(stored_item_ids)} learning items")
         return stored_item_ids
 
     @staticmethod

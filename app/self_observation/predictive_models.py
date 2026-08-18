@@ -7,6 +7,7 @@ Provides unified data structures for:
 - Integration with Runtime Awareness and Self-Analysis
 """
 
+import math
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from enum import Enum
@@ -1156,6 +1157,17 @@ class PerformanceDegradationModel(PredictionModel):
         current = forecast["current"]
         predicted = forecast["predicted"]
         trend = forecast["trend"]
+        # Relative degradation ratios are undefined for a zero or invalid
+        # baseline; skip the signal rather than leaking an exception.
+        try:
+            current_value = float(current)
+            predicted_value = float(predicted)
+        except (TypeError, ValueError):
+            return False
+        if not math.isfinite(current_value) or not math.isfinite(predicted_value) or current_value <= 0:
+            return False
+        current = current_value
+        predicted = predicted_value
 
         threshold = self._get_threshold(metric_name)
         if threshold is None:
@@ -1229,9 +1241,18 @@ class PerformanceDegradationModel(PredictionModel):
         """Assess severity of a degradation signal."""
         current = forecast["current"]
         predicted = forecast["predicted"]
-
-        if current <= 0:
+        # A zero, negative, NaN, or infinite baseline cannot support a
+        # meaningful relative-severity ratio. Treat it as unknown rather than
+        # allowing a background diagnostic failure to escape.
+        try:
+            current_value = float(current)
+            predicted_value = float(predicted)
+        except (TypeError, ValueError):
             return "unknown"
+        if not math.isfinite(current_value) or not math.isfinite(predicted_value) or current_value <= 0:
+            return "unknown"
+        current = current_value
+        predicted = predicted_value
 
         ratio = predicted / current
         threshold = self._get_threshold(metric_name) or 1.5

@@ -1,7 +1,19 @@
 import logging
 import os
+import sys
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from datetime import datetime
+
+
+class PromptSafeStreamHandler(logging.StreamHandler):
+    def emit(self, record):
+        try:
+            message = self.format(record)
+            sys.stdout.write(message + self.terminator)
+            self.flush()
+        except Exception:
+            self.handleError(record)
 
 
 class FreyaLogger:
@@ -32,12 +44,14 @@ class FreyaLogger:
 
         if not self.logger.handlers:
 
-            file_handler = logging.FileHandler(
+            file_handler = RotatingFileHandler(
                 self.log_file,
+                maxBytes=int(os.environ.get("FREYA_LOG_MAX_BYTES", 20 * 1024 * 1024)),
+                backupCount=int(os.environ.get("FREYA_LOG_BACKUP_COUNT", 7)),
                 encoding="utf-8",
             )
 
-            console_handler = logging.StreamHandler()
+            console_handler = PromptSafeStreamHandler()
 
             formatter = logging.Formatter(
                 "%(asctime)s | %(levelname)s | %(message)s"
@@ -47,7 +61,9 @@ class FreyaLogger:
             console_handler.setFormatter(formatter)
 
             # File handler: capture everything (DEBUG and above)
-            file_handler.setLevel(logging.DEBUG)
+            # INFO is the normal production level; DEBUG remains opt-in.
+            file_level=getattr(logging, os.environ.get("FREYA_LOG_LEVEL", "INFO").upper(), logging.INFO)
+            file_handler.setLevel(file_level)
 
             # Console handler: default to INFO, can be overridden via FREYA_LOG_LEVEL env var
             console_level = os.environ.get("FREYA_LOG_LEVEL", "INFO").upper()

@@ -338,7 +338,10 @@ HealthStatus.UNHEALTHY]
 
             # Log only on status change
             if status_changed:
-                logger.info(f"Health check {check_name} status changed: {health_result.status.value} - {health_result.message}")
+                if health_result.status in {HealthStatus.DEGRADED, HealthStatus.UNHEALTHY}:
+                    logger.warning(f"Health check {check_name} status changed: {health_result.status.value} - {health_result.message}")
+                else:
+                    logger.debug(f"Health check {check_name} status changed: {health_result.status.value} - {health_result.message}")
             elif force:
                 logger.debug(f"Health check {check_name}: {health_result.status.value} - {health_result.message}")
 

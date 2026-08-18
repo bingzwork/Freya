@@ -123,6 +123,7 @@ class SystemConfig:
         autonomy_config: Optional[Any] = None,
         enable_avatar: bool = True,
         avatar_model_path: Optional[Path] = None,
+        database_path: Optional[Path] = None,
     ):
         self.enable_autonomy = enable_autonomy
         self.enable_orchestrator = enable_orchestrator
@@ -136,6 +137,7 @@ class SystemConfig:
         self.autonomy_config = autonomy_config
         self.enable_avatar = bool(enable_avatar)
         self.avatar_model_path = avatar_model_path
+        self.database_path = database_path
 
 
 class InfrastructureBundle:

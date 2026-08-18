@@ -1,4 +1,4 @@
-"""Capability Registry.
+﻿"""Capability Registry.
 
 Single registry for callable capabilities that can answer queries directly
 without invoking the LLM. This is the M2 component in the Modular Capability System.
@@ -36,6 +36,7 @@ class Capability:
         """
         confidence = 0.0
         query_lower = query.lower()
+        confidence = max(confidence, semantic_capability_score(query_lower, chr(32).join([self.name, self.description, *self.keywords])))
 
         # Check intent type first (as a filter, not a confidence source)
         if intent_type and self.intent_types:
@@ -233,3 +234,20 @@ def reset_capability_registry() -> None:
     global _registry_instance
     with _registry_lock:
         _registry_instance = None
+
+CAPABILITY_CONCEPT_GROUPS = (
+    frozenset({ image, picture, photo, photograph, visual, screenshot, scan, scanned, ocr}),
+    frozenset({web, search, research, internet, online, browse, lookup, sources, citation}),
+    frozenset({memory, memories, remember, recall, store, save, retrieve, forget}),
+)
+
+def semantic_capability_score(query: str, searchable: str) -> float:
+    query_lower = str(query).lower()
+    searchable_lower = str(searchable).lower()
+    score = 0.0
+    for group in CAPABILITY_CONCEPT_GROUPS:
+        if any(term in query_lower for term in group) and any(term in searchable_lower for term in group):
+            score = max(score, 0.74)
+    return score
+
+

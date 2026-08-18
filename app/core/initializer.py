@@ -241,7 +241,7 @@ class SystemInitializer:
         # Providers are injectable and remain unavailable-safe when optional
         # credentials, hardware, binaries, or SDKs are not configured.
         from app.capabilities.extended import build_extended_capabilities
-        for cap in build_extended_capabilities():
+        for cap in build_extended_capabilities(workspace=self.workspace, database_path=getattr(self.config, "database_path", None)):
             capability_registry.register(cap, registered_by="SystemInitializer")
         research_capability = capability_registry.get_capability("research_capability")
         if research_capability is not None and hasattr(research_capability, "set_tool_manager"):
@@ -300,6 +300,12 @@ class SystemInitializer:
                 browser_capability.set_profile_dir(str(self.workspace / "data" / "browser-profile"))
             if hasattr(browser_capability, "set_safety_gate"):
                 browser_capability.set_safety_gate(safety_gate)
+        research_capability = capability_registry.get_capability("research_capability")
+        if research_capability is not None and hasattr(research_capability, "set_browser_capability"):
+            research_capability.set_browser_capability(browser_capability)
+        vision_capability = capability_registry.get_capability("vision")
+        if research_capability is not None and vision_capability is not None and hasattr(research_capability, "set_vision_capability"):
+            research_capability.set_vision_capability(vision_capability)
         logger.debug("[SystemInitializer] SafetyGate created and BrowserCapability bound")
 
         # ------------------------------------------------------------------

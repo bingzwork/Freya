@@ -257,7 +257,7 @@ class ConversationControlHandler:
         self._intelligence = intelligence
         self._chat_activity = chat_activity
 
-    def route_question(self, user_input: str, *, correlation_id: Optional[str] = None) -> Any:
+    def route_question(self, user_input: str, *, correlation_id: Optional[str] = None, request_context: Optional[Dict[str, Any]] = None) -> Any:
         """Route one normal question through the target ingress contract.
 
         The control layer obtains bounded context and the active goal through
@@ -277,6 +277,7 @@ class ConversationControlHandler:
                 "ingress": "ConversationControl",
                 "correlation_id": active_correlation_id,
                 "request_id": active_correlation_id,
+                **(request_context or {}),
             }
             self._publish_event(
                 "conversation.question.received",

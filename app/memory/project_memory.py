@@ -1,4 +1,4 @@
-﻿"""
+"""
 Persistent project memory with semantic similarity search capabilities.
 
 This module provides project-level memory that persists between sessions,
@@ -8,6 +8,9 @@ and an optional persistent vector database (FAISS).
 
 import json
 import hashlib
+import os
+import tempfile
+import time
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,6 +38,7 @@ except ImportError:
     VECTOR_DB_AVAILABLE = False
     VectorDB = None
 
+from app.core.atomic_store import FileLock
 from app.core.file_allowlist import FileAllowlist, get_file_allowlist, FileOperation, AccessRule
 
 # Shared infrastructure imports
@@ -578,9 +582,33 @@ class ProjectMemory:
 
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._persistence_lock:
-            temporary = self.path.with_suffix(".tmp")
-            temporary.write_text(json.dumps(entries, indent=2, ensure_ascii=False), encoding="utf-8")
-            temporary.replace(self.path)
+            with FileLock(self.path.with_suffix(".lock"), timeout=5.0):
+                prefix = f".{self.path.name}."
+                for candidate in self.path.parent.glob(f"{prefix}*.tmp"):
+                    try:
+                        if time.time() - candidate.stat().st_mtime >= 3600.0:
+                            candidate.unlink()
+                    except OSError:
+                        continue
+                for attempt in range(3):
+                    temporary_path = None
+                    try:
+                        descriptor, temporary_name = tempfile.mkstemp(prefix=prefix, suffix=".tmp", dir=self.path.parent)
+                        os.close(descriptor)
+                        temporary_path = Path(temporary_name)
+                        temporary_path.write_text(json.dumps(entries, indent=2, ensure_ascii=False), encoding="utf-8")
+                        os.replace(temporary_path, self.path)
+                        return
+                    except PermissionError:
+                        if attempt >= 2:
+                            raise
+                        time.sleep(0.05 * (attempt + 1))
+                    finally:
+                        if temporary_path is not None:
+                            try:
+                                temporary_path.unlink(missing_ok=True)
+                            except OSError:
+                                pass
 
 
 

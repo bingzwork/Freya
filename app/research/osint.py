@@ -113,7 +113,7 @@ class ReverseImageProvider(Protocol):
 class ReverseImageSearchProvider:
     """Provider boundary with no identity inference; concrete providers can be injected."""
     def search(self, image_path: str, *, limit: int = 10) -> list[dict[str, Any]]:
-        raise RuntimeError("No reverse-image provider is configured")
+        raise RuntimeError("Free reverse-image providers are unavailable")
 
 
 class OSINTCapability:
@@ -141,7 +141,15 @@ class OSINTCapability:
         try:
             path = Path(image_path).resolve(strict=True)
             matches = self.reverse_image_provider.search(str(path), limit=max(1, min(int(limit), 20)))
-            return {"success": True, "matches": matches, "warning": "Visual similarity is not identity confirmation.", "provenance": [{"provider": type(self.reverse_image_provider).__name__, "image_sha256": hashlib.sha256(path.read_bytes()).hexdigest()}]}
+            if isinstance(matches, dict):
+                result = dict(matches)
+                result.setdefault("matches", result.get("image_results", []))
+                result.setdefault("success", bool(result.get("matches")))
+            else:
+                result = {"success": bool(matches), "matches": matches}
+            result.setdefault("warning", "Visual similarity is not identity confirmation.")
+            result.setdefault("provenance", [{"provider": type(self.reverse_image_provider).__name__, "image_sha256": hashlib.sha256(path.read_bytes()).hexdigest()}])
+            return result
         except Exception as error:
             return {"success": False, "matches": [], "errors": [str(error)]}
 

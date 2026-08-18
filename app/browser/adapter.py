@@ -143,6 +143,31 @@ class PlaywrightBrowserAdapter:
                 path = str(Path(inputs["path"]).expanduser().resolve())
                 self.page.locator(str(inputs["selector"])).set_input_files(path)
                 return self._observation(action, {"path": path})
+            if action == "extract_media":
+                selector = str(inputs.get("selector") or "img, a[href], meta[property='og:image']")
+                limit = max(1, min(int(inputs.get("limit", 100)), 250))
+                locator = self.page.locator(selector)
+                count = min(locator.count(), limit)
+                elements = []
+                for index in range(count):
+                    element = locator.nth(index)
+                    try:
+                        data = element.evaluate("""element => ({
+                            tag: element.tagName.toLowerCase(),
+                            href: element.getAttribute('href') || '',
+                            src: element.getAttribute('src') || '',
+                            srcset: element.getAttribute('srcset') || '',
+                            data_src: element.getAttribute('data-src') || element.getAttribute('data-lazy-src') || '',
+                            content: element.getAttribute('content') || '',
+                            alt: element.getAttribute('alt') || '',
+                            title: element.getAttribute('title') || '',
+                            text: (element.innerText || '').slice(0, 240)
+                        })""")
+                        if isinstance(data, dict):
+                            elements.append(data)
+                    except Exception:
+                        continue
+                return self._observation(action, {"elements": elements, "count": len(elements)})
             if action == "download_file":
                 with self.page.expect_download(timeout=int(inputs.get("timeout_ms", 30000))) as download_info:
                     self.page.locator(str(inputs["selector"])).click()

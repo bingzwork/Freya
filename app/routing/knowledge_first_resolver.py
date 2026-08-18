@@ -14,6 +14,7 @@ Flow:
 """
 
 from dataclasses import dataclass, field
+import re
 from typing import Any, Dict, List, Optional
 
 from app.memory.unified_retrieval import UnifiedRetrieval, RetrievalQuery, RetrievalResult
@@ -23,6 +24,49 @@ from app.core.llm_stack import LLMStack
 from app.core.priority_llm import LLMPriority
 from app.core.logger import logger
 from app.intent import IntentType
+
+
+def _classify_conversational_request(query: str) -> Optional[str]:
+    """Return a narrow conversational category before knowledge/research routing.
+
+    This is intentionally phrase- and token-based rather than a broad keyword
+    list. Explicit freshness or research language always bypasses the gate.
+    """
+    normalized = " ".join(str(query or "").lower().strip().split())
+    if not normalized:
+        return None
+    if re.search(r"\b(?:search|research|browse|verify|fact[ -]?check|latest|newest|current|currently|today|recent|recently|find\s+(?:sources|recent|current)|look\s+(?:this\s+)?up)\b", normalized):
+        return None
+    # Preserve the dedicated self-knowledge route before the broader
+    # stable-explanation matcher below.
+    if re.fullmatch(r"(?:what(?:'s| is) your name|who are you|are you freya)[!.? ]*", normalized):
+        return "identity"
+    # Stable explanatory questions should use the local chat/LLM path rather
+    # than entering task planning or external research. Explicit task verbs
+    # remain outside this gate so requests such as "what is ... and build ..."
+    # still reach the normal planner/capability flow.
+    if (
+        re.fullmatch(
+            r"(?:what\s+is|what\s+are|who\s+is|who\s+was|why\s+is|how\s+does|how\s+do)\s+[^?!.]{1,160}[?!.]*",
+            normalized,
+        )
+        and not re.search(
+            r"\b(?:can\s+you|please|write|build|make|implement|fix|debug|install|run|create|compare|design)\b",
+            normalized,
+        )
+    ):
+        return "stable_explanation"
+    if re.fullmatch(r"(?:what(?:'s| is) your name|who are you|are you freya|tell me about yourself)[?.!] *", normalized):
+        return "identity"
+    if re.fullmatch(r"(?:what can you do|what are your capabilities|what capabilities do you have|can you help me)[?.!] *", normalized):
+        return "capabilities"
+    if re.fullmatch(r"(?:hello|hi|hey|good morning|good afternoon|good evening)[!.? ]*", normalized):
+        return "greeting"
+    if re.fullmatch(r"(?:how are you(?: doing)?|are you okay|what(?:'s| is) up)[?.! ]*", normalized):
+        return "social"
+    if re.fullmatch(r"(?:thank you|thanks|you're welcome|you are welcome|goodbye|bye)[!.? ]*", normalized):
+        return "courtesy"
+    return None
 
 
 @dataclass
@@ -90,6 +134,32 @@ class KnowledgeFirstResolver:
         intent_type: Optional[IntentType] = None,
     ) -> ResolutionResult:
         reasoning = [f"Resolving query: '{query[:100]}...'"]
+
+        conversational_intent = _classify_conversational_request(query)
+        if conversational_intent:
+            reasoning.append(f"Conversational gate matched: {conversational_intent}")
+            if conversational_intent in {"identity", "capabilities"}:
+                target = "show_identity" if conversational_intent == "identity" else "show_capabilities"
+                try:
+                    result = self._capability_router.execute_named(target, query, **dict(context or {}))
+                    return ResolutionResult(
+                        action="capability",
+                        capability_name=target,
+                        capability_confidence=1.0,
+                        capability_result=result,
+                        routing_metadata={"conversational_intent": conversational_intent, "suppress_research": True, "authoritative_internal": True},
+                        reasoning=reasoning,
+                    )
+                except NoCapabilityError as error:
+                    reasoning.append(f"Local conversational capability unavailable: {error}")
+            return ResolutionResult(
+                action="llm_fallback",
+                llm_prompt=query,
+                llm_priority=LLMPriority.CHAT,
+                llm_context={"conversational_intent": conversational_intent, "suppress_research": True, "allow_ungrounded_fallback": True},
+                routing_metadata={"conversational_intent": conversational_intent, "suppress_research": True},
+                reasoning=reasoning,
+            )
 
         direct_matches = self._capability_router.find_matching(query, intent_type.value if intent_type is not None else None)
         explicit_matches = [

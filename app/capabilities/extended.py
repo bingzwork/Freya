@@ -12,6 +12,7 @@ import os
 import platform
 import shutil
 import sqlite3
+import re
 import statistics
 import subprocess
 from abc import ABC, abstractmethod
@@ -219,30 +220,130 @@ class ExternalProviderCapability(GuardedCapability):
 
 
 class DatabaseCapability(GuardedCapability):
-    MUTATING_ACTIONS = frozenset({"execute", "insert", "update", "delete"})
-    def __init__(self):
+    MUTATING_ACTIONS = frozenset({"execute", "insert", "update", "delete", "transaction"})
+    def __init__(self, workspace: Optional[Path] = None, database_path: Optional[Path] = None):
+        self.workspace = Path(workspace or Path.cwd()).expanduser().resolve()
+        configured_path = Path(database_path or (self.workspace / "data" / "freya.db")).expanduser()
+        self.database_path = (configured_path if configured_path.is_absolute() else self.workspace / configured_path).resolve()
         super().__init__(CapabilityMetadata(name="database", description="Safe parameterized database inspection and execution", category=CapabilityCategory.TOOL, default_action="inspect", supported_actions=["connect", "inspect", "list_tables", "columns", "query", "execute", "insert", "update", "delete", "transaction"], tags=["database", "sql", "sqlite", "query"], safe_query=True))
-    def _connect(self, inputs): return sqlite3.connect(str(inputs["path"]))
-    def action_connect(self, inputs):
-        with self._connect(inputs): pass
-        return _ok(connected=True, path=str(inputs["path"]))
-    def action_inspect(self, inputs): return self.action_list_tables(inputs)
+    def _resolve_path(self, inputs):
+        raw_path = inputs.get("path") or self.database_path
+        candidate = Path(str(raw_path)).expanduser()
+        if not candidate.is_absolute():
+            candidate = self.workspace / candidate
+        candidate = candidate.resolve()
+        candidate.parent.mkdir(parents=True, exist_ok=True)
+        return candidate
+
+    @staticmethod
+    def _params(inputs):
+        params = inputs.get("params", [])
+        if params is None:
+            return ()
+        if not isinstance(params, (list, tuple)):
+            raise TypeError("Database params must be a list or tuple")
+        return tuple(params)
+
+    def _connect(self, inputs):
+        return sqlite3.connect(str(self._resolve_path(inputs)), timeout=5.0)
+    @staticmethod
+    def _safe_identifier(value):
+        name = str(value or "")
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+            raise ValueError("Database identifier must contain only letters, numbers, and underscores")
+        return "\"" + name + "\""
+
+    def _natural_inputs(self, inputs):
+        if inputs.get("sql") or not inputs.get("query"):
+            return inputs
+        text = str(inputs.get("query")).strip()
+        lowered = text.lower()
+        result = dict(inputs)
+        table_match = re.search(r"(?:table|in)\s+(?:called\s+)?([A-Za-z_][A-Za-z0-9_]*)", text, re.IGNORECASE)
+        table = table_match.group(1) if table_match else None
+        if table and re.search(r"\b(create|make)\b.*\btable\b", lowered):
+            fields_match = re.search(r"\bwith\s+(.+?)\s+fields?\b", text, re.IGNORECASE)
+            names = re.split(r"\s*(?:,|\band\b)\s*", fields_match.group(1)) if fields_match else ["name", "email"]
+            fields = [name.strip() for name in names if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name.strip())]
+            result["sql"] = "CREATE TABLE " + self._safe_identifier(table) + " (" + ", ".join(self._safe_identifier(name) + " TEXT" for name in fields) + ")"
+            result["capability_action"] = "execute"
+        elif table and re.search(r"\b(show|list|read)\b", lowered) and re.search(r"\b(records|rows|data)\b", lowered):
+            result["sql"] = "SELECT * FROM " + self._safe_identifier(table)
+            result["capability_action"] = "query"
+        if "sql" not in result:
+            insert_match = re.search(r"\b(?:add|insert)\s+([A-Za-z][A-Za-z0-9 _-]*?)\s+with\s+([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+)\s+to\s+(?:table\s+)?([A-Za-z_][A-Za-z0-9_]*)", text, re.IGNORECASE)
+            if insert_match:
+                result["sql"] = "INSERT INTO " + self._safe_identifier(insert_match.group(3)) + " (name, email) VALUES (?, ?)"
+                result["params"] = [insert_match.group(1).strip(), insert_match.group(2)]
+                result["capability_action"] = "execute"
+            else:
+                update_match = re.search(r"\b(?:change|update)\s+(.+?)(?:'s)?\s+email\s+to\s+([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+)\s+in\s+(?:table\s+)?([A-Za-z_][A-Za-z0-9_]*)", text, re.IGNORECASE)
+                if update_match:
+                    result["sql"] = "UPDATE " + self._safe_identifier(update_match.group(3)) + " SET email = ? WHERE name = ?"
+                    result["params"] = [update_match.group(2), update_match.group(1).strip()]
+                    result["capability_action"] = "execute"
+                else:
+                    delete_match = re.search(r"\bdelete\s+(.+?)\s+from\s+(?:table\s+)?([A-Za-z_][A-Za-z0-9_]*)", text, re.IGNORECASE)
+                    if delete_match:
+                        result["sql"] = "DELETE FROM " + self._safe_identifier(delete_match.group(2)) + " WHERE name = ?"
+                        result["params"] = [delete_match.group(1).strip()]
+                        result["capability_action"] = "execute"
+        return result
+    def action_inspect(self, inputs):
+        parsed = self._natural_inputs(inputs)
+        if parsed.get("capability_action") == "query":
+            return self.action_query(parsed)
+        if parsed.get("capability_action") == "execute":
+            return self.action_execute(parsed)
+        return self.action_list_tables(parsed)
+
     def action_list_tables(self, inputs):
-        with self._connect(inputs) as db: rows = db.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").fetchall()
-        return _ok(tables=[r[0] for r in rows])
+        try:
+            with self._connect(inputs) as db:
+                rows = db.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").fetchall()
+            return _ok(path=str(self._resolve_path(inputs)), tables=[row[0] for row in rows])
+        except (sqlite3.Error, OSError, ValueError, TypeError) as exc:
+            return _error(exc)
+    def action_connect(self, inputs):
+        try:
+            path = self._resolve_path(inputs)
+            with self._connect(inputs): pass
+            return _ok(connected=True, path=str(path))
+        except (sqlite3.Error, OSError, ValueError, TypeError) as exc:
+            return _error(exc)
     def action_columns(self, inputs):
-        with self._connect(inputs) as db: rows = db.execute(f"PRAGMA table_info({inputs['table']})").fetchall()
-        return _ok(columns=[{"name": r[1], "type": r[2], "nullable": not bool(r[3])} for r in rows])
+        try:
+            table = str(inputs.get("table") or "")
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", table):
+                return _error("Database table name must be a simple SQL identifier")
+            with self._connect(inputs) as db:
+                rows = db.execute(f"PRAGMA table_info(\"{table}\")").fetchall()
+            return _ok(table=table, columns=[{"name": row[1], "type": row[2], "nullable": not bool(row[3])} for row in rows])
+        except (sqlite3.Error, OSError, ValueError, TypeError) as exc:
+            return _error(exc)
+
     def action_query(self, inputs):
-        with self._connect(inputs) as db: cur = db.execute(str(inputs["sql"]), tuple(inputs.get("params", []))); rows = cur.fetchall(); columns = [d[0] for d in cur.description or []]
-        return _ok(columns=columns, rows=[dict(zip(columns, row)) for row in rows])
+        try:
+            sql = str(inputs["sql"]).strip()
+            keyword = sql.split(None, 1)[0].upper().rstrip(";")
+            if keyword in {"CREATE", "INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "REPLACE", "VACUUM", "ATTACH", "DETACH"}:
+                return _error("Mutating SQL must use an approved database write action")
+            inputs = {**inputs, "sql": sql}
+            with self._connect(inputs) as db:
+                cursor = db.execute(str(inputs["sql"]), self._params(inputs))
+                rows = cursor.fetchall()
+                columns = [description[0] for description in cursor.description or []]
+            return _ok(columns=columns, rows=[dict(zip(columns, row)) for row in rows])
+        except (sqlite3.Error, OSError, ValueError, TypeError) as exc:
+            return _error(exc)
+
     def action_execute(self, inputs):
         denied = self._guard("execute", inputs)
         if denied:
             return denied
         try:
             with self._connect(inputs) as db:
-                cur = db.execute(str(inputs["sql"]), tuple(inputs.get("params", [])))
+                cur = db.execute(str(inputs["sql"]), self._params(inputs))
                 return _ok(rowcount=cur.rowcount)
         except (sqlite3.Error, OSError, ValueError, TypeError) as exc:
             return _error(exc)
@@ -294,7 +395,7 @@ class IoTCapability(ExternalProviderCapability):
         super().__init__("iot", "Provider-neutral smart-home and IoT device state operations", ["discover", "list_devices", "get_state", "read_sensors", "set_state", "scene", "automation_status"], ["set_state", "scene"], provider, ["iot", "smart home", "device", "home assistant", "mqtt"])
 
 
-def build_extended_capabilities(*, providers: Optional[Mapping[str, Any]] = None) -> list[BaseCapability]:
+def build_extended_capabilities(*, workspace: Optional[Path] = None, database_path: Optional[Path] = None, providers: Optional[Mapping[str, Any]] = None) -> list[BaseCapability]:
     providers = providers or {}
     return [
         ComputerCapability(providers.get("computer")),
@@ -304,7 +405,7 @@ def build_extended_capabilities(*, providers: Optional[Mapping[str, Any]] = None
         ExternalProviderCapability("email", "Provider-neutral email search, reading, drafting, and delivery", ["search", "read", "draft", "reply", "forward", "send", "archive", "label"], ["send", "archive", "label"], providers.get("email"), ["email", "mail", "message"]),
         ExternalProviderCapability("calendar", "Provider-neutral calendar and availability operations", ["list", "search", "availability", "create", "update", "delete", "respond"], ["create", "update", "delete", "respond"], providers.get("calendar"), ["calendar", "event", "schedule"]),
         ExternalProviderCapability("contacts", "Contacts and small CRM provider primitives", ["create", "search", "read", "update", "delete"], ["create", "update", "delete"], providers.get("contacts"), ["contacts", "crm", "people", "leads"]),
-        DatabaseCapability(),
+        DatabaseCapability(workspace=workspace, database_path=database_path),
         VoiceCapability(providers.get("voice")),
         DataAnalysisCapability(),
         IoTCapability(providers.get("iot")),

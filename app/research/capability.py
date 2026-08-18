@@ -11,16 +11,20 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import ipaddress
+import json
 import logging
+import os
 import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence
-from urllib.parse import urlparse
+from urllib.parse import quote_plus, urljoin, urlparse
+from urllib.request import Request, urlopen
 
 from app.orchestrator.capability_registry import Capability, CapabilityCategory, CapabilityMetadata, CapabilityState
 from app.software_engineering_knowledge.external_import import InternetResearchImporter
 from app.research.osint import WebSearchCapability, OSINTCapability
+from app.free_image_research_providers import FreeImageResearchChain
 
 logger = logging.getLogger(__name__)
 
@@ -219,25 +223,57 @@ def _jsonable(value: Any) -> Any:
 # ---------------------------------------------------------------------------
 
 class WebSearchTool:
-    """Structured public-web search backed by InternetResearchImporter."""
+    """Structured public-web search with a primary importer and bounded fallback."""
 
     def __init__(self, importer: Optional[InternetResearchImporter] = None):
         self.importer = importer or InternetResearchImporter()
 
+    @staticmethod
+    def _duckduckgo_fallback(query: str, max_results: int) -> Dict[str, Any]:
+        url = "https://html.duckduckgo.com/html/?q=" + quote_plus(query)
+        request = Request(url, headers={"User-Agent": "Freya/1.0 public-research-fallback"})
+        with urlopen(request, timeout=15) as response:
+            html = response.read().decode("utf-8", errors="replace")
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(html, "html.parser")
+        results = []
+        for item in soup.select(".result")[: max(1, min(int(max_results), 10))]:
+            link = item.select_one("a.result__a")
+            if link is None:
+                continue
+            href = str(link.get("href") or "").strip()
+            title = link.get_text(" ", strip=True)
+            snippet_node = item.select_one(".result__snippet")
+            snippet = snippet_node.get_text(" ", strip=True) if snippet_node else ""
+            if not href or not title:
+                continue
+            results.append({"title": title, "url": href, "snippet": snippet, "source": "duckduckgo_html"})
+        return {"success": bool(results), "query": query, "results": results, "errors": [] if results else ["DuckDuckGo returned no parseable results"], "provider": "duckduckgo_html"}
+
     async def search_async(self, query: str, max_results: int = 5) -> Dict[str, Any]:
         if not isinstance(query, str) or not query.strip():
             return {"success": False, "query": query, "results": [], "errors": ["query is required"]}
+        normalized = query.strip()
+        primary_error = ""
         try:
-            results = await self.importer.search(query.strip(), max_results=max_results)
-            return {
-                "success": True,
-                "query": query.strip(),
-                "results": results,
-                "errors": [],
-            }
+            results = await asyncio.wait_for(
+                self.importer.search(normalized, max_results=max_results),
+                timeout=max(3.0, float(os.getenv("FREYA_SEARCH_PROVIDER_TIMEOUT", "12"))),
+            )
+            if results:
+                return {"success": True, "query": normalized, "results": results, "errors": [], "provider": "internet_research_importer"}
+            primary_error = "Primary web-search provider returned no results"
         except Exception as error:
-            logger.warning("Web search failed: %s", error)
-            return {"success": False, "query": query, "results": [], "errors": [str(error)]}
+            primary_error = str(error)
+        logger.warning("Primary web search unavailable; trying DuckDuckGo fallback: %s", primary_error)
+        try:
+            fallback = await asyncio.to_thread(self._duckduckgo_fallback, normalized, max_results)
+            fallback.setdefault("errors", [])
+            fallback["errors"] = [primary_error] + list(fallback["errors"])
+            return fallback
+        except Exception as fallback_error:
+            logger.warning("DuckDuckGo web-search fallback failed: %s", fallback_error)
+            return {"success": False, "query": normalized, "results": [], "errors": [primary_error, str(fallback_error)], "provider": "none"}
 
     def search(self, query: str, max_results: int = 5) -> Dict[str, Any]:
         return _run_coroutine(self.search_async(query, max_results=max_results))
@@ -254,7 +290,10 @@ class WebPageReader:
         if not allowed:
             return {"success": False, "url": url, "page": None, "error": reason}
         try:
-            result = await self.importer.import_from_url(url.strip())
+            result = await asyncio.wait_for(
+                self.importer.import_from_url(url.strip()),
+                timeout=max(3.0, float(os.getenv("FREYA_PAGE_RETRIEVAL_TIMEOUT", "15"))),
+            )
             if not result.success or not result.items:
                 errors = getattr(result, "errors", None) or [f"No readable content extracted from {url}"]
                 return {"success": False, "url": url, "page": None, "error": "; ".join(map(str, errors))}
@@ -548,6 +587,7 @@ class CitationManager:
 # Canonical workflow capability
 # ---------------------------------------------------------------------------
 
+
 class ResearchCapability(Capability):
     """Canonical workflow capability for lightweight search and full research."""
 
@@ -571,8 +611,9 @@ class ResearchCapability(Capability):
             auto_discoverable=True,
             safe_query=True,
             default_action="search_web",
-            supported_actions=["search_web", "read_page", "research_topic", "compare_sources", "verify_claim", "learn_finding", "archive_search", "advanced_search", "cross_site_research", "reverse_image_search", "image_intelligence"],
+            supported_actions=["search_web", "read_page", "research_topic", "compare_sources", "verify_claim", "learn_finding", "archive_search", "advanced_search", "cross_site_research", "image_search", "reverse_image_search", "image_intelligence"],
             tags=["research", "web", "search", "sources", "citations", "verify", "evidence"],
+            aliases=["websearch", "web search", "search the web", "internet research", "deep research", "research"],
             required_collaborators=["tool_manager"],
         )
         super().__init__(metadata)
@@ -581,12 +622,16 @@ class ResearchCapability(Capability):
         self._learning_pipeline = None
         self.search_tool = WebSearchTool()
         self.page_reader = WebPageReader()
+        self.image_research = FreeImageResearchChain(self.search_tool)
+        # Optional test/integration seam; production uses the free chain above.
+        self.image_search_provider = None
+
         self.source_evaluator = SourceEvaluator()
         self.fact_extractor = FactExtractor()
         self.cross_reference = CrossReference()
         self.citation_manager = CitationManager()
         self.web_search = WebSearchCapability(self.search_tool)
-        self.osint = OSINTCapability(self.web_search)
+        self.osint = OSINTCapability(self.web_search, reverse_image_provider=self.image_research)
 
     # The registry expects an instance of its Capability class.  Rather than
     # duplicate BaseCapability’s implementation, expose the same small public
@@ -648,6 +693,13 @@ class ResearchCapability(Capability):
         tool_manager.register(self.TOOL_NAMES["cross_reference"], lambda **kwargs: _jsonable(self.cross_reference.compare(**kwargs)) )
         tool_manager.register(self.TOOL_NAMES["citations"], lambda **kwargs: _jsonable(self.citation_manager.create(**kwargs)))
 
+    def set_browser_capability(self, browser_capability) -> None:
+        self.image_research.set_browser(browser_capability)
+
+    def set_vision_capability(self, vision_capability) -> None:
+        self.image_research.set_vision(vision_capability)
+        self.osint.vision = vision_capability
+
     def set_learning_pipeline(self, learning_pipeline) -> None:
         self._learning_pipeline = learning_pipeline
 
@@ -670,6 +722,30 @@ class ResearchCapability(Capability):
     @staticmethod
     def _dict_fact(value: Any) -> Fact:
         return value if isinstance(value, Fact) else Fact(**value)
+
+    def action_image_search(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        query = str(inputs.get("query") or inputs.get("topic") or "").strip()
+        limit = max(1, min(int(inputs.get("max_results", inputs.get("limit", 8))), 20))
+        if not query:
+            return {"success": False, "error": "query is required", "image_results": [], "provider": "free_image_research"}
+        # Preserve the injectable provider seam for deterministic tests and local integrations;
+        # no paid or Bing implementation is retained here.
+        if self.image_search_provider is not None:
+            try:
+                records = self.image_search_provider.search(query, limit=limit)
+                candidates = []
+                for record in records or []:
+                    if not isinstance(record, dict):
+                        continue
+                    image_url = str(record.get("image_url") or record.get("thumbnail_url") or "")
+                    if not image_url.lower().startswith(("http://", "https://")):
+                        continue
+                    candidates.append(record)
+                return {"success": bool(candidates), "query": query, "image_results": candidates[:limit], "results": candidates[:limit], "provider": "injected_free_provider", "error": None if candidates else "Injected image provider returned no usable public candidates"}
+            except Exception as error:
+                return {"success": False, "query": query, "image_results": [], "results": [], "provider": "injected_free_provider", "error": str(error)}
+        outcome = self.image_research.search_text(query, limit=limit)
+        return {"success": outcome.success, "query": query, "image_results": outcome.candidates, "results": outcome.candidates, "provider": outcome.provider, "error": outcome.error}
 
     def action_search_web(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
         query = str(inputs.get("query", "")).strip()

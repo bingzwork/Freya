@@ -403,7 +403,14 @@ class PredictiveDiagnostics:
                         self._notify_subscriptions(result)
 
                 except Exception as e:
-                    logger.error(f"Failed to predict {pred_type.value} ({horizon.value}): {e}")
+                    # Each background model is best-effort. Do not let one
+                    # malformed/insufficient series abort the foreground chat
+                    # or suppress the remaining prediction types.
+                    logger.warning(
+                        "trend_anomaly %s prediction skipped: %s",
+                        horizon.value,
+                        e,
+                    )
 
         # Validate pending predictions if enabled
         if self._config.auto_validate_predictions:

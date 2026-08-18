@@ -1,131 +1,72 @@
-﻿import { useEffect, useRef, useState } from "react";
-import { Eye, EyeOff, RotateCcw } from "lucide-react";
-import {
-  DEFAULT_AVATAR_SNAPSHOT,
-  normalizeAvatarSnapshot,
-  type AvatarSnapshot,
-} from "./avatar-controller";
+import { useEffect, useRef, useState } from "react";
+import { RotateCcw } from "lucide-react";
+import { DEFAULT_AVATAR_SNAPSHOT, normalizeAvatarSnapshot, type AvatarSnapshot } from "./avatar-controller";
 import type { VrmAvatarAdapter } from "./vrm-adapter";
 
 const MODEL_URL = "/avatars/current_avatar.vrm";
 const AVATAR_EVENT_NAME = "freya:avatar-state";
 
-interface AvatarPanelProps {
-  enabled: boolean;
-  onEnabledChange: (enabled: boolean) => void;
-}
-
 function titleCaseState(state: string): string {
-  return state.toLowerCase().replace(/_/g, " ").replace(/(^| )([a-z])/g, (_match: string, prefix: string, letter: string) => `${prefix}${letter.toUpperCase()}`);
+  return state.toLowerCase().replace(/_/g, " ").replace(/(^| )([a-z])/g, (_match, prefix, letter) => prefix + letter.toUpperCase());
 }
 
-export default function AvatarPanel({ enabled, onEnabledChange }: AvatarPanelProps) {
+export default function AvatarPanel() {
   const mountRef = useRef<HTMLDivElement>(null);
   const adapterRef = useRef<VrmAvatarAdapter | null>(null);
   const [snapshot, setSnapshot] = useState<AvatarSnapshot>(DEFAULT_AVATAR_SNAPSHOT);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
-    if (!enabled || !mountRef.current) {
-      adapterRef.current?.dispose();
-      adapterRef.current = null;
-      return;
-    }
-
-    let disposed = false;
-    let mountedAdapter: VrmAvatarAdapter | null = null;
-    const mount = mountRef.current;
-    setLoadError(null);
-    setSnapshot((current) => ({ ...current, modelStatus: "loading", visible: true }));
-
-    const handleRuntimeEvent = (event: Event) => {
-      const detail = (event as CustomEvent<unknown>).detail;
-      const next = normalizeAvatarSnapshot(detail);
+    const apply = (value: unknown) => {
+      const next = normalizeAvatarSnapshot(value);
       setSnapshot(next);
-      adapterRef.current?.setState(next.state);
-      adapterRef.current?.setExpression(next.expression, next.expressionIntensity);
-      adapterRef.current?.setGazeTarget(next.gazeTarget);
-      adapterRef.current?.setSpeaking(next.speaking);
-      adapterRef.current?.updateLipSync(next.mouthOpen);
+      const adapter = adapterRef.current;
+      if (!adapter) return;
+      adapter.setState(next.semanticState);
+      adapter.setLocomotion(next.locomotionState);
+      adapter.setGazeTarget(next.gazeTarget);
+      adapter.setSpeaking(next.speaking);
+      adapter.updateLipSync(next.mouthOpen);
+      adapter.setTargetPosition(next.targetPosition);
+      if (next.action) adapter.playGesture(next.action);
+      (adapter as any).setHeavyActivity?.(["THINKING", "WORKING", "RUNNING_TESTS", "SEARCHING", "READING"].includes(next.semanticState));
     };
 
-    window.addEventListener(AVATAR_EVENT_NAME, handleRuntimeEvent);
-    let source: EventSource | null = null;
-    try {
-      source = new EventSource("/api/avatar/events");
-      source.onmessage = handleRuntimeEvent;
-      source.onerror = () => source?.close();
-    } catch {
-      source = null;
-    }
+    const onCustom = (event: Event) => apply((event as CustomEvent).detail);
+    window.addEventListener(AVATAR_EVENT_NAME, onCustom);
+    const source = new EventSource("/api/avatar-events");
+    source.onmessage = (event) => {
+      try { apply(JSON.parse(event.data)); } catch { /* keep renderer alive on malformed data */ }
+    };
+    return () => {
+      window.removeEventListener(AVATAR_EVENT_NAME, onCustom);
+      source.close();
+    };
+  }, [reloadKey]);
 
-    const load = async () => {
+  useEffect(() => {
+    let cancelled = false;
+    const mount = async () => {
+      if (!mountRef.current) return;
+      setSnapshot((current) => ({ ...current, modelStatus: "loading" }));
       try {
-        const { VrmAvatarAdapter: VrmAvatarAdapterModule } = await import("./vrm-adapter");
-        const adapter = await VrmAvatarAdapterModule.create(mount, MODEL_URL);
-        if (disposed) {
-          adapter.dispose();
-          return;
-        }
-        mountedAdapter = adapter;
+        const { VrmAvatarAdapter: Adapter } = await import("./vrm-adapter");
+        const adapter = await Adapter.create(mountRef.current, MODEL_URL);
+        if (cancelled) { adapter.dispose(); return; }
         adapterRef.current = adapter;
-        setSnapshot((current) => ({ ...current, modelStatus: "ready", visible: true }));
+        setSnapshot((current) => ({ ...current, modelStatus: adapter.modelStatus }));
       } catch (error) {
-        if (disposed) return;
-        setLoadError(error instanceof Error ? error.message : "The VRM mannequin could not be loaded.");
-        setSnapshot((current) => ({ ...current, modelStatus: "error", visible: true, error: "VRM unavailable" }));
+        if (!cancelled) setSnapshot((current) => ({ ...current, modelStatus: "error", error: error instanceof Error ? error.message : "Avatar failed to load" }));
       }
     };
-    void load();
+    mount();
+    return () => { cancelled = true; adapterRef.current?.dispose(); adapterRef.current = null; };
+  }, [reloadKey]);
 
-    return () => {
-      disposed = true;
-      window.removeEventListener(AVATAR_EVENT_NAME, handleRuntimeEvent);
-      source?.close();
-      mountedAdapter?.dispose();
-      if (adapterRef.current === mountedAdapter) adapterRef.current = null;
-    };
-  }, [enabled]);
-
-  useEffect(() => {
-    const heavy = ["THINKING", "WORKING", "CODING", "RUNNING_TESTS", "SEARCHING", "BROWSING"].includes(snapshot.state);
-    adapterRef.current?.setHeavyActivity(heavy);
-  }, [snapshot.state]);
-
-  if (!enabled) {
-    return (
-      <button className="avatar-enable-chip" type="button" onClick={() => onEnabledChange(true)}>
-        <Eye size={14} /> Show avatar
-      </button>
-    );
-  }
-
-  return (
-    <div className={`avatar-overlay avatar-overlay--${snapshot.modelStatus}`} aria-label="Freya avatar">
-      <div className="avatar-overlay__header">
-        <div>
-          <span className="avatar-overlay__eyebrow">Freya avatar</span>
-          <strong>{titleCaseState(snapshot.state)}</strong>
-        </div>
-        <button className="avatar-overlay__icon" type="button" onClick={() => onEnabledChange(false)} aria-label="Hide avatar" title="Hide avatar">
-          <EyeOff size={15} />
-        </button>
-      </div>
-      <div className="avatar-overlay__viewport">
-        <div ref={mountRef} className="avatar-render-target" />
-        {snapshot.modelStatus !== "ready" && (
-          <div className="avatar-fallback" role="status">
-            <div className="avatar-fallback__head"><span className="avatar-fallback__eye avatar-fallback__eye--left" /><span className="avatar-fallback__eye avatar-fallback__eye--right" /></div>
-            <div className="avatar-fallback__body" />
-            <span>{snapshot.modelStatus === "loading" ? "Loading mannequinâ€¦" : "Avatar unavailable"}</span>
-          </div>
-        )}
-      </div>
-      <div className="avatar-overlay__footer">
-        <span className={`avatar-state-dot avatar-state-dot--${snapshot.state.toLowerCase()}`} />
-        <span>{snapshot.lastEvent ? snapshot.lastEvent : "Observing Freya runtime"}</span>
-        {loadError && <button className="avatar-retry" type="button" onClick={() => onEnabledChange(false)} title="Reload avatar"><RotateCcw size={12} /></button>}
-      </div>
-    </div>
-  );
+  const retry = () => setReloadKey((value) => value + 1);
+  return <div className="avatar-panel">
+    <div className="avatar-stage" ref={mountRef} aria-label="Freya avatar world" />
+    <div className="avatar-overlay"><div className="avatar-overlay__footer"><span className={`avatar-state-dot avatar-state-dot--${snapshot.semanticState}`} /><strong>{titleCaseState(snapshot.semanticState)}</strong>{snapshot.locomotionState !== "STANDING" && <span>· {titleCaseState(snapshot.locomotionState)}</span>}<button className="avatar-toggle" type="button" aria-label="Reload avatar" title="Reload avatar" onClick={retry}><RotateCcw size={13} /></button></div></div>
+    {snapshot.modelStatus !== "ready" && <div className="avatar-fallback"><div className="avatar-fallback__head"><span>{snapshot.modelStatus === "loading" ? "Loading Freya…" : "Freya could not load"}</span>{snapshot.modelStatus === "error" && <button className="avatar-retry" type="button" onClick={retry}><RotateCcw size={13} /> Retry</button>}</div></div>}
+  </div>;
 }
