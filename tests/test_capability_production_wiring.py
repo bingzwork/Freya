@@ -67,7 +67,7 @@ def test_registered_capabilities_are_callable_without_initialization_errors(tmp_
             "decide",
             {
                 "task": "choose an inspection action",
-                "options": [{"name": "inspect", "description": "Inspect the workspace"}],
+                "options": [{"name": "inspect", "description": "Inspect the workspace"}, {"name": "skip", "description": "Skip inspection"}],
             },
         )["success"] is True
         assert capabilities["system_monitoring"].execute(

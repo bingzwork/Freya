@@ -32,7 +32,7 @@ class BrowserCapability(BaseCapability):
             description="Navigate and interact with websites through a safety-gated browser session",
             category=CapabilityCategory.EXECUTION,
             is_singleton=True,
-            auto_discoverable=False,
+            auto_discoverable=True,
             default_action="open_url",
             supported_actions=list(_BROWSER_ACTIONS),
             tags=["browser", "website", "navigate", "click", "form"],

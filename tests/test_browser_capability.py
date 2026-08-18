@@ -48,7 +48,7 @@ class FakeSafetyGate:
 
 def test_browser_capability_is_registered_by_production_factory():
     capability = next(cap for cap in create_all_capabilities() if cap.name == "browser_capability")
-    assert capability.metadata.auto_discoverable is False
+    assert capability.metadata.auto_discoverable is True
     assert capability.is_executable() is True
     assert "navigate" in capability.metadata.supported_actions
     assert "take_screenshot" in capability.metadata.supported_actions

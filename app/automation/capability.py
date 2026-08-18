@@ -84,8 +84,8 @@ class AutomationCapability(BaseCapability):
             ],
             tags=[
                 "automation", "schedule", "scheduled", "remind", "reminder", "tomorrow",
-                "recurring", "every", "monday", "workflow", "watch", "folder", "file",
-                "monitor", "website", "active jobs", "job history",
+                "recurring", "every", "monday", "workflow", "watch",
+                "active jobs", "job history",
             ],
         ))
         self._workspace = Path(workspace or Path.cwd())

@@ -1,4 +1,4 @@
-﻿
+
 """
 UnifiedRouter - Single Intent/Control/Capability Router.
 
@@ -68,7 +68,7 @@ class ControlCommandParser:
         ControlCommand.RESUME: [r'\bresume\b', r'\bcontinue\b'],
         ControlCommand.UNDO: [r'\bundo\b'],
         ControlCommand.REDO: [r'\bredo\b'],
-        ControlCommand.STATUS: [r'\bstatus\b', r'what are you doing', r'current plan', r'current step'],
+        ControlCommand.STATUS: [r'^\s*(?:status|show status)\s*[?.!]?$', r'what are you doing', r'current plan', r'current step'],
     }
 
     def parse(self, user_input: str) -> Optional[ControlCommand]:
@@ -214,6 +214,38 @@ class UnifiedRouter:
             classification = self._intent_classifier.classify(user_input, route_context)
             route_context["intent_type"] = classification.intent.value
 
+            # Deterministic capability matches take precedence over generic planning when the router has a strong semantic match.
+            capability_router = getattr(self, "_capability_router", None)
+            task_matches = capability_router.find_matching(user_input, None) if capability_router is not None else []
+            if task_matches:
+                selected_name, selected_confidence = task_matches[0]
+                selected_capability = capability_router.get_capability(selected_name)
+                if selected_confidence >= 0.55 and selected_capability is not None:
+                    selection_metadata = {
+                        "intent_classification": classification.to_dict(),
+                        "selected_capability": selected_name,
+                        "capability_confidence": selected_confidence,
+                    }
+                    if getattr(selected_capability, "safe_query", False):
+                        return RouteResult(
+                            intent=classification.intent,
+                            confidence=max(classification.confidence, selected_confidence),
+                            reason=f"Deterministic capability: {selected_name}",
+                            is_direct_answer=True,
+                            capability_name=selected_name,
+                            routing_metadata=selection_metadata,
+                        )
+                    return RouteResult(
+                        intent=classification.intent,
+                        confidence=max(classification.confidence, selected_confidence),
+                        reason=f"Safety-gated capability: {selected_name}",
+                        is_engineering=True,
+                        capability_name=selected_name,
+                        capability_confidence=selected_confidence,
+                        routing_metadata=selection_metadata,
+                    )
+                    route_context["selected_capability"] = selected_name
+                    route_context["capability_confidence"] = selected_confidence
             # Engineering intents preserve the classifier planning contract.
             # Knowledge-first answerability is for questions, not project changes.
             if classification.intent.requires_planning:

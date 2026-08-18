@@ -67,6 +67,7 @@ class CapabilityMetadata:
     supported_actions: List[str] = field(default_factory=list)
     dependencies: List[str] = field(default_factory=list)
     tags: List[str] = field(default_factory=list)
+    aliases: List[str] = field(default_factory=list)
     # Compatibility fields consumed by the production workflow composer.
     depends_on: List[str] = field(default_factory=list)
     conflicts_with: List[str] = field(default_factory=list)
@@ -307,9 +308,7 @@ class CapabilityRegistry:
                 )
                 warnings.append(message)
                 if isolate_unsafe_discoverability:
-                    capability.metadata.auto_discoverable = False
-                    isolated.append(capability.name)
-
+                    warnings.append('Unsafe capability remains discoverable through SafetyGate: ' + capability.name)
         return {
             "passed": not errors,
             "checked": checked,

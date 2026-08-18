@@ -144,7 +144,7 @@ class MemoryManagementCapability(BaseCapability):
             return {"success": False, "error": str(e)}
 
     def action_retrieve(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
-        """Retrieve through MemoryCoordinatorÃ¢â‚¬â„¢s unified or owned read surfaces."""
+        """Retrieve through MemoryCoordinatorÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢s unified or owned read surfaces."""
         if not self._memory:
             return {"success": False, "error": "MemoryCoordinator unavailable"}
         query = str(inputs.get("query", ""))
@@ -196,6 +196,7 @@ class PlanningEngineCapability(BaseCapability):
             auto_discoverable=True,
             default_action="create_plan",
             supported_actions=["create_plan", "replan", "get_plan"],
+            safe_query=True,
         ))
         self._planner = None
         self._plan_manager = None
@@ -222,8 +223,6 @@ class PlanningEngineCapability(BaseCapability):
 
         task = inputs.get("task", "")
         context = inputs.get("context", {})
-        external_context = context if isinstance(context, str) else json.dumps(context)
-
         try:
             if hasattr(self._planner, "_agent_planner"):
                 plan = self._planner.create_plan(
@@ -447,6 +446,7 @@ class DecisionEngineCapability(BaseCapability):
             auto_discoverable=True,
             default_action="decide",
             supported_actions=["decide"],
+            safe_query=True,
         ))
         self._decision_manager = None
 
@@ -467,10 +467,14 @@ class DecisionEngineCapability(BaseCapability):
         if not self._decision_manager:
             return {"success": False, "error": "Decision manager not initialized"}
 
-        task = inputs.get("task", "")
+        task = str(inputs.get("task", "") or "").strip()
         context = inputs.get("context", {})
-        options = inputs.get("options", [])
+        options = inputs.get("options")
 
+        if not task:
+            return {"success": False, "error": "task is required"}
+        if not isinstance(options, list) or len(options) < 2:
+            return {"success": False, "error": "at least two decision options are required"}
         try:
             from app.decision.models import DecisionContext, DecisionOption
             decision_context = DecisionContext(
@@ -481,7 +485,7 @@ class DecisionEngineCapability(BaseCapability):
                 component="decision_engine",
             )
             decision_options = [
-                DecisionOption.from_dict(option) if isinstance(option, dict) else option
+                DecisionOption.from_dict(option) if isinstance(option, dict) else DecisionOption(name=str(option), description=str(option), action=str(option))
                 for option in options
             ]
             result = self._decision_manager.decide(decision_context, decision_options)
@@ -624,6 +628,7 @@ class SystemMonitoringCapability(BaseCapability):
             auto_discoverable=True,
             default_action="get_health",
             supported_actions=["get_health", "get_metrics", "check_component"],
+            safe_query=True,
         ))
         self._observability = None
 
@@ -778,6 +783,7 @@ class DebuggingCapability(BaseCapability):
             auto_discoverable=True,
             default_action="inspect_error",
             supported_actions=["inspect_error", "run_diagnostics", "validate_fix"],
+            safe_query=True,
         ))
         self._tools = None
         self._verifier = None
@@ -887,6 +893,7 @@ class DependencyManagementCapability(BaseCapability):
                 "inspect", "check_installed", "validate", "install", "update",
                 "remove", "verify_environment",
             ],
+            safe_query=True,
         ))
         self._tools = None
         self._verifier = None
@@ -1048,6 +1055,9 @@ class ToolRegistryCapability(BaseCapability):
             auto_discoverable=True,
             default_action="list_tools",
             supported_actions=["list_tools", "execute_tool"],
+            tags=["tools", "tool registry", "tool metadata"],
+            aliases=["available tools", "registered tools", "list tools"],
+            safe_query=True,
         ))
         self._tools = None
 
@@ -1111,6 +1121,7 @@ class SafetyGuardCapability(BaseCapability):
             auto_discoverable=True,
             default_action="check",
             supported_actions=["check"],
+            safe_query=True,
         ))
         self._safety_gate = None
 
@@ -1160,7 +1171,7 @@ class SafetyGuardCapability(BaseCapability):
 # =============================================================================
 
 class KnowledgeBaseCapability(BaseCapability):
-    """Thin adapter over MemoryCoordinatorÃ¢â‚¬â„¢s UnifiedRetrieval path."""
+    """Thin adapter over MemoryCoordinatorÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢s UnifiedRetrieval path."""
     def __init__(self):
         super().__init__(CapabilityMetadata(
             name="knowledge_base",
@@ -1171,6 +1182,7 @@ class KnowledgeBaseCapability(BaseCapability):
             auto_discoverable=True,
             default_action="search",
             supported_actions=["search", "store_knowledge"],
+            safe_query=True,
         ))
         self._memory = None
         self._retrieval = None
@@ -1217,7 +1229,7 @@ class KnowledgeBaseCapability(BaseCapability):
 
 
     def action_store_knowledge(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
-        """Store knowledge through MemoryCoordinatorÃ¢â‚¬â„¢s canonical learning write."""
+        """Store knowledge through MemoryCoordinatorÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢s canonical learning write."""
         if not self._memory:
             return {"success": False, "error": "MemoryCoordinator unavailable"}
         content = str(inputs.get("content", "")).strip()
@@ -1248,7 +1260,7 @@ class KnowledgeBaseCapability(BaseCapability):
 # =============================================================================
 
 class ReasoningEngineCapability(BaseCapability):
-    """Thin adapter over IntelligenceÃ¢â‚¬â„¢s knowledge-first reasoning support."""
+    """Thin adapter over IntelligenceÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢s knowledge-first reasoning support."""
 
     def __init__(self):
         super().__init__(CapabilityMetadata(
@@ -1260,6 +1272,7 @@ class ReasoningEngineCapability(BaseCapability):
             auto_discoverable=True,
             default_action="analyze",
             supported_actions=["analyze", "synthesize"],
+            safe_query=True,
         ))
         self._intelligence = None
 

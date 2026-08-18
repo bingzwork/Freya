@@ -272,7 +272,7 @@ class SystemInitializer:
             CapabilityMetadata(
                 name="tool_dispatch",
                 description="Internal approved action dispatch to ToolManager",
-                auto_discoverable=False,
+                auto_discoverable=True,
                 default_action="execute",
                 supported_actions=["execute"],
                 required_collaborators=["tool_manager"],

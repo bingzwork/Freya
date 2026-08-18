@@ -1,4 +1,4 @@
-﻿"""Capability Router.
+"""Capability Router.
 
 Routes user queries to appropriate capability handlers when the query
 can be answered directly without invoking the LLM.
@@ -48,6 +48,7 @@ class Capability:
     patterns: List[str] = field(default_factory=list)
     keywords: List[str] = field(default_factory=list)
     intent_types: List[str] = field(default_factory=list)
+    safe_query: bool = False
 
     def matches(self, query: str, intent_type: Optional[str] = None) -> Tuple[bool, float]:
         """Check if this capability matches the user query.
@@ -74,7 +75,9 @@ class Capability:
         for pattern in self.patterns:
             try:
                 if re.search(pattern, query_lower, re.IGNORECASE):
-                    confidence = max(confidence, 0.98)
+                    pattern_words = len(re.findall(r"[A-Za-z0-9]+", pattern))
+                    pattern_confidence = min(0.98 + 0.003 * max(0, pattern_words - 1), 0.995)
+                    confidence = max(confidence, pattern_confidence)
                     pattern_matched = True
                     break  # First matching pattern is enough
             except re.error:
@@ -170,6 +173,7 @@ class CapabilityRouter:
         patterns = None,
         keywords = None,
         intent_types = None,
+        safe_query = False,
     ) -> None:
         """Convenience method to register a capability by parameters.
         
@@ -188,6 +192,7 @@ class CapabilityRouter:
             patterns=patterns or [],
             keywords=keywords or [],
             intent_types=intent_types or [],
+            safe_query=safe_query,
         )
         self.register(capability)
 
@@ -228,7 +233,7 @@ class CapabilityRouter:
                 matches.append((name, confidence))
 
         # Sort by confidence (descending)
-        matches.sort(key=lambda x: x[1], reverse=True)
+        matches.sort(key=lambda x: (-x[1], x[0]))
 
         return matches
 

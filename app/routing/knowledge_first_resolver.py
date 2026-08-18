@@ -1,4 +1,4 @@
-﻿"""
+"""
 KnowledgeFirstResolver - Core component for knowledge-first routing.
 
 Implements the knowledge-first resolution path per TARGET_ARCHITECTURE.md:
@@ -92,7 +92,19 @@ class KnowledgeFirstResolver:
         reasoning = [f"Resolving query: '{query[:100]}...'"]
 
         direct_matches = self._capability_router.find_matching(query, intent_type.value if intent_type is not None else None)
-        authoritative_matches = [item for item in direct_matches if item[0] in {"show_identity", "show_capabilities", "capability_introspection"}]
+        explicit_matches = [
+            item for item in direct_matches
+            if item[1] >= 0.95
+        ]
+        authoritative_names = {
+            "show_identity",
+            "show_capabilities",
+            "capability_introspection",
+        }
+        authoritative_matches = list(dict.fromkeys(
+            [item for item in direct_matches if item[0] in authoritative_names]
+            + explicit_matches
+        ))
         if authoritative_matches:
             name, confidence = authoritative_matches[0]
             result = self._capability_router.execute_named(name, query, **dict(context or {}))
