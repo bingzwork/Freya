@@ -163,8 +163,31 @@ class KeywordBasedSelector(CapabilitySelector):
         if not keywords:
             return []
 
-        # Find capabilities matching keywords
-        return registry.find_capabilities_by_keywords(keywords)
+        # Find active capabilities whose canonical metadata matches the keywords.
+        # CapabilityRegistry intentionally exposes get_all() as its stable read API;
+        # do not depend on an undeclared registry helper here.
+        selected = []
+        normalized_keywords = {str(keyword).strip().lower() for keyword in keywords if str(keyword).strip()}
+        for capability in registry.get_all().values():
+            if capability.state != CapabilityState.ACTIVE:
+                continue
+            if capability.metadata.name in spec.excluded_capabilities:
+                continue
+            metadata = capability.metadata
+            searchable = {
+                metadata.name.lower(),
+                *[str(tag).lower() for tag in metadata.tags],
+                *[str(alias).lower() for alias in metadata.aliases],
+            }
+            if any(
+                keyword == candidate
+                or (len(keyword) >= 4 and keyword in candidate)
+                or (len(candidate) >= 4 and candidate in keyword)
+                for keyword in normalized_keywords
+                for candidate in searchable
+            ):
+                selected.append(capability)
+        return selected
 
 
 class DependencyAwareSelector(CapabilitySelector):
@@ -417,16 +440,12 @@ class WorkflowComposer:
     def _compose_parallel(self, spec: WorkflowSpec, capabilities: List[Capability]) -> List[WorkflowStep]:
         """Compose capabilities for parallel execution (with max_parallel limit)."""
         steps = []
-        # Group capabilities into batches of max_parallel
+        previous_batch_ids = []
+        # Group capabilities into batches of max_parallel.
         for i in range(0, len(capabilities), spec.max_parallel):
             batch = capabilities[i:i + spec.max_parallel]
-            # First batch has no dependencies, subsequent batches depend on previous batch completion
-            depends_on = []
-            if i > 0:
-                # Depend on all steps from previous batch
-                batch_start = i - spec.max_parallel
-                batch_end = i
-                depends_on = [f"step_{j}" for j in range(batch_start, min(batch_end, len(steps)))]
+            depends_on = list(previous_batch_ids)
+            current_batch_ids = []
 
             for j, cap in enumerate(batch):
                 step_idx = i + j
@@ -437,10 +456,12 @@ class WorkflowComposer:
                     action=action,
                     depends_on=depends_on,
                     timeout_seconds=cap.metadata.timeout_seconds,
-                    priority=TaskPriority.NORMAL,
+                    priority=TaskPriority.MEDIUM,
                     metadata={"step_index": step_idx, "batch": i // spec.max_parallel, "capability_version": cap.metadata.version}
                 )
                 steps.append(step)
+                current_batch_ids.append(step.step_id)
+            previous_batch_ids = current_batch_ids
 
         return steps
 
@@ -465,7 +486,7 @@ class WorkflowComposer:
                 inputs=inputs,
                 depends_on=[steps[-1].step_id] if steps else [],
                 timeout_seconds=cap.metadata.timeout_seconds,
-                priority=TaskPriority.NORMAL,
+                priority=TaskPriority.MEDIUM,
                 metadata={"step_index": i, "pipeline": True, "capability_version": cap.metadata.version}
             )
             steps.append(step)
@@ -495,7 +516,7 @@ class WorkflowComposer:
                 action=action,
                 depends_on=[],
                 timeout_seconds=cap.metadata.timeout_seconds,
-                priority=TaskPriority.NORMAL,
+                priority=TaskPriority.MEDIUM,
                 metadata={"step_index": i, "phase": "fan_out", "capability_version": cap.metadata.version}
             )
             steps.append(step)

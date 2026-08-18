@@ -413,6 +413,33 @@ class WorkflowOrchestrator:
         workflow.metadata["simulation_result"] = predicted
         return predicted
 
+    def validate_intent(self, user_input: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Validate that an intent composes into executable steps without scheduling or executing it."""
+        if self._state != OrchestratorState.RUNNING:
+            raise RuntimeError(f"Orchestrator not running (state: {self._state})")
+        preflight_context = dict(context or {})
+        excluded = ["automation"] if preflight_context.get("source") in {"automation_preflight", "automation_capability"} else []
+        spec = WorkflowSpec(
+            name=f"Preflight: {user_input[:50]}",
+            description=user_input,
+            intent=None,
+            strategy=self.config.default_strategy,
+            context={"user_query": user_input, **preflight_context},
+            excluded_capabilities=excluded,
+            max_steps=self.config.max_workflow_steps,
+            max_parallel=self.config.max_parallel_steps,
+            timeout_seconds=self.config.workflow_timeout,
+        )
+        workflow = self._workflow_composer.compose(spec)
+        if not workflow.steps:
+            raise ValueError("Workflow has no executable steps")
+        return {
+            "valid": True,
+            "workflow_id": workflow.spec.workflow_id,
+            "steps": len(workflow.steps),
+            "capabilities": [step.capability_name for step in workflow.steps],
+        }
+
     def execute_workflow(self, spec: WorkflowSpec, async_mode: bool = True) -> str:
         if self._state != OrchestratorState.RUNNING:
             raise RuntimeError(f"Orchestrator not running (state: {self._state})")
@@ -488,12 +515,15 @@ class WorkflowOrchestrator:
         return execution_id
 
     def execute_intent(self, user_input: str, context: Optional[Dict[str, Any]] = None, async_mode: bool = True) -> str:
+        execution_context = dict(context or {})
+        excluded = ["automation"] if execution_context.get("source") == "automation_capability" else []
         spec = WorkflowSpec(
             name=f"Intent: {user_input[:50]}",
             description=user_input,
             intent=None,
             strategy=self.config.default_strategy,
-            context=context or {},
+            context=execution_context,
+            excluded_capabilities=excluded,
             max_steps=self.config.max_workflow_steps,
             max_parallel=self.config.max_parallel_steps,
             timeout_seconds=self.config.workflow_timeout,

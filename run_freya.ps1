@@ -21,6 +21,16 @@ Stop-FreyaPort 8787
 Stop-FreyaPort 5173
 Start-Sleep -Milliseconds 500
 
+$venvSitePackages = Join-Path $root '.venv\Lib\site-packages'
+if (Test-Path -LiteralPath $venvSitePackages) {
+    $existingPythonPath = [Environment]::GetEnvironmentVariable('PYTHONPATH', 'Process')
+    $env:PYTHONPATH = if ([string]::IsNullOrWhiteSpace($existingPythonPath)) {
+        $venvSitePackages
+    } else {
+        "$venvSitePackages;$existingPythonPath"
+    }
+}
+
 $backendArgs = @((('"{0}"' -f $uiServer)), '--host', '127.0.0.1', '--port', '8787')
 $backend = Start-Process -FilePath $python -ArgumentList $backendArgs -WorkingDirectory $root -PassThru
 $pnpm = (Get-Command pnpm.cmd -ErrorAction Stop).Source

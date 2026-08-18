@@ -62,6 +62,7 @@ class CapabilityRegistrationBridge:
         "tool_dispatch": ["execute tool", "run tool", "run registered tool", "dispatch tool"],
         "iot": ["smart home", "iot device", "home automation"],
         "calendar": ["calendar", "appointments", "what appointments", "schedule appointment"],
+        "automation": ["remind me", "set a reminder", "schedule a reminder", "scheduled reminder", "every day", "every week"],
         "capability_introspection": ["available capabilities", "capability list", "what capabilities are available"],
         "computer": ["computer control", "open application", "open calculator", "open the calculator", "launch application", "desktop control"],
         "data_analysis": ["analyze csv", "analyze this csv", "analyze data", "analyze spreadsheet", "data analysis"],

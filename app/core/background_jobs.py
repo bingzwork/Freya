@@ -88,6 +88,10 @@ class RetryConfig:
     retry_on: tuple = (Exception,)
 
 
+class NonRetryableJobError(RuntimeError):
+    """Deterministic job failure that must become terminal without retry."""
+
+
 class JobTriggerType(Enum):
     """Type of job trigger."""
     ONE_TIME = "one_time"
@@ -282,7 +286,13 @@ class Job:
                 return False
             if self.is_paused():
                 return False
-            if self.status in {JobStatus.RUNNING, JobStatus.COMPLETED}:
+            if self.status in {
+                JobStatus.RUNNING,
+                JobStatus.COMPLETED,
+                JobStatus.FAILED,
+                JobStatus.CANCELLED,
+                JobStatus.PAUSED,
+            }:
                 return False
             if self.max_runs is not None and self.run_count >= self.max_runs:
                 self.status = JobStatus.COMPLETED
@@ -643,7 +653,11 @@ class BackgroundJobService:
             job.last_error = error_msg
 
             # Check if should retry
-            if job.should_retry() and isinstance(error, job.retry_config.retry_on):
+            if (
+                not isinstance(error, NonRetryableJobError)
+                and job.should_retry()
+                and isinstance(error, job.retry_config.retry_on)
+            ):
                 job.current_retry += 1
                 job.status = JobStatus.RETRYING
                 delay = job.calculate_retry_delay()
