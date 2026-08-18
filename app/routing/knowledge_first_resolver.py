@@ -152,7 +152,31 @@ class KnowledgeFirstResolver:
                     )
                 except NoCapabilityError as error:
                     reasoning.append(f"Local conversational capability unavailable: {error}")
+            if conversational_intent == "stable_explanation":
+                local_results = self._unified_retrieval.retrieve(
+                    RetrievalQuery(query=query, context=context or {}, max_results=10, min_score=0.2)
+                )
+                learned_results = [
+                    result for result in local_results
+                    if result.source in {"lessons", "semantic", "experience", "knowledge"}
+                ]
+                if learned_results:
+                    reasoning.append("Local learned knowledge hit; model fallback suppressed")
+                    return ResolutionResult(
+                        action="answer",
+                        answer=self._format_answer_from_results(query, learned_results),
+                        confidence=max(result.score for result in learned_results),
+                        sources=list(dict.fromkeys(result.source for result in learned_results)),
+                        routing_metadata={
+                            "conversational_intent": conversational_intent,
+                            "suppress_research": True,
+                            "local_knowledge_reuse": True,
+                            "model_fallback_suppressed": True,
+                        },
+                        reasoning=reasoning,
+                    )
             return ResolutionResult(
+
                 action="llm_fallback",
                 llm_prompt=query,
                 llm_priority=LLMPriority.CHAT,

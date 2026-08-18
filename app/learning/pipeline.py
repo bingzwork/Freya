@@ -14,6 +14,7 @@ No LLM calls. Deterministic local processing only.
 import time
 import hashlib
 import json
+import re
 import threading
 from collections import deque
 from typing import Any, Dict, List
@@ -253,6 +254,32 @@ class LearningPipeline:
         return result
 
     @staticmethod
+    def _contains_sensitive_or_hidden_trace(value: Any) -> bool:
+        """Reject secrets and hidden reasoning before durable promotion."""
+        sensitive_keys = {"password", "passwd", "api_key", "apikey", "secret", "credential", "access_token", "refresh_token", "session_token", "authorization", "bearer"}
+        hidden_keys = {"chain_of_thought", "scratchpad", "reasoning_trace", "internal_reasoning", "deliberation", "hidden_reasoning"}
+        secret_patterns = (
+            r"\b(?:sk|ghp|github_pat|xox[baprs])-[A-Za-z0-9_\-]{16,}\b",
+            r"\bBearer\s+[A-Za-z0-9._\-]{16,}\b",
+            r"\b(?:api[_-]?key|password|secret|token|credential)\s*[:=]\s*[^\s,;]+",
+        )
+
+        def inspect(node: Any, key: str = "") -> bool:
+            normalized_key = re.sub(r"[^a-z0-9]+", "_", str(key).lower()).strip("_")
+            if normalized_key in hidden_keys:
+                return True
+            if normalized_key in sensitive_keys and str(node).strip():
+                return True
+            if isinstance(node, dict):
+                return any(inspect(child, child_key) for child_key, child in node.items())
+            if isinstance(node, (list, tuple, set)):
+                return any(inspect(child, normalized_key) for child in node)
+            text = str(node or "")
+            return any(re.search(pattern, text, re.IGNORECASE) for pattern in secret_patterns)
+
+        return inspect(value)
+
+    @staticmethod
     def _is_unverified_outcome(candidate) -> bool:
         """Reject execution/answer observations that have no verified outcome."""
         candidate_type = _candidate_type_value(candidate)
@@ -392,6 +419,35 @@ class LearningPipeline:
         Each knowledge item has: title, content, category, confidence, source
         """
         knowledge_items = []
+        raw_observation = dict(candidate.raw_observation or {})
+        explicit_metadata = dict(raw_observation.get("metadata") or {})
+        explicit_content = str(raw_observation.get("content") or raw_observation.get("description") or "").strip()
+        explicit_title = str(raw_observation.get("title") or "").strip()
+        if explicit_title and explicit_content:
+            explicit_metadata.setdefault("candidate_id", candidate.id)
+            explicit_metadata.setdefault(
+                "timestamp",
+                candidate.timestamp.isoformat() if hasattr(candidate.timestamp, "isoformat") else str(candidate.timestamp),
+            )
+            explicit_metadata.setdefault("source_component", candidate.source_component)
+            explicit_metadata.setdefault("source_session_id", candidate.source_session_id)
+            explicit_metadata.setdefault("verification_status", raw_observation.get("verification_status"))
+            explicit_metadata = {key: value for key, value in explicit_metadata.items() if value is not None}
+            explicit_item = {
+                "title": explicit_title,
+                "content": explicit_content,
+                "category": str(raw_observation.get("category") or "knowledge"),
+                "confidence": float(raw_observation.get("confidence") or explicit_metadata.get("confidence") or observed.confidence),
+                "source": str(raw_observation.get("source") or explicit_metadata.get("source") or candidate.source_component),
+                "tags": list(candidate.tags),
+                "metadata": explicit_metadata,
+            }
+            return ExtractedLearning(
+                candidate_id=candidate.id,
+                knowledge_items=[explicit_item],
+                extraction_notes="Extracted explicit structured lesson from the learning capability",
+                metadata={"items_extracted": 1, "structured_lesson": True},
+            )
 
         # Extract learning from different parts of the observation
 
@@ -527,19 +583,41 @@ class LearningPipeline:
             if len(content.strip()) < 10:
                 validation_reasons.append("Content too short")
 
-            # Explicitly unverified LLM/answer output must never pass into durable learning.
+            if self._contains_sensitive_or_hidden_trace({"item": item, "candidate": candidate.raw_observation}):
+                validation_reasons.append("Sensitive or hidden reasoning content")
+
+            # Explicitly unverified LLM/answer/lesson output must never pass into durable learning.
+            item_metadata = item.get("metadata") or {}
             verification_status = (
-                candidate.raw_observation.get("verified")
-                if "verified" in candidate.raw_observation
-                else candidate.raw_observation.get(
-                    "answer_verified", candidate.raw_observation.get("verification_status")
-                )
+                item_metadata.get("verified")
+                if "verified" in item_metadata
+                else item_metadata.get("verification_status")
             )
-            if candidate.candidate_type == LearningCandidateType.ANSWER_VERIFICATION and (
-                verification_status is False
-                or str(verification_status).strip().lower() in {"false", "unverified", "failed", "rejected"}
+            if verification_status is None:
+                verification_status = (
+                    candidate.raw_observation.get("verified")
+                    if "verified" in candidate.raw_observation
+                    else candidate.raw_observation.get(
+                        "answer_verified", candidate.raw_observation.get("verification_status")
+                    )
+                )
+            normalized_verification_status = str(verification_status).strip().lower()
+            failed_execution_is_observed = (
+                candidate.candidate_type == LearningCandidateType.EXECUTION_OUTCOME
+                and normalized_verification_status == "failed"
+            )
+            if (
+                not failed_execution_is_observed
+                and (
+                    verification_status is False
+                    or normalized_verification_status in {"false", "unknown", "not_run", "unverified", "failed", "rejected"}
+                )
             ):
-                validation_reasons.append("Unverified answer output")
+                validation_reasons.append(
+                    "Unverified answer output"
+                    if candidate.candidate_type == LearningCandidateType.ANSWER_VERIFICATION
+                    else "Unverified durable learning output"
+                )
 
             # If no validation reasons, item is valid
             if not validation_reasons:

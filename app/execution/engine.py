@@ -170,6 +170,18 @@ class UnifiedExecutor:
         self._current_task_title = None
         self._completed_tasks: List[str] = []
         self._plan_tasks: List[Task] = []
+        self._active_request_context: Dict[str, Any] = {}
+
+    def set_request_context(self, context: Optional[Dict[str, Any]]) -> None:
+        """Bind the canonical request identity for task-level safety decisions."""
+        self._active_request_context = dict(context or {})
+
+    def _request_identity(self) -> Dict[str, Any]:
+        return {
+            key: self._active_request_context.get(key)
+            for key in ("trace_id", "correlation_id", "request_id", "session_id", "source", "channel")
+            if self._active_request_context.get(key) is not None
+        }
 
     def set_conversation_control(self, control: ConversationControlHandler) -> None:
         self._conversation_control = control
@@ -443,6 +455,8 @@ class ExecutionEngine:
             self._active_request_context = context
             if hasattr(self._execution_verifier, "set_request_context"):
                 self._execution_verifier.set_request_context(context)
+            if hasattr(self._executor, "set_request_context"):
+                self._executor.set_request_context(context)
             with correlation_scope(trace_id, prefix="request"):
                 try:
                     return self._execute_plan_with_context(task, allow_mutations)
@@ -450,6 +464,8 @@ class ExecutionEngine:
                     self._active_request_context = {}
                     if hasattr(self._execution_verifier, "set_request_context"):
                         self._execution_verifier.set_request_context({})
+                    if hasattr(self._executor, "set_request_context"):
+                        self._executor.set_request_context({})
 
     def _execute_plan_with_context(self, task: str, allow_mutations: bool = True) -> str:
         self._chat_activity.chat_started()

@@ -20,7 +20,9 @@ Features:
 """
 
 import logging
+import re
 import time
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -372,17 +374,43 @@ class EngineeringLessonsRetriever(MemoryRetriever):
         results = []
         category = query.boost_category or query.context.get("category") if query.context else None
 
-        # Search for patterns (positive lessons) by default
+        # Search for patterns (positive lessons) by default.
         lessons = self.memory.search(
             keyword=query.query if query.query else None,
             category=category,
             limit=query.max_results,
         )
+        overlap_scores = {}
+        if not lessons and query.query:
+            stopwords = {"a", "an", "and", "as", "at", "for", "from", "in", "into", "me", "of", "on", "the", "to", "with"}
+            query_tokens = {
+                token for token in re.split(r"[^a-z0-9]+", query.query.lower().replace("_", " "))
+                if len(token) >= 3 and token not in stopwords
+            }
+            candidates = []
+            for lesson in self.memory.all():
+                if category and lesson.category != category:
+                    continue
+                searchable = " ".join(
+                    [lesson.title, lesson.description, " ".join(lesson.tags), str(lesson.context)]
+                ).lower().replace("_", " ")
+                lesson_tokens = {
+                    token for token in re.split(r"[^a-z0-9]+", searchable) if len(token) >= 3
+                }
+                overlap = len(query_tokens & lesson_tokens)
+                if overlap >= 1:
+                    candidates.append((overlap, lesson.confidence, lesson))
+                    overlap_scores[lesson.id] = overlap
+            candidates.sort(key=lambda value: (value[0], value[1]), reverse=True)
+            lessons = [value[2] for value in candidates[: query.max_results]]
 
         severity_rank = {"critical": 1.0, "important": 0.8, "recommended": 0.6, "info": 0.4}
 
         for lesson in lessons:
             score = severity_rank.get(lesson.severity, 0.5)
+            if lesson.id in overlap_scores:
+                score += min(0.3, overlap_scores[lesson.id] * 0.1)
+
             if lesson.lesson_type == "anti_pattern":
                 score *= 0.8  # Slightly lower for anti-patterns unless specifically looking for failures
 
@@ -393,6 +421,19 @@ class EngineeringLessonsRetriever(MemoryRetriever):
                 content = f"Lesson [{lesson.lesson_type}/{lesson.severity}] {lesson.title}: {lesson.description}"
                 if lesson.rationale:
                     content += f" Rationale: {lesson.rationale}"
+                context = lesson.context or {}
+                skill = context.get("skill") or {}
+                if skill:
+                    content += (
+                        f" Applicability: {skill.get('applicability', '')}."
+                        f" Instructions: {skill.get('instructions', '')}."
+                        f" Validation: {skill.get('validation', '')}."
+                    )
+                if context.get("capability") or context.get("action"):
+                    content += f" Capability: {context.get('capability', '')}. Action: {context.get('action', '')}."
+                if context.get("safety_requirement"):
+                    content += f" Safety requirement: {context['safety_requirement']}."
+
                 results.append(RetrievalResult(
                     content=content,
                     source=self.source_name,
@@ -743,8 +784,30 @@ class SemanticMemoryRetriever(MemoryRetriever):
                     content += f" (language: {entry.language})"
                 if entry.examples:
                     content += f"\nExample: {entry.examples[0].get('code', '')[:100]}"
+                learning_metadata = dict(entry.metadata or {})
+                temporal_keys = {"observed_at", "learned_at", "valid_at", "valid_until", "expires_at", "temporal_scope"}
+                temporal_metadata = {key: learning_metadata[key] for key in temporal_keys if key in learning_metadata}
+                stale = False
+                for expiry_key in ("valid_until", "expires_at"):
+                    expiry_value = temporal_metadata.get(expiry_key)
+                    if expiry_value:
+                        try:
+                            expiry = datetime.fromisoformat(str(expiry_value).replace("Z", "+00:00"))
+                            if expiry.tzinfo is None:
+                                expiry = expiry.replace(tzinfo=timezone.utc)
+                            stale = expiry < datetime.now(timezone.utc)
+                        except (TypeError, ValueError):
+                            stale = False
+                        if stale:
+                            break
+                if temporal_metadata:
+                    content += f" Temporal context: {temporal_metadata}."
+                if stale:
+                    content += " [STALE: revalidate before treating as current.]"
+                    score *= 0.5
 
                 results.append(RetrievalResult(
+
                     content=content,
                     source=self.source_name,
                     source_id=entry.entry_id,
@@ -756,7 +819,11 @@ class SemanticMemoryRetriever(MemoryRetriever):
                         "confidence": entry.confidence,
                         "source": entry.source,
                         "examples_count": len(entry.examples),
+                        "temporal": temporal_metadata,
+                        "stale": stale,
+                        "learned_metadata": learning_metadata,
                     },
+
                     timestamp=entry.updated_at,
                 ))
 

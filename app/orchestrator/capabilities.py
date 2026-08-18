@@ -600,14 +600,20 @@ class LearningPipelineCapability(BaseCapability):
         description = str(inputs.get("description", "")).strip()
         if not title or not description:
             return {"success": False, "error": "title and description required"}
+        lesson_metadata = dict(inputs.get("metadata") or {})
+        lesson_metadata.setdefault("learning_type", inputs.get("learning_type"))
+        lesson_metadata = {key: value for key, value in lesson_metadata.items() if value is not None}
         return self._run_candidate(
             inputs,
             raw_observation={
                 "title": title,
                 "description": description,
+                "content": description,
                 "category": inputs.get("category", "task"),
                 "severity": inputs.get("severity", "recommended"),
                 "rationale": inputs.get("rationale", ""),
+                "metadata": lesson_metadata,
+                **lesson_metadata,
             },
             tags=list(inputs.get("tags", []) or []) + ["lesson"],
         )

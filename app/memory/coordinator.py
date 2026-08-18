@@ -268,8 +268,30 @@ class MemoryCoordinator:
         with self._lock:
             if learning_type == "knowledge":
                 existing = self._semantic.get(category, title)
+                incoming_is_user_correction = bool(
+                    metadata.get("user_correction")
+                    or metadata.get("authority") in {"user", "user_correction"}
+                    or source.lower() in {"user", "user_input", "user_correction"}
+                )
                 if existing is not None:
                     metadata = self._merge_learning_metadata(existing.metadata, metadata)
+                    if not incoming_is_user_correction and confidence < existing.confidence:
+                        metadata["conflict_rejected"] = True
+                        metadata["conflict_reason"] = "weaker evidence cannot replace stronger knowledge"
+                        entry = self._semantic.set(
+                            category=category,
+                            title=title,
+                            content=existing.content,
+                            language=existing.language,
+                            tags=existing.tags,
+                            confidence=existing.confidence,
+                            source=existing.source,
+                            examples=existing.examples,
+                            related_concepts=existing.related_concepts,
+                            prerequisites=existing.prerequisites,
+                            metadata=metadata,
+                        )
+                        return entry.entry_id
                     confidence = min(1.0, max(existing.confidence, confidence) + 0.05)
                 entry = self._semantic.set(
                     category=category,
