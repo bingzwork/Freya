@@ -93,7 +93,7 @@ export class VrmAvatarAdapter implements AvatarAdapter {
       const gltf = await loader.loadAsync(modelUrl);
       this.vrm = gltf.userData.vrm;
       if (!this.vrm) throw new Error("VRM loader returned no avatar model");
-      this.vrm.scene.rotation.y = Math.PI;
+      this.vrm.scene.rotation.y = 0;
       scene.add(this.vrm.scene);
       this.gazeObject = new THREE.Object3D();
       scene.add(this.gazeObject);

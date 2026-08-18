@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+﻿import { useEffect, useRef, useState } from "react";
 import { Eye, EyeOff, RotateCcw } from "lucide-react";
 import {
   DEFAULT_AVATAR_SNAPSHOT,
@@ -101,31 +101,31 @@ export default function AvatarPanel({ enabled, onEnabledChange }: AvatarPanelPro
   }
 
   return (
-    <aside className={`avatar-panel avatar-panel--${snapshot.modelStatus}`} aria-label="Freya avatar">
-      <div className="avatar-panel__header">
+    <div className={`avatar-overlay avatar-overlay--${snapshot.modelStatus}`} aria-label="Freya avatar">
+      <div className="avatar-overlay__header">
         <div>
-          <span className="avatar-panel__eyebrow">Freya avatar</span>
+          <span className="avatar-overlay__eyebrow">Freya avatar</span>
           <strong>{titleCaseState(snapshot.state)}</strong>
         </div>
-        <button className="avatar-panel__icon" type="button" onClick={() => onEnabledChange(false)} aria-label="Hide avatar" title="Hide avatar">
+        <button className="avatar-overlay__icon" type="button" onClick={() => onEnabledChange(false)} aria-label="Hide avatar" title="Hide avatar">
           <EyeOff size={15} />
         </button>
       </div>
-      <div className="avatar-panel__viewport">
+      <div className="avatar-overlay__viewport">
         <div ref={mountRef} className="avatar-render-target" />
         {snapshot.modelStatus !== "ready" && (
           <div className="avatar-fallback" role="status">
             <div className="avatar-fallback__head"><span className="avatar-fallback__eye avatar-fallback__eye--left" /><span className="avatar-fallback__eye avatar-fallback__eye--right" /></div>
             <div className="avatar-fallback__body" />
-            <span>{snapshot.modelStatus === "loading" ? "Loading mannequin…" : "Avatar unavailable"}</span>
+            <span>{snapshot.modelStatus === "loading" ? "Loading mannequinâ€¦" : "Avatar unavailable"}</span>
           </div>
         )}
       </div>
-      <div className="avatar-panel__footer">
+      <div className="avatar-overlay__footer">
         <span className={`avatar-state-dot avatar-state-dot--${snapshot.state.toLowerCase()}`} />
         <span>{snapshot.lastEvent ? snapshot.lastEvent : "Observing Freya runtime"}</span>
         {loadError && <button className="avatar-retry" type="button" onClick={() => onEnabledChange(false)} title="Reload avatar"><RotateCcw size={12} /></button>}
       </div>
-    </aside>
+    </div>
   );
 }
