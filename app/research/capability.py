@@ -13,13 +13,15 @@ import concurrent.futures
 import ipaddress
 import json
 import logging
+import requests
 import os
 import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence
-from urllib.parse import quote_plus, urljoin, urlparse
+from urllib.parse import quote_plus, urljoin, urlparse, parse_qs, urlencode
 from urllib.request import Request, urlopen
+from bs4 import BeautifulSoup
 
 from app.orchestrator.capability_registry import Capability, CapabilityCategory, CapabilityMetadata, CapabilityState
 from app.software_engineering_knowledge.external_import import InternetResearchImporter
@@ -216,6 +218,30 @@ def _jsonable(value: Any) -> Any:
     if isinstance(value, dict):
         return {key: _jsonable(item) for key, item in value.items()}
     return value
+def _usable_public_search_results(records: Any) -> list[dict[str, Any]]:
+    """Keep actual public pages and reject search-homepage garbage."""
+    results: list[dict[str, Any]] = []
+    search_hosts = {"google.com", "www.google.com", "google.com.ph", "www.google.com.ph", "search.google", "bing.com", "www.bing.com", "search.yahoo.com", "yahoo.com", "www.yahoo.com", "duckduckgo.com", "html.duckduckgo.com", "startpage.com", "www.startpage.com"}
+    for raw in records if isinstance(records, list) else []:
+        if not isinstance(raw, dict):
+            continue
+        item = dict(_jsonable(raw))
+        url = str(item.get("url") or item.get("source_url") or "").strip()
+        if not url.startswith(("http://", "https://")):
+            continue
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").lower()
+        path = (parsed.path or "/").rstrip("/").lower() or "/"
+        is_search_home = host in search_hosts and (path in {"/", "/search", "/xhtml", "/html", "/images"} or path.startswith("/search/") or path.startswith("/xhtml/"))
+        title = str(item.get("title") or "").strip().lower()
+        if is_search_home or (host in search_hosts and title in {"google search", "bing", "yahoo search", "duckduckgo"}):
+            continue
+        if not str(item.get("title") or item.get("snippet") or "").strip():
+            continue
+        item["url"] = url
+        results.append(item)
+    return results
+
 
 
 # ---------------------------------------------------------------------------
@@ -250,6 +276,45 @@ class WebSearchTool:
             results.append({"title": title, "url": href, "snippet": snippet, "source": "duckduckgo_html"})
         return {"success": bool(results), "query": query, "results": results, "errors": [] if results else ["DuckDuckGo returned no parseable results"], "provider": "duckduckgo_html"}
 
+    @staticmethod
+    def _google_html_fallback(query: str, max_results: int) -> Dict[str, Any]:
+        url = "https://www.google.com/search?" + urlencode({"q": query, "num": min(10, max_results)})
+        try:
+            response = requests.get(url, headers={"User-Agent": "Mozilla/5.0 Freya public research"}, timeout=max(3.0, float(os.getenv("FREYA_SEARCH_PROVIDER_TIMEOUT", "12"))))
+            response.raise_for_status()
+            soup = BeautifulSoup(response.text[:2_000_000], "html.parser")
+            results: list[dict[str, Any]] = []
+            seen: set[str] = set()
+            query_terms={token.lower() for token in re.findall(r"[a-z0-9]{3,}", query.lower()) if token.lower() not in {"the","and","for","with","from","search","web","latest","today"}}
+            for link in soup.find_all("a", href=True):
+                href = str(link.get("href") or "")
+                target = ""
+                if href.startswith("/url?"):
+                    target = parse_qs(urlparse(href).query).get("q", [""])[0]
+                elif href.startswith(("http://", "https://")):
+                    target = href
+                if not target or target in seen:
+                    continue
+                parsed = urlparse(target)
+                host = (parsed.hostname or "").lower()
+                if host.endswith("google.com") or host in {"google.com", "google.com.ph"} or host in {"search.google", "accounts.google.com"}:
+                    continue
+                if not parsed.scheme or not parsed.netloc:
+                    continue
+                title = link.get_text(" ", strip=True)
+                if len(title) < 8:
+                    continue
+                haystack=(title+" "+target).lower()
+                if query_terms and not any(term in haystack for term in query_terms):
+                    continue
+                seen.add(target)
+                results.append({"title": title[:240], "url": target, "snippet": title[:500], "source": "google_html"})
+                if len(results) >= max_results:
+                    break
+            return {"success": bool(results), "query": query, "results": results, "errors": [] if results else ["Google HTML returned no parseable results"], "provider": "google_html"}
+        except Exception as error:
+            return {"success": False, "query": query, "results": [], "errors": [f"Google HTML fallback failed: {error}"], "provider": "google_html"}
+
     async def search_async(self, query: str, max_results: int = 5) -> Dict[str, Any]:
         if not isinstance(query, str) or not query.strip():
             return {"success": False, "query": query, "results": [], "errors": ["query is required"]}
@@ -260,17 +325,31 @@ class WebSearchTool:
                 self.importer.search(normalized, max_results=max_results),
                 timeout=max(3.0, float(os.getenv("FREYA_SEARCH_PROVIDER_TIMEOUT", "12"))),
             )
-            if results:
-                return {"success": True, "query": normalized, "results": results, "errors": [], "provider": "internet_research_importer"}
-            primary_error = "Primary web-search provider returned no results"
+            usable = _usable_public_search_results(results)
+            terms=[token for token in re.findall(r"[a-z0-9]{4,}", normalized.lower()) if token not in {"search","today","latest","current","public","internet"}]
+            relevant=[item for item in usable if not terms or any(token in (str(item.get("title") or "")+" "+str(item.get("snippet") or "")).lower() for token in terms)]
+            if relevant:
+                return {"success": True, "query": normalized, "results": relevant[:max_results], "errors": [], "provider": "internet_research_importer"}
+            primary_error = "Primary web-search provider returned no usable public page results"
         except Exception as error:
             primary_error = str(error)
         logger.warning("Primary web search unavailable; trying DuckDuckGo fallback: %s", primary_error)
         try:
             fallback = await asyncio.to_thread(self._duckduckgo_fallback, normalized, max_results)
             fallback.setdefault("errors", [])
+            declared_fallback_success = bool(fallback.get("success"))
+            fallback["results"] = _usable_public_search_results(fallback.get("results", []))[:max_results]
+            fallback["success"] = bool(fallback["results"]) or declared_fallback_success
             fallback["errors"] = [primary_error] + list(fallback["errors"])
-            return fallback
+            if fallback["success"] or (declared_fallback_success and not fallback["results"]):
+                return fallback
+            google = await asyncio.to_thread(self._google_html_fallback, normalized, max_results)
+            google["errors"] = list(fallback["errors"]) + list(google.get("errors", []))
+            google["results"] = _usable_public_search_results(google.get("results", []))[:max_results]
+            google["success"] = bool(google["results"])
+            if not google["success"]:
+                google["errors"].append("No usable public page results remained after bounded free-provider fallbacks")
+            return google
         except Exception as fallback_error:
             logger.warning("DuckDuckGo web-search fallback failed: %s", fallback_error)
             return {"success": False, "query": normalized, "results": [], "errors": [primary_error, str(fallback_error)], "provider": "none"}
@@ -756,8 +835,10 @@ class ResearchCapability(Capability):
         if not isinstance(result, dict):
             return {"success": False, "error": "Invalid search tool response", "results": []}
         result.setdefault("results", [])
-        result["results"] = [_jsonable(item) for item in result["results"]]
-        result["success"] = bool(result.get("success", False))
+        result["results"] = _usable_public_search_results(result["results"])[:max_results]
+        result["success"] = bool(result["results"])
+        if not result["success"]:
+            result.setdefault("errors", []).append("No usable public page results remained after filtering search homepages")
         self._publish_event(
             "research.search.completed" if result["success"] else "research.search.failed",
             {"query": query[:200], "result_count": len(result["results"]), "error_count": len(result.get("errors", []))},
