@@ -534,8 +534,10 @@ class SystemMetricsCollector:
         disk_write_mb = 0
         if disk_io and self._last_disk_io and self._last_time:
             dt = now - self._last_time
-            disk_read_mb = (disk_io.read_bytes - self._last_disk_io.read_bytes) / (1024 ** 2) / dt
-            disk_write_mb = (disk_io.write_bytes - self._last_disk_io.write_bytes) / (1024 ** 2) / dt
+            if dt > 0:
+                disk_read_mb = (disk_io.read_bytes - self._last_disk_io.read_bytes) / (1024 ** 2) / dt
+                disk_write_mb = (disk_io.write_bytes - self._last_disk_io.write_bytes) / (1024 ** 2) / dt
+
         self._last_disk_io = disk_io
 
         # Network
@@ -544,8 +546,10 @@ class SystemMetricsCollector:
         net_recv_mb = 0
         if net_io and self._last_net_io and self._last_time:
             dt = now - self._last_time
-            net_sent_mb = (net_io.bytes_sent - self._last_net_io.bytes_sent) / (1024 ** 2) / dt
-            net_recv_mb = (net_io.bytes_recv - self._last_net_io.bytes_recv) / (1024 ** 2) / dt
+            if dt > 0:
+                net_sent_mb = (net_io.bytes_sent - self._last_net_io.bytes_sent) / (1024 ** 2) / dt
+                net_recv_mb = (net_io.bytes_recv - self._last_net_io.bytes_recv) / (1024 ** 2) / dt
+
         self._last_net_io = net_io
 
         self._last_time = now

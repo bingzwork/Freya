@@ -68,7 +68,7 @@ class ControlCommandParser:
         ControlCommand.RESUME: [r'\bresume\b', r'\bcontinue\b'],
         ControlCommand.UNDO: [r'\bundo\b'],
         ControlCommand.REDO: [r'\bredo\b'],
-        ControlCommand.STATUS: [r'^\s*(?:status|show status)\s*[?.!]?$', r'what are you doing', r'current plan', r'current step'],
+        ControlCommand.STATUS: [r'^\s*(?:status|show status)\s*[?.!]?$', r'what are you doing', r'current step'],
     }
 
     def parse(self, user_input: str) -> Optional[ControlCommand]:
@@ -79,6 +79,8 @@ class ControlCommandParser:
         for cmd, patterns in self.CONTROL_PATTERNS.items():
             for pattern in patterns:
                 if re.search(pattern, user_lower):
+                    if cmd in {ControlCommand.PAUSE, ControlCommand.RESUME, ControlCommand.CANCEL} and re.search(r"\b(?:reminder|automation|scheduled)\b", user_lower):
+                        continue
                     return cmd
         return None
 
@@ -220,12 +222,13 @@ class UnifiedRouter:
             # legacy path.
             classification = self._intent_classifier.classify(user_input, route_context)
 
-            # Stable explanatory questions must bypass the legacy engineering
-            # planner guard. The task classifier is intentionally conservative
-            # and may label "what is Python?" as TASK because of its wording,
-            # even though it is a normal local-knowledge explanation.
+            # Stable explanatory questions bypass the planner guard unless a strong
+            # explicit capability phrase is present. This keeps ordinary questions
+            # conversational while preserving deterministic built-in capabilities.
+            capability_router = getattr(self, "_capability_router", None)
+            preliminary_matches = capability_router.find_matching(user_input, None) if capability_router is not None else []
             stable_intent = _classify_conversational_request(user_input)
-            if stable_intent == "stable_explanation":
+            if stable_intent == "stable_explanation" and not (preliminary_matches and preliminary_matches[0][1] >= 0.55):
                 resolution = self._knowledge_first_resolver.resolve(
                     query=user_input,
                     context=route_context,

@@ -190,7 +190,8 @@ class VisionCapability(BaseCapability):
     def _resolve_images(self, inputs: Dict[str, Any]) -> tuple[List[Path], Optional[str]]:
         raw_paths = inputs.get("paths") or inputs.get("image_paths")
         if raw_paths is None:
-            raw_paths = [inputs.get("path") or inputs.get("file_reference")]
+            raw_paths = [inputs.get("path") or inputs.get("file_reference") or inputs.get("image_path")]
+
         if isinstance(raw_paths, (str, Path)):
             raw_paths = [raw_paths]
         paths = [Path(str(value)).resolve() for value in raw_paths if value]
@@ -215,16 +216,38 @@ class VisionCapability(BaseCapability):
         payload["success"] = not bool(evidence.error) and bool(evidence.text or evidence.observations)
         if evidence.observations:
             payload["search_terms"] = evidence.observations.get("search_terms", [])
-        payload["source"] = {**payload.get("source", {}), "files": [str(path) for path in paths], "provider": evidence.provider}
+        source = {
+            **payload.get("source", {}),
+            "files": [str(path) for path in paths],
+            "provider": evidence.provider,
+        }
+        if len(paths) == 1:
+            source.setdefault("filename", paths[0].name)
+        payload["source"] = source
+        payload["evidence"] = {
+            "text": payload.get("text", ""),
+            "confidence": payload.get("confidence"),
+            "regions": payload.get("regions", []),
+            "fields": payload.get("fields", {}),
+            "observations": payload.get("observations", {}),
+            "source": source,
+            "uncertain": payload.get("uncertain", False),
+            "provider": payload.get("provider", ""),
+            "error": payload.get("error"),
+        }
         if evidence.error:
             payload["message"] = evidence.error
         return payload
 
+    def _error_result(self, error: str, paths: Optional[List[Path]] = None) -> Dict[str, Any]:
+        return self._result(paths or [], VisionEvidence(provider=getattr(self._provider, "name", "unknown"), error=error, uncertain=True))
+
     def action_ocr(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
         paths, error = self._resolve_images(inputs)
         if error:
-            return {"success": False, "error": error, "message": error}
+            return self._error_result(error)
         evidence = self._provider.ocr(paths[0])
+
         return self._result(paths, evidence)
 
     def action_analyze(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
@@ -232,8 +255,9 @@ class VisionCapability(BaseCapability):
             return self.action_structured_analyze(inputs)
         paths, error = self._resolve_images(inputs)
         if error:
-            return {"success": False, "error": error, "message": error}
+            return self._error_result(error)
         question = str(inputs.get("question") or inputs.get("prompt") or inputs.get("query") or "Describe the visible content and any readable text in the image.").strip()
+
         analyze_many = getattr(self._provider, "analyze_many", None)
         evidence = analyze_many(paths, question) if callable(analyze_many) else self._provider.analyze(paths[0], question)
         return self._result(paths, evidence)
@@ -241,7 +265,8 @@ class VisionCapability(BaseCapability):
     def action_structured_analyze(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
         paths, error = self._resolve_images(inputs)
         if error:
-            return {"success": False, "error": error, "message": error, "observations": {}}
+            return self._error_result(error)
+
         question = str(inputs.get("question") or inputs.get("prompt") or inputs.get("query") or "").strip()
         method = getattr(self._provider, "analyze_structured", None)
         if callable(method):
@@ -257,9 +282,10 @@ class VisionCapability(BaseCapability):
         paths, error = self._resolve_images(inputs)
         fields = inputs.get("fields")
         if error:
-            return {"success": False, "error": error, "message": error}
+            return self._error_result(error)
         if not isinstance(fields, (list, tuple)) or not fields:
-            return {"success": False, "error": "fields must be a non-empty list", "message": "fields must be a non-empty list"}
+            return self._error_result("fields must be a non-empty list")
+
         evidence = self._provider.extract_fields(paths[0], [str(field) for field in fields])
         return self._result(paths, evidence)
 

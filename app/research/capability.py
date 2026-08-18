@@ -326,10 +326,9 @@ class WebSearchTool:
                 timeout=max(3.0, float(os.getenv("FREYA_SEARCH_PROVIDER_TIMEOUT", "12"))),
             )
             usable = _usable_public_search_results(results)
-            terms=[token for token in re.findall(r"[a-z0-9]{4,}", normalized.lower()) if token not in {"search","today","latest","current","public","internet"}]
-            relevant=[item for item in usable if not terms or any(token in (str(item.get("title") or "")+" "+str(item.get("snippet") or "")).lower() for token in terms)]
-            if relevant:
-                return {"success": True, "query": normalized, "results": relevant[:max_results], "errors": [], "provider": "internet_research_importer"}
+            if usable:
+                return {"success": True, "query": normalized, "results": usable[:max_results], "errors": [], "provider": "internet_research_importer"}
+
             primary_error = "Primary web-search provider returned no usable public page results"
         except Exception as error:
             primary_error = str(error)

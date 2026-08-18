@@ -223,7 +223,9 @@ class PlanningEngineCapability(BaseCapability):
 
         task = inputs.get("task", "")
         context = inputs.get("context", {})
+        external_context = context if isinstance(context, str) else str(context or "")
         try:
+
             if hasattr(self._planner, "_agent_planner"):
                 plan = self._planner.create_plan(
                     task,
