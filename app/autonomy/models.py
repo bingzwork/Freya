@@ -81,6 +81,10 @@ class AutonomyConfig:
     self_initiated_enabled: bool = True
     self_initiated_check_interval_seconds: float = 300.0  # 5 minutes
     max_concurrent_autonomous_tasks: int = 3
+    max_actions_per_cycle: int = 1
+    max_retries_per_task: int = 1
+    failure_backoff_seconds: float = 60.0
+    repeated_failure_cooldown_seconds: float = 300.0
     
     # Maintenance settings
     maintenance_enabled: bool = True
@@ -90,6 +94,44 @@ class AutonomyConfig:
     use_background_job_service: bool = True
     
     updated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+
+@dataclass(frozen=True)
+class AutonomyCandidate:
+    """Provenance and authority contract for one proposed autonomous action."""
+
+    source: str
+    source_id: str
+    proposed_action: str
+    reason: str
+    goal: Dict[str, Any]
+    expected_value: str
+    urgency: str
+    risk: str
+    required_authorization: str
+    required_resources: List[str]
+    deduplication_key: str
+    retry_state: Dict[str, Any] = field(default_factory=dict)
+    trace_id: str = ""
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "source": self.source,
+            "source_id": self.source_id,
+            "proposed_action": self.proposed_action,
+            "reason": self.reason,
+            "goal": dict(self.goal),
+            "expected_value": self.expected_value,
+            "urgency": self.urgency,
+            "risk": self.risk,
+            "required_authorization": self.required_authorization,
+            "required_resources": list(self.required_resources),
+            "deduplication_key": self.deduplication_key,
+            "retry_state": dict(self.retry_state),
+            "trace_id": self.trace_id,
+            "created_at": self.created_at,
+        }
 
 
 @dataclass

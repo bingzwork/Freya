@@ -41,6 +41,11 @@ class ExecutionVerifier:
         self._learning_pipeline = learning_pipeline
         self._observability_hub = observability_hub
         self._chat_activity = chat_activity
+        self._request_context: Dict[str, Any] = {}
+
+    def set_request_context(self, request_context: Optional[Dict[str, Any]]) -> None:
+        """Bind request identity to the next terminal verification outcome."""
+        self._request_context = dict(request_context or {})
 
     def set_learning_pipeline(self, learning_pipeline: Any) -> None:
         """Late-bind the canonical LearningPipeline after ordered construction."""
@@ -146,9 +151,15 @@ class ExecutionVerifier:
         error_message: Optional[str],
     ) -> LearningCandidate:
         verification_data = None
+        verification_status = "unknown"
         if verification_result is not None:
+            verification_status = getattr(verification_result, "status", None)
+            verification_status = getattr(verification_status, "value", verification_status) or (
+                "verified" if verification_result.success else "failed"
+            )
             verification_data = {
                 "success": verification_result.success,
+                "status": verification_status,
                 "command": list(verification_result.command),
                 "stdout": verification_result.stdout,
                 "stderr": verification_result.stderr,
@@ -170,17 +181,25 @@ class ExecutionVerifier:
             "verification": verification_data,
             "error": error_message,
             "allow_mutations": allow_mutations,
+            "verification_status": verification_status,
+            "request_context": {
+                key: self._request_context.get(key)
+                for key in ("trace_id", "correlation_id", "request_id", "session_id", "source", "channel")
+                if self._request_context.get(key) is not None
+            },
         }
         context = {
             "verification_timestamp": timestamp.isoformat(),
-            "verification_status": verification_label,
+            "verification_status": verification_status,
             "execution_context": "canonical_execution_engine",
+            "trace_id": self._request_context.get("trace_id") or self._request_context.get("correlation_id"),
+            "session_id": self._request_context.get("session_id"),
         }
         return LearningCandidate(
             candidate_type=LearningCandidateType.EXECUTION_OUTCOME,
             timestamp=timestamp,
             source_component="ExecutionVerifier",
-            source_session_id="",
+            source_session_id=str(self._request_context.get("session_id") or ""),
             raw_observation=raw_observation,
             context=context,
             tags=["execution_outcome", f"execution_{outcome_label}", f"verification_{verification_label}"],

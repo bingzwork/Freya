@@ -1,5 +1,6 @@
 """SelfInitiatedWorkManager - Reads goals, creates autonomous work via WorkflowOrchestrator."""
 
+import hashlib
 import threading
 import time
 from datetime import datetime, timezone
@@ -9,10 +10,13 @@ from app.memory.goals.manager import GoalStorage
 from app.orchestrator.workflow_orchestrator import WorkflowOrchestrator, WorkflowSpec, WorkflowStrategy, get_workflow_orchestrator
 from app.orchestrator.workflow_composer import IntentType
 from app.core.background_jobs import BackgroundJobService, get_job_service, JobTriggerConfig, JobTriggerType
+from app.core.request_context import RequestContext
+from app.core.logger import logger
 
 from .models import (
     AutonomyConfig,
     AutonomousWorkItem,
+    AutonomyCandidate,
     GoalContext,
 )
 
@@ -46,6 +50,10 @@ class SelfInitiatedWorkManager:
         self._active_work: Dict[str, AutonomousWorkItem] = {}
         self._work_history: List[AutonomousWorkItem] = []
         self._max_history = 100
+        self._cycle_actions = 0
+        self._dedup_completed_at: Dict[str, float] = {}
+        self._retry_state: Dict[str, Dict[str, Any]] = {}
+        self._monitor_threads: Dict[str, threading.Thread] = {}
         
         # Scheduled job ID
         self._check_job_id: Optional[str] = None
@@ -80,6 +88,21 @@ class SelfInitiatedWorkManager:
             
         self._running = False
         self._shutdown_event.set()
+
+        with self._lock:
+            active_items = list(self._active_work.values())
+            monitor_threads = list(self._monitor_threads.values())
+        for work_item in active_items:
+            if self._workflow_orchestrator and work_item.workflow_execution_id:
+                try:
+                    self._workflow_orchestrator.cancel_workflow(work_item.workflow_execution_id)
+                except Exception:
+                    pass
+            self._complete_work(work_item, False, {"final_status": "shutdown", "error": "autonomy manager stopped"})
+        for thread in monitor_threads:
+            thread.join(timeout=1.0)
+        with self._lock:
+            self._monitor_threads.clear()
         
         # Cancel scheduled job
         if self._check_job_id and self._job_service:
@@ -130,37 +153,50 @@ class SelfInitiatedWorkManager:
                 time.sleep(self.config.self_initiated_check_interval_seconds / 30.0)
 
     def _check_and_generate_work(self) -> None:
-        """Check goals and generate autonomous work items."""
-        if not self._goal_storage or not self._workflow_orchestrator:
+        """Check goals and generate a bounded, provenance-bearing autonomous action."""
+        if not self._goal_storage or not self._workflow_orchestrator or not self._running:
             return
-            
-        # Check concurrent work limit
+
         with self._lock:
+            self._cycle_actions = 0
             active_count = len([w for w in self._active_work.values() if w.status == "running"])
             if active_count >= self.config.max_concurrent_autonomous_tasks:
                 return
-                
-        # Get eligible goals
+
         goals_context = self._get_eligible_goals()
-        if not goals_context:
-            return
-            
-        # Generate work for each eligible goal
         for goal_ctx in goals_context:
-            if not self._running:
+            if not self._running or self._cycle_actions >= max(0, self.config.max_actions_per_cycle):
                 break
-                
-            # Check if we already have work for this goal
+            dedup_key = self._deduplication_key(goal_ctx)
             with self._lock:
-                existing = [w for w in self._active_work.values() 
-                           if w.goal_id == goal_ctx.goal_id and w.status in ["pending", "scheduled", "running"]]
+                existing = [w for w in self._active_work.values()
+                            if w.metadata.get("deduplication_key") == dedup_key
+                            and w.status in ["pending", "scheduled", "running"]]
+                retry_state = self._retry_state.get(dedup_key, {})
+                now = time.time()
                 if existing:
                     continue
-                    
-            # Generate work item
+                if retry_state:
+                    if retry_state.get("attempt", 0) > retry_state.get("max_retries", self.config.max_retries_per_task):
+                        continue
+                    if now < retry_state.get("next_retry_at", now):
+                        continue
+                else:
+                    completed_at = self._dedup_completed_at.get(dedup_key, 0.0)
+                    if (now - completed_at) < self.config.repeated_failure_cooldown_seconds:
+                        continue
+
             work_item = self._create_work_from_goal(goal_ctx)
             if work_item:
+                with self._lock:
+                    self._cycle_actions += 1
                 self._execute_work(work_item)
+
+    @staticmethod
+    def _deduplication_key(goal_ctx: GoalContext) -> str:
+        """Return a stable key for equivalent goal-driven actions."""
+        raw = f"self_initiated|{goal_ctx.goal_id}|{goal_ctx.name.strip()}|{goal_ctx.description.strip()}"
+        return "autonomy:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
 
     def _get_eligible_goals(self) -> List[GoalContext]:
         """Get goals that are eligible for autonomous work."""
@@ -199,10 +235,37 @@ class SelfInitiatedWorkManager:
             raise
 
     def _create_work_from_goal(self, goal_ctx: GoalContext) -> Optional[AutonomousWorkItem]:
-        """Create an autonomous work item from a goal context."""
-        # Determine what kind of work to generate based on goal
-        # For now, create a generic "make progress on goal" workflow
-        
+        """Create an autonomous work item from a validated goal context."""
+        if not goal_ctx.goal_id or not goal_ctx.name.strip() or not goal_ctx.description.strip():
+            logger.warning("[Autonomy] rejected candidate without complete goal provenance")
+            return None
+
+        dedup_key = self._deduplication_key(goal_ctx)
+        trace_id = RequestContext.create(
+            original_message=f"Autonomous work for goal: {goal_ctx.name}",
+            source="autonomy",
+            channel="background",
+        ).trace_id
+        retry_state = dict(self._retry_state.get(
+            dedup_key,
+            {"attempt": 0, "max_retries": self.config.max_retries_per_task},
+        ))
+        candidate = AutonomyCandidate(
+            source="goal_storage",
+            source_id=goal_ctx.goal_id,
+            proposed_action="make_progress_on_goal",
+            reason=f"Goal is {goal_ctx.status} and eligible for bounded autonomous progress",
+            goal={"goal_id": goal_ctx.goal_id, "name": goal_ctx.name, "description": goal_ctx.description},
+            expected_value="Advance the originating user goal through the normal workflow path",
+            urgency=goal_ctx.priority,
+            risk="workflow_actions_must_pass_safety_gate",
+            required_authorization="safety_gate_and_verification",
+            required_resources=["planning_engine", "code_execution"],
+            deduplication_key=dedup_key,
+            retry_state=retry_state,
+            trace_id=trace_id,
+        )
+
         # Build workflow spec
         workflow_spec = {
             "name": f"Autonomous: {goal_ctx.name}",
@@ -216,6 +279,13 @@ class SelfInitiatedWorkManager:
                 "goal_name": goal_ctx.name,
                 "goal_description": goal_ctx.description,
                 "goal_priority": goal_ctx.priority,
+                "autonomy_candidate": candidate.to_dict(),
+                "request_context": {
+                    "trace_id": trace_id,
+                    "source": "autonomy",
+                    "channel": "background",
+                    "session_id": f"autonomy_session_{goal_ctx.goal_id}",
+                },
             },
             "max_steps": 10,
             "max_parallel": 2,
@@ -231,6 +301,13 @@ class SelfInitiatedWorkManager:
             metadata={
                 "goal_progress": goal_ctx.progress,
                 "goal_status": goal_ctx.status,
+                "source": candidate.source,
+                "source_id": candidate.source_id,
+                "reason": candidate.reason,
+                "deduplication_key": dedup_key,
+                "autonomy_candidate": candidate.to_dict(),
+                "trace_id": trace_id,
+                "retry_state": retry_state,
             },
         )
         
@@ -264,7 +341,11 @@ class SelfInitiatedWorkManager:
                 timeout_seconds=work_item.workflow_spec.get("timeout_seconds", 300.0),
             )
             
-            # Execute via WorkflowOrchestrator
+            candidate = work_item.metadata.get("autonomy_candidate", {})
+            if not candidate.get("source_id") or not candidate.get("reason") or not candidate.get("deduplication_key"):
+                raise ValueError("Autonomous work requires provenance, reason, and deduplication key")
+
+            # Execute via WorkflowOrchestrator; its normal safety/execution pipeline remains authoritative.
             execution_id = self._workflow_orchestrator.execute_workflow(spec, async_mode=True)
             
             # Update work item
@@ -277,18 +358,29 @@ class SelfInitiatedWorkManager:
                 self._active_work[work_item.id] = work_item
                 
             # Start monitoring thread for this work
-            threading.Thread(
+            monitor_thread = threading.Thread(
                 target=self._monitor_work,
                 args=(work_item,),
                 daemon=True,
                 name=f"WorkMonitor-{work_item.id[:8]}"
-            ).start()
+            )
+            with self._lock:
+                self._monitor_threads[work_item.id] = monitor_thread
+            monitor_thread.start()
             
         except Exception as e:
             work_item.status = "failed"
             work_item.metadata["error"] = str(e)
-            self._complete_work(work_item, False, {"error": str(e)})
-            raise
+            dedup_key = work_item.metadata.get("deduplication_key")
+            with self._lock:
+                state = dict(self._retry_state.get(dedup_key, work_item.metadata.get("retry_state", {})))
+                state["attempt"] = int(state.get("attempt", 0)) + 1
+                state["max_retries"] = int(state.get("max_retries", self.config.max_retries_per_task))
+                state["next_retry_at"] = time.time() + self.config.failure_backoff_seconds
+                self._retry_state[dedup_key] = state
+            work_item.metadata["retry_state"] = state
+            self._complete_work(work_item, False, {"error": str(e), "retry_state": state, "retry_recorded": True})
+            logger.warning(f"[trace={work_item.metadata.get('trace_id', 'none')}] autonomous work failed: {e}")
 
     def _monitor_work(self, work_item: AutonomousWorkItem) -> None:
         """Monitor a work item until completion."""
@@ -309,8 +401,13 @@ class SelfInitiatedWorkManager:
                 from app.orchestrator.workflow_orchestrator import WorkflowStatus
                 
                 if status in [WorkflowStatus.COMPLETED, WorkflowStatus.FAILED, WorkflowStatus.CANCELLED]:
-                    success = status == WorkflowStatus.COMPLETED
-                    self._complete_work(work_item, success, {"final_status": status.value})
+                    verification = self._workflow_verification(execution_id)
+                    verified = verification.get("status") == "verified"
+                    success = status == WorkflowStatus.COMPLETED and verified
+                    details = {"final_status": status.value, "verification": verification}
+                    if status == WorkflowStatus.COMPLETED and not verified:
+                        details["error"] = "workflow reached terminal status without VERIFIED outcome"
+                    self._complete_work(work_item, success, details)
                     break
                     
             except Exception:
@@ -318,15 +415,46 @@ class SelfInitiatedWorkManager:
                 
             time.sleep(5.0)
 
+    def _workflow_verification(self, execution_id: str) -> Dict[str, Any]:
+        """Read verification evidence from the orchestrator without treating terminal status as proof."""
+        if not self._workflow_orchestrator:
+            return {"status": "unknown", "reason": "orchestrator unavailable"}
+        getter = getattr(self._workflow_orchestrator, "get_workflow_verification", None)
+        if not callable(getter):
+            return {"status": "unknown", "reason": "verification API unavailable"}
+        try:
+            evidence = getter(execution_id)
+            if hasattr(evidence, "status"):
+                return {"status": getattr(evidence.status, "value", str(evidence.status))}
+            if isinstance(evidence, dict):
+                return dict(evidence)
+        except Exception as exc:
+            return {"status": "unknown", "reason": str(exc)}
+        return {"status": "unknown", "reason": "no verification evidence"}
+
     def _complete_work(self, work_item: AutonomousWorkItem, success: bool, details: Dict[str, Any]) -> None:
-        """Mark work as complete and notify callback."""
+        """Mark work as complete only when workflow status and verification both permit it."""
         work_item.status = "completed" if success else "failed"
         work_item.metadata["completion_details"] = details
+        if not success and not details.get("retry_recorded"):
+            dedup_key = work_item.metadata.get("deduplication_key")
+            if dedup_key:
+                with self._lock:
+                    state = dict(self._retry_state.get(dedup_key, work_item.metadata.get("retry_state", {})))
+                    state["attempt"] = int(state.get("attempt", 0)) + 1
+                    state["max_retries"] = int(state.get("max_retries", self.config.max_retries_per_task))
+                    state["next_retry_at"] = time.time() + self.config.failure_backoff_seconds
+                    self._retry_state[dedup_key] = state
+                    work_item.metadata["retry_state"] = state
+                details["retry_state"] = state
         
         with self._lock:
             # Move to history
             if work_item.id in self._active_work:
                 del self._active_work[work_item.id]
+            self._monitor_threads.pop(work_item.id, None)
+            if not success and work_item.metadata.get("deduplication_key"):
+                self._dedup_completed_at[work_item.metadata["deduplication_key"]] = time.time()
             self._work_history.append(work_item)
             if len(self._work_history) > self._max_history:
                 self._work_history = self._work_history[-self._max_history:]

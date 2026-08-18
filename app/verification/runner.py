@@ -3,9 +3,16 @@
 import subprocess
 import sys
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 
 from app.core.logger import logger
+
+
+class VerificationStatus(str, Enum):
+    VERIFIED = "verified"
+    FAILED = "failed"
+    UNKNOWN = "unknown"
 
 
 @dataclass(frozen=True)
@@ -15,6 +22,16 @@ class VerificationResult:
     stdout: str
     stderr: str
     return_code: int
+    status: VerificationStatus | str | None = None
+
+    def __post_init__(self) -> None:
+        if self.status is None:
+            inferred = VerificationStatus.UNKNOWN if self.return_code == -1 else (
+                VerificationStatus.VERIFIED if self.success else VerificationStatus.FAILED
+            )
+            object.__setattr__(self, "status", inferred)
+        elif not isinstance(self.status, VerificationStatus):
+            object.__setattr__(self, "status", VerificationStatus(str(self.status)))
 
 
 class VerificationRunner:
@@ -46,6 +63,7 @@ class VerificationRunner:
                 "\n".join(errors),
                 "",
                 1,
+                status=VerificationStatus.FAILED,
             )
         else:
             return VerificationResult(
@@ -54,6 +72,7 @@ class VerificationRunner:
                 "",
                 "",
                 0,
+                status=VerificationStatus.VERIFIED,
             )
 
     def dry_run_verify(self) -> VerificationResult:
@@ -61,6 +80,12 @@ class VerificationRunner:
         test_result = self.run_tests()
         lint_result = self.lint()
         success = test_result.success and lint_result.success
+        if getattr(test_result, "status", None) == VerificationStatus.UNKNOWN or getattr(lint_result, "status", None) == VerificationStatus.UNKNOWN:
+            status = VerificationStatus.UNKNOWN
+        elif success:
+            status = VerificationStatus.VERIFIED
+        else:
+            status = VerificationStatus.FAILED
         combined_out = (test_result.stdout + "\n" + lint_result.stdout).strip()
         combined_err = (test_result.stderr + "\n" + lint_result.stderr).strip()
         return VerificationResult(
@@ -69,6 +94,7 @@ class VerificationRunner:
             combined_out,
             combined_err,
             0 if success else 1,
+            status=status,
         )
 
     def run(self, command):
@@ -96,6 +122,7 @@ class VerificationRunner:
                 error.stdout or "",
                 f"Verification timed out after {self.timeout_seconds} seconds.",
                 -1,
+                status=VerificationStatus.UNKNOWN,
             )
 
         result = VerificationResult(
@@ -104,6 +131,7 @@ class VerificationRunner:
             completed.stdout,
             completed.stderr,
             completed.returncode,
+            status=VerificationStatus.VERIFIED if completed.returncode == 0 else VerificationStatus.FAILED,
         )
 
         logger.info("[Verification]")

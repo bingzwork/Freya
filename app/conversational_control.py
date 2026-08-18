@@ -271,23 +271,39 @@ class ConversationControlHandler:
         with correlation_scope(correlation_id, prefix="request") as active_correlation_id:
             if self._chat_activity is not None:
                 self._chat_activity.chat_started()
+            supplied_context = dict(request_context or {})
+            supplied_context.setdefault("trace_id", active_correlation_id)
+            supplied_context.setdefault("correlation_id", active_correlation_id)
+            supplied_context.setdefault("request_id", active_correlation_id)
             context = {
                 "recent_conversation": self._memory_coordinator.get_conversation_context(limit=3),
                 "active_goal": self._memory_coordinator.get_active_goal(),
                 "ingress": "ConversationControl",
+                "trace_id": active_correlation_id,
                 "correlation_id": active_correlation_id,
                 "request_id": active_correlation_id,
-                **(request_context or {}),
+                **supplied_context,
             }
             self._publish_event(
                 "conversation.question.received",
-                {"question": user_input[:500], "has_active_goal": context["active_goal"] is not None},
+                {
+                    "trace_id": active_correlation_id,
+                    "session_id": context.get("session_id"),
+                    "has_active_goal": context["active_goal"] is not None,
+                    "message_length": len(user_input or ""),
+                },
                 correlation_id=active_correlation_id,
             )
             route_result = self._router.route(user_input, context=context)
             self._publish_event(
                 "conversation.question.routed",
-                {"question": user_input[:500], "route_reason": getattr(route_result, "reason", "")},
+                {
+                    "trace_id": active_correlation_id,
+                    "session_id": context.get("session_id"),
+                    "route_reason": getattr(route_result, "reason", ""),
+                    "intent": getattr(getattr(route_result, "intent", None), "value", getattr(route_result, "intent", None)),
+                    "capability": getattr(route_result, "capability_name", None),
+                },
                 correlation_id=active_correlation_id,
             )
             return route_result
@@ -298,6 +314,7 @@ class ConversationControlHandler:
         response: str,
         *,
         correlation_id: Optional[str] = None,
+        request_context: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Persist both turns through the canonical MemoryCoordinator boundary."""
         if self._memory_coordinator is None:
@@ -305,9 +322,15 @@ class ConversationControlHandler:
         with correlation_scope(correlation_id, prefix="request") as active_correlation_id:
             self._memory_coordinator.record_conversation({"role": "user", "content": user_input})
             self._memory_coordinator.record_conversation({"role": "assistant", "content": response})
+            context = dict(request_context or {})
             self._publish_event(
                 "conversation.question.completed",
-                {"response_length": len(response)},
+                {
+                    "trace_id": active_correlation_id,
+                    "session_id": context.get("session_id"),
+                    "response_length": len(response or ""),
+                    "outcome": "response_emitted",
+                },
                 correlation_id=active_correlation_id,
             )
 

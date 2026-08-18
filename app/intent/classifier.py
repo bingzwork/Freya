@@ -179,12 +179,77 @@ class IntentClassification:
         """Conversational control intent ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â short-circuit all other routing."""
         return self.intent.is_conversational_control
 
-    def to_dict(self) -> Dict[str, Any]:
+    @property
+    def request_kind(self) -> str:
+        if self.is_control:
+            return "system_control"
+        if self.intent in {IntentType.CHAT, IntentType.QUESTION, IntentType.SYSTEM_STATUS}:
+            return "conversation"
+        if self.intent.is_engineering:
+            return "action"
+        return self.intent.value
+
+    @property
+    def action_required(self) -> bool:
+        return self.intent.requires_planning
+
+    @property
+    def memory_required(self) -> bool:
+        return self.intent in {IntentType.QUESTION, IntentType.SYSTEM_STATUS}
+
+    @property
+    def external_information_required(self) -> bool:
+        return False
+
+    @property
+    def ambiguity(self) -> str:
+        if self.is_low_confidence:
+            return "insufficient_context"
+        if self.is_ambiguous or self.should_clarify_engineering:
+            return "ambiguous"
+        return "confident"
+
+    @property
+    def extracted_arguments(self) -> Dict[str, Any]:
+        return dict(self.context.get("entities") or {}) if isinstance(self.context, dict) else {}
+
+    @property
+    def context_requirements(self) -> List[str]:
+        requirements = []
+        if self.memory_required:
+            requirements.append("conversation_or_memory_context")
+        if self.action_required:
+            requirements.append("execution_context")
+        return requirements
+
+    @property
+    def risk_hint(self) -> str:
+        if self.intent.is_engineering:
+            return "action_requires_safety_evaluation"
+        if self.is_control:
+            return "control"
+        return "low"
+
+    def to_contract(self) -> Dict[str, Any]:
+        """Return the stable interpretation used by downstream foundation layers."""
         return {
             "intent": self.intent.value,
+            "request_kind": self.request_kind,
+            "action_required": self.action_required,
+            "memory_required": self.memory_required,
+            "external_information_required": self.external_information_required,
             "confidence": self.confidence,
+            "ambiguity": self.ambiguity,
+            "extracted_arguments": self.extracted_arguments,
+            "context_requirements": self.context_requirements,
+            "risk_hint": self.risk_hint,
             "reason": self.reason,
-            "keywords": self.keywords,
+            "keywords": list(self.keywords),
+        }
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            **self.to_contract(),
             "should_plan": self.should_plan,
             "should_answer_directly": self.should_answer_directly,
             "should_include_runtime_context": self.should_include_runtime_context,

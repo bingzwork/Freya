@@ -5,12 +5,14 @@ Consolidates: Planner (agent), Executor (agent), planner/TaskExecutor,
 VerificationRunner, and RepairLoop behind the canonical facade boundary.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import threading
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
 from app.core.priority_llm import LLMPriority, PriorityLLMProvider
+from app.core.correlation import correlation_scope
 from app.core.protocols import ChatActivityProvider
 from app.core.tool_manager import ToolManager, ToolResult
 from app.conversational_control import ConversationControlHandler
@@ -52,6 +54,7 @@ class ExecutionRecord:
     verification: Optional[VerificationResult] = None
     error: Optional[str] = None
     completed_at: str = ""
+    request_context: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -212,6 +215,7 @@ class UnifiedExecutor:
                                 "task_title": task.title,
                                 "allow_mutations": allow_mutations,
                                 "plan_id": self._active_plan_id,
+                                **self._request_identity(),
                             },
                         )
                     except Exception as error:
@@ -388,6 +392,8 @@ class ExecutionEngine:
             chat_activity=chat_activity,
         )
         self._last_learning_outcome: Optional[ExecutionOutcome] = None
+        self._active_request_context: Dict[str, Any] = {}
+        self._execution_lock = threading.RLock()
         self._executor = UnifiedExecutor(
             planner=self._planner,
             tools=tools,
@@ -420,8 +426,32 @@ class ExecutionEngine:
         """Late-bind LearningPipeline after target-order component construction."""
         self._execution_verifier.set_learning_pipeline(learning_pipeline)
 
-    def execute_plan(self, task: str, allow_mutations: bool = True) -> str:
+    def execute_plan(
+        self,
+        task: str,
+        allow_mutations: bool = True,
+        request_context: Optional[Dict[str, Any]] = None,
+    ) -> str:
         """Execute a plan through safety, execution, verification, and safe failure."""
+        context = dict(request_context or {})
+        trace_id = context.get("trace_id") or context.get("correlation_id")
+        execution_lock = getattr(self, "_execution_lock", None)
+        if execution_lock is None:
+            execution_lock = threading.RLock()
+            self._execution_lock = execution_lock
+        with execution_lock:
+            self._active_request_context = context
+            if hasattr(self._execution_verifier, "set_request_context"):
+                self._execution_verifier.set_request_context(context)
+            with correlation_scope(trace_id, prefix="request"):
+                try:
+                    return self._execute_plan_with_context(task, allow_mutations)
+                finally:
+                    self._active_request_context = {}
+                    if hasattr(self._execution_verifier, "set_request_context"):
+                        self._execution_verifier.set_request_context({})
+
+    def _execute_plan_with_context(self, task: str, allow_mutations: bool = True) -> str:
         self._chat_activity.chat_started()
         plan: Optional[Plan] = None
         results: List[Any] = []
@@ -453,6 +483,7 @@ class ExecutionEngine:
                         "plan_id": plan.id,
                         "task": task,
                         "allow_mutations": allow_mutations,
+                        **self._request_identity(),
                     },
                 )
             self._set_lifecycle_state(ExecutionLifecycleState.AUTHORIZED)
@@ -532,6 +563,13 @@ class ExecutionEngine:
     def _set_lifecycle_state(self, state: ExecutionLifecycleState) -> None:
         self._lifecycle_state = state
 
+    def _request_identity(self) -> Dict[str, Any]:
+        return {
+            key: self._active_request_context.get(key)
+            for key in ("trace_id", "correlation_id", "request_id", "session_id", "source", "channel")
+            if self._active_request_context.get(key) is not None
+        }
+
     @staticmethod
     def _result_succeeded(result: Any) -> bool:
         return UnifiedExecutor._result_succeeded(result)
@@ -604,6 +642,11 @@ class ExecutionEngine:
             verification=verification,
             error=final_error,
             completed_at=datetime.now(timezone.utc).isoformat(),
+            request_context={
+                key: self._active_request_context.get(key)
+                for key in ("trace_id", "correlation_id", "request_id", "session_id", "source", "channel")
+                if self._active_request_context.get(key) is not None
+            },
         )
         self._execution_records[plan.id] = record
         self._last_outcome = record

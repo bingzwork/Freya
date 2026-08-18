@@ -18,9 +18,11 @@ from main import FreyaApp
 from app.core.initializer import SystemConfig
 from app.capabilities.formatter import format_capability_result
 from app.capabilities.router import CapabilityResult
+from app.core.request_context import RequestContext
 FREYA=None
 SUBSCRIBERS=set()
 LAST_IMAGE_SUBJECT = ""
+UI_SESSION_ID = f"session_{uuid.uuid4().hex}"
 LOCK=threading.Lock()
 SUPPORTED_EXTENSIONS={".jpg",".jpeg",".png",".webp",".mp3",".wav",".m4a",".flac",".mp4",".mov",".webm",".txt",".md",".pdf",".docx",".csv",".xlsx",".json"}
 IMAGE_EXTENSIONS={".jpg",".jpeg",".png",".webp",".gif",".bmp"}
@@ -223,7 +225,7 @@ def _bounded_call(function, timeout_seconds, *args, **kwargs):
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
 
-def _record_conversation_turn(role, content):
+def _record_conversation_turn(role, content, request_context=None):
     try:
         memory=getattr(getattr(FREYA,"system",None),"_memory_coordinator",None)
         if memory is not None and hasattr(memory,"record_conversation"):
@@ -437,6 +439,12 @@ def _privacy_response(question,visual_text):
 class Handler(BaseHTTPRequestHandler):
     workspace=Path.cwd()
     def send_payload(self,status,payload,content_type="application/json"):
+        if isinstance(payload,dict) and getattr(self,"_active_trace_id",None):
+            payload=dict(payload); payload.setdefault("trace_id",self._active_trace_id)
+            if getattr(self,"_active_chat_message",None) and not getattr(self,"_active_exchange_recorded",False) and ("answer" in payload or "error" in payload):
+                _record_conversation_turn("user",self._active_chat_message,getattr(self,"_active_request_context",None))
+                _record_conversation_turn("assistant",payload.get("answer") or payload.get("error"),getattr(self,"_active_request_context",None))
+                self._active_exchange_recorded=True
         data=payload if isinstance(payload,bytes) else json.dumps(payload,ensure_ascii=False).encode("utf-8"); self.send_response(status); self.send_header("Content-Type",content_type); self.send_header("Access-Control-Allow-Origin","*"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(data))); self.end_headers(); self.wfile.write(data)
     def do_OPTIONS(self):
         self.send_response(204); self.send_header("Access-Control-Allow-Origin","*"); self.send_header("Access-Control-Allow-Headers","Content-Type"); self.send_header("Access-Control-Allow-Methods","GET, POST, OPTIONS"); self.end_headers()
@@ -474,6 +482,8 @@ class Handler(BaseHTTPRequestHandler):
         if path=="/api/chat":
             try:
                 payload=json.loads(body.decode("utf-8")); message=str(payload.get("message","")).strip(); attachments=payload.get("attachments",[])
+                request_context=RequestContext.create(message,session_id=str(payload.get("session_id") or UI_SESSION_ID),attachments=attachments,source="user",channel="web",metadata={"content_type":self.headers.get("Content-Type","application/json")})
+                self._active_trace_id=request_context.trace_id; self._active_chat_message=message; self._active_request_context=request_context.to_dict(); self._active_exchange_recorded=False
                 if not message and not attachments: self.send_payload(400,{"error":"Write a message or attach a file first."}); return
                 context,vision_meta=attachment_context(self.workspace,attachments,message,inputs_return_meta=True); privacy,blocked=_privacy_response(message,context)
                 social_response=_direct_social_response(message) if not attachments and not blocked else None
@@ -564,8 +574,6 @@ class Handler(BaseHTTPRequestHandler):
                         answer = f"I found public image results for {_image_search_query(message)}."
                     else:
                         answer = str(getattr(image_result, "message", "") or "I searched the public web, but the available image-search providers returned no usable image results.")
-                    _record_conversation_turn("user", message)
-                    _record_conversation_turn("assistant", answer)
                 elif research_requested:
                     research_result,research_data=_research_text_request(message)
                     if getattr(research_result,"success",False):
@@ -576,20 +584,23 @@ class Handler(BaseHTTPRequestHandler):
                     followup_answer = _facebook_followup_search(message)
                     if followup_answer:
                         answer = followup_answer
-                        _record_conversation_turn("user", message)
-                        _record_conversation_turn("assistant", answer)
+                        self._active_exchange_recorded=False
                     else:
                         composed=message or "Please inspect the attached files and report the useful findings."
-                        answer=_bounded_call(FREYA.system.facade.chat, 60.0, composed, context={"original_request":message})
+                        self._active_exchange_recorded=True
+                        answer=_bounded_call(FREYA.system.facade.chat, 60.0, composed, context={**request_context.to_dict(),"original_request":message})
                 else:
                     composed=message or "Please inspect the attached files and report the useful findings."
                     if context: composed += "\n\n"+context
                     if context or research_requested:
                         composed += "\n\n[ROUTING INSTRUCTION] Preserve the complete user request when selecting or composing downstream capability queries. Never use only the first command verb as a search query. Use visual context only as grounded evidence."
-                    answer=_bounded_call(FREYA.system.facade.chat, 60.0, composed, context={"original_request":message,"attachment_paths":attachments,"visual_context":context,"has_images":False,"research_requested":research_requested})
+                    self._active_exchange_recorded=True
+                    answer=_bounded_call(FREYA.system.facade.chat, 60.0, composed, context={**request_context.to_dict(),"original_request":message,"attachment_paths":attachments,"visual_context":context,"has_images":False,"research_requested":research_requested})
                 emit_avatar("SPEAKING",activity="response"); self.send_payload(200,{"answer":answer,"image_results":image_results,"vision_observations":vision_meta.get("observations",{}) if isinstance(vision_meta,dict) else {},"research_queries":research_data.get("queries",[]) if isinstance(research_data,dict) else []}); emit_avatar("SUCCESS"); emit_avatar("IDLE")
             except (BrokenPipeError,ConnectionResetError,ConnectionAbortedError): emit_avatar("IDLE")
             except Exception as error:
+                if getattr(self,"_active_trace_id",None):
+                    emit_avatar("ERROR",trace_id=self._active_trace_id,message=str(error))
                 try:
                     trace_path=self.workspace / "outputs" / "ui_server_exception_trace.log"
                     trace_path.parent.mkdir(parents=True,exist_ok=True)

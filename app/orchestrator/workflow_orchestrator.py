@@ -614,6 +614,24 @@ class WorkflowOrchestrator:
                 return workflow.status
         return None
 
+    def get_workflow_verification(self, workflow_id: str) -> Dict[str, Any]:
+        """Return authoritative post-execution verification evidence for a workflow."""
+        if not self._task_executor:
+            return {"status": "unknown", "reason": "task executor unavailable"}
+        context = self._task_executor.get_context(workflow_id)
+        if context is None:
+            return {"status": "unknown", "reason": "workflow execution context unavailable"}
+        evidence = dict(context.metadata.get("verification", {}))
+        if not evidence:
+            state = context.metadata.get("execution_state")
+            if state == ExecutionState.VERIFICATION_FAILED.value:
+                return {"status": "failed", "reason": "execution verification failed"}
+            return {"status": "unknown", "reason": "workflow has no verification evidence"}
+        return {
+            **evidence,
+            "status": "verified" if evidence.get("success") is True else "failed",
+        }
+
     def pause_workflow(self, workflow_id: str) -> bool:
         if self._task_executor:
             return self._task_executor.pause(workflow_id)

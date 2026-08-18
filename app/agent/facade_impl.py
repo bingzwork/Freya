@@ -13,6 +13,7 @@ from app.execution.engine import ExecutionEngine
 from app.conversational_control import ConversationControlHandler
 from app.core.chat_activity import FreyaChatActivityProvider
 from app.core.correlation import correlation_scope
+from app.core.request_context import RequestContext
 from app.core.priority_llm import PriorityLLMProvider, LLMPriority
 from app.memory.coordinator import MemoryCoordinator
 from app.verification.answer_verifier import AnswerVerifier
@@ -45,31 +46,53 @@ class AgentFacadeImpl:
         self._start_time = time.time()
 
     def chat(self, user_input: str, context: Optional[Dict[str, Any]] = None) -> str:
-        """Handle a chat message through the canonical control, routing, and memory paths."""
-        with correlation_scope(prefix="request") as correlation_id:
-            try:
-                route_result = self._control.route_question(
-                    user_input,
-                    correlation_id=correlation_id,
-                    request_context=context,
-                )
-                if route_result.is_control:
-                    response = self._handle_control(route_result.control_command)
-                elif route_result.is_direct_answer:
-                    response = self._answer_directly(user_input, route_result)
-                elif route_result.is_clarification:
-                    response = self._ask_clarification(user_input, route_result)
-                elif route_result.is_engineering:
-                    response = self._execute_engineering_task(user_input, route_result)
-                else:
-                    response = self._answer_directly(user_input, route_result)
+        """Handle one request through the canonical control, routing, and memory path.
 
-                self._control.record_question_exchange(
-                    user_input,
-                    response,
-                    correlation_id=correlation_id,
-                )
-                return response
+        A request failure is converted into a conversational safe failure after the
+        exchange has been identified.  ``finish_question`` remains in ``finally``
+        so a provider, router, or formatter exception cannot leave chat activity
+        permanently active.
+        """
+        request_context = RequestContext.from_mapping(context, original_message=user_input) if context is not None else None
+        with correlation_scope(
+            (request_context.trace_id if request_context else None),
+            prefix="request",
+        ) as correlation_id:
+            response = None
+            try:
+                try:
+                    route_kwargs = {"correlation_id": correlation_id}
+                    if request_context is not None:
+                        route_kwargs["request_context"] = request_context.to_dict()
+                    route_result = self._control.route_question(user_input, **route_kwargs)
+                    if route_result.is_control:
+                        response = self._handle_control(route_result.control_command)
+                    elif route_result.is_direct_answer:
+                        response = self._answer_directly(user_input, route_result)
+                    elif route_result.is_clarification:
+                        response = self._ask_clarification(user_input, route_result)
+                    elif route_result.is_engineering:
+                        response = self._execute_engineering_task(user_input, route_result, request_context)
+                    else:
+                        response = self._answer_directly(user_input, route_result)
+                except Exception:
+                    logger.error(f"[AgentFacadeImpl] Request failed trace={correlation_id}")
+                    response = (
+                        "I couldn't complete that request safely. "
+                        "The operation failed before a reliable result was available."
+                    )
+                try:
+                    record_kwargs = {"correlation_id": correlation_id}
+                    if request_context is not None:
+                        record_kwargs["request_context"] = request_context.to_dict()
+                    self._control.record_question_exchange(
+                        user_input,
+                        response or "I couldn't produce a response.",
+                        **record_kwargs,
+                    )
+                except Exception:
+                    logger.error(f"[AgentFacadeImpl] Failed to record exchange trace={correlation_id}")
+                return response or "I couldn't produce a response."
             finally:
                 self._control.finish_question()
 
@@ -185,6 +208,16 @@ unless explicitly asked to do so."""
         classification = classify_intent(user_input)
         return get_missing_slots_prompt(classification.intent, classification.entities)
 
-    def _execute_engineering_task(self, user_input: str, route_result: RouteResult) -> str:
-        """Execute an engineering task via the execution engine."""
-        return self._execution.execute_plan(user_input)
+    def _execute_engineering_task(
+        self,
+        user_input: str,
+        route_result: RouteResult,
+        request_context: Optional[RequestContext] = None,
+    ) -> str:
+        """Execute an engineering task through the canonical execution contract."""
+        if request_context is None:
+            return self._execution.execute_plan(user_input)
+        return self._execution.execute_plan(
+            user_input,
+            request_context=request_context.to_dict(),
+        )

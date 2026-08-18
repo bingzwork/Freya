@@ -499,8 +499,22 @@ class SafetyPromotionGates:
                 # Keep the standard fail-closed result when a custom handler
                 # is unavailable or malformed.
 
+        self._attach_request_identity(result, context)
         self._record_result(result, time.time() - start_time)
         return result
+
+    @staticmethod
+    def _attach_request_identity(result: "PromotionResult", context: Any) -> None:
+        """Keep safety decisions bound to the originating request and action."""
+        metadata = getattr(context, "metadata", {}) if context is not None else {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+        result.metadata.update({
+            key: metadata[key]
+            for key in ("trace_id", "correlation_id", "request_id", "session_id", "source", "channel")
+            if metadata.get(key) is not None
+        })
+        result.metadata.setdefault("operation_id", getattr(result, "operation_id", "unknown"))
 
     def _validate_context(self, context: Any) -> List[str]:
         """Return deterministic errors for malformed promotion contexts."""
@@ -551,7 +565,14 @@ class SafetyPromotionGates:
             overall_confidence=0.0,
             rejection_reasons=list(dict.fromkeys(reasons)),
             requires_human_review=False,
-            metadata={"evaluation_error": True},
+            metadata={
+                "evaluation_error": True,
+                **{
+                    key: getattr(context, "metadata", {}).get(key)
+                    for key in ("trace_id", "correlation_id", "request_id", "session_id", "source", "channel")
+                    if isinstance(getattr(context, "metadata", None), dict) and getattr(context, "metadata", {}).get(key) is not None
+                },
+            },
         )
 
     def _determine_safety_level(self, risks: List[RiskAssessment]) -> SafetyLevel:

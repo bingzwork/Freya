@@ -3,8 +3,9 @@ import os
 import subprocess 
 import threading 
 from app.core.logger import logger 
-from app.verification.runner import VerificationResult 
-_active = {} 
+from app.verification.runner import VerificationResult, VerificationStatus
+
+_active = {}
 _lock = threading.Lock() 
 def fingerprint(runner, command): 
     digest = hashlib.sha256('\\0'.join(command).encode('utf-8')) 
@@ -25,12 +26,12 @@ def process(runner, command):
     proc = subprocess.Popen(command, cwd=runner.workspace, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) 
     try: 
         out, err = proc.communicate(timeout=runner.timeout_seconds) 
-        return VerificationResult(proc.returncode == 0, command, out or '', err or '', proc.returncode) 
+        return VerificationResult(proc.returncode == 0, command, out or '', err or '', proc.returncode, status=VerificationStatus.VERIFIED if proc.returncode == 0 else VerificationStatus.FAILED)
     except subprocess.TimeoutExpired as error: 
         runner._terminate_process(proc) 
         out = getattr(error, 'output', '') or ''; err = getattr(error, 'stderr', '') or '' 
         logger.warning('[Verification] Timed out; process terminated and lock released') 
-        return VerificationResult(False, command, out, err or f'Verification timed out after {runner.timeout_seconds} seconds.', -1) 
+        return VerificationResult(False, command, out, err or f'Verification timed out after {runner.timeout_seconds} seconds.', -1, status=VerificationStatus.UNKNOWN)
 def run(runner, command): 
     key = fingerprint(runner, command) 
     with _lock: 
@@ -46,5 +47,5 @@ def run(runner, command):
             with _lock: entry['waiters'] = entry['waiters'] - 1; _active.pop(key, None) if entry['waiters'] == 0 else None 
     entry['event'].wait(timeout=runner.timeout_seconds + 2) 
     with _lock: result = entry['result']; entry['waiters'] = entry['waiters'] - 1; _active.pop(key, None) if entry['waiters'] == 0 else None 
-    return result or VerificationResult(False, command, '', 'Verification waiter timed out.', -1)
+    return result or VerificationResult(False, command, '', 'Verification waiter timed out.', -1, status=VerificationStatus.UNKNOWN)
 

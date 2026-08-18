@@ -9,6 +9,7 @@ import sys
 import json
 import signal
 import argparse
+import uuid
 from contextlib import nullcontext
 try:
     from prompt_toolkit import PromptSession
@@ -19,6 +20,7 @@ except ImportError:
 from pathlib import Path
 
 from app.core.initializer import SystemInitializer, SystemConfig
+from app.core.request_context import RequestContext
 from app.core.logger import logger
 
 
@@ -28,9 +30,10 @@ class FreyaApp:
     def __init__(self, workspace: Path, config: SystemConfig = None):
         self.workspace = workspace
         self.config = config or SystemConfig()
-        self.initializer = SystemInitializer(workspace, config)
+        self.initializer = SystemInitializer(workspace, self.config)
         self.system = None
         self._running = False
+        self._session_id = f"session_{uuid.uuid4().hex}"
 
     def start(self) -> None:
         """Initialize and start all subsystems."""
@@ -48,10 +51,16 @@ class FreyaApp:
             logger.info("[FreyaApp] Shutdown complete")
 
     def chat(self, user_input: str) -> str:
-        """Process a single chat message."""
+        """Process a single chat message through the canonical request context."""
         if not self.system:
             raise RuntimeError("System not initialized. Call start() first.")
-        return self.system.facade.chat(user_input)
+        request_context = RequestContext.create(
+            user_input,
+            session_id=self._session_id,
+            source="user",
+            channel="cli",
+        ).to_dict()
+        return self.system.facade.chat(user_input, context=request_context)
 
     def execute_task(self, task: str, allow_mutations: bool = True) -> str:
         """Execute an engineering task directly."""

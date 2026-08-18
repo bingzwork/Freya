@@ -209,6 +209,15 @@ class LearningPipeline:
         start = time.time()
         result = LearningPipelineResult(candidate_id=candidate.id)
         result.observe_result = self._observe(candidate)
+        if self._is_unverified_outcome(candidate):
+            result.final_decision = WorthRememberingDecision.NO
+            result.worth_remembering_result = WorthRememberingResult(
+                candidate_id=candidate.id,
+                decision=WorthRememberingDecision.NO,
+                reasoning="Outcome was not independently verified; durable learning suppressed",
+            )
+            result.duration_seconds = time.time() - start
+            return result
         if _is_operational_candidate(candidate) and not _has_meaningful_telemetry(candidate):
             fingerprint = _telemetry_fingerprint(candidate)
             if fingerprint in self._recent_telemetry or any(marker in str(getattr(candidate, 'raw_observation', {})).lower() for marker in ('healthy', 'health_check', 'info', 'normal', 'ok', 'alive')):
@@ -242,6 +251,24 @@ class LearningPipeline:
             )
         result.duration_seconds = time.time() - start
         return result
+
+    @staticmethod
+    def _is_unverified_outcome(candidate) -> bool:
+        """Reject execution/answer observations that have no verified outcome."""
+        candidate_type = _candidate_type_value(candidate)
+        if candidate_type == "execution_outcome":
+            raw = getattr(candidate, "raw_observation", {}) or {}
+            status = str(raw.get("verification_status") or (getattr(candidate, "context", {}) or {}).get("verification_status") or "unknown").lower()
+            return status in {"unknown", "not_run", "unverified"}
+        if candidate_type in {"answer", "answer_quality", "llm_answer", "answer_verification"}:
+            metadata = getattr(candidate, "metadata", {}) or {}
+            raw = getattr(candidate, "raw_observation", {}) or {}
+            return (
+                metadata.get("is_valid_answer") is False
+                or metadata.get("verified") is False
+                or raw.get("is_valid_answer") is False
+            )
+        return False
 
     def _observe(self, candidate):
         """Stage 1: Transform incoming LearningCandidate into structured observed data."""

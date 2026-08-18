@@ -1,17 +1,22 @@
 """MaintenanceManager - Creates maintenance work via WorkflowOrchestrator."""
 
+import hashlib
 import threading
 import time
+
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 from app.orchestrator.workflow_orchestrator import WorkflowOrchestrator, WorkflowSpec, WorkflowStrategy, get_workflow_orchestrator
 from app.orchestrator.workflow_composer import IntentType
 from app.core.background_jobs import BackgroundJobService, get_job_service, JobTriggerConfig, JobTriggerType
+from app.core.request_context import RequestContext
+from app.core.logger import logger
 
 from .models import (
     AutonomyConfig,
     AutonomousWorkItem,
+    AutonomyCandidate,
 )
 
 
@@ -41,8 +46,12 @@ class MaintenanceManager:
         self._active_work: Dict[str, AutonomousWorkItem] = {}
         self._work_history: List[AutonomousWorkItem] = []
         self._max_history = 100
+        self._cycle_actions = 0
+        self._active_dedup_keys = set()
+        self._monitor_threads: Dict[str, threading.Thread] = {}
         
         # Scheduled job ID
+
         self._check_job_id: Optional[str] = None
         
         # Default maintenance task types and their workflow specs
@@ -149,8 +158,24 @@ class MaintenanceManager:
             
         self._running = False
         self._shutdown_event.set()
+
+        with self._lock:
+            active_items = list(self._active_work.values())
+            monitor_threads = list(self._monitor_threads.values())
+        for work_item in active_items:
+            if self._workflow_orchestrator and work_item.workflow_execution_id:
+                try:
+                    self._workflow_orchestrator.cancel_workflow(work_item.workflow_execution_id)
+                except Exception:
+                    pass
+            self._complete_work(work_item, False, {"final_status": "shutdown", "error": "maintenance manager stopped"})
+        for thread in monitor_threads:
+            thread.join(timeout=1.0)
+        with self._lock:
+            self._monitor_threads.clear()
         
         # Cancel scheduled job
+
         if self._check_job_id and self._job_service:
             try:
                 self._job_service.remove_job(self._check_job_id)
@@ -204,33 +229,77 @@ class MaintenanceManager:
         now = time.time()
         
         with self._lock:
+            self._cycle_actions = 0
             # Check concurrent work limit
             active_count = len([w for w in self._active_work.values() if w.status == "running"])
-            if active_count >= 2:  # Limit concurrent maintenance tasks
+            if active_count >= min(2, self.config.max_concurrent_autonomous_tasks):
                 return
-                
+
             due_tasks = []
+
             for task_type, task_config in self._maintenance_tasks.items():
                 last = self._last_run.get(task_type, 0)
                 interval = task_config["interval_seconds"]
                 if now - last >= interval:
                     due_tasks.append((task_type, task_config))
                     
-        # Execute due tasks
+        # Execute due tasks, bounded by the shared autonomy cycle budget.
         for task_type, task_config in due_tasks:
-            if not self._running:
+            if not self._running or self._cycle_actions >= max(0, self.config.max_actions_per_cycle):
                 break
-            self._execute_maintenance(task_type, task_config)
-            
-            # Update last run time
+            dedup_key = self._deduplication_key(task_type)
+            with self._lock:
+                if dedup_key in self._active_dedup_keys:
+                    continue
+                self._active_dedup_keys.add(dedup_key)
+                self._cycle_actions += 1
+            self._execute_maintenance(task_type, task_config, dedup_key)
+
+            # Update last run time even when execution is rejected; the scheduler remains bounded.
             with self._lock:
                 self._last_run[task_type] = now
 
-    def _execute_maintenance(self, task_type: str, task_config: Dict[str, Any]) -> None:
-        """Execute a maintenance task via WorkflowOrchestrator."""
+    @staticmethod
+    def _deduplication_key(task_type: str) -> str:
+        return "maintenance:" + hashlib.sha256(task_type.encode("utf-8")).hexdigest()[:24]
+
+    def _execute_maintenance(self, task_type: str, task_config: Dict[str, Any], dedup_key: Optional[str] = None) -> None:
+        """Execute a provenance-bearing maintenance task via WorkflowOrchestrator."""
+        dedup_key = dedup_key or self._deduplication_key(task_type)
+        trace_id = RequestContext.create(
+            original_message=f"Scheduled maintenance: {task_type}",
+            source="autonomy",
+            channel="background",
+        ).trace_id
+        candidate = AutonomyCandidate(
+            source="maintenance_schedule",
+            source_id=task_type,
+            proposed_action=task_type,
+            reason="Approved recurring maintenance responsibility is due",
+            goal={"maintenance_task_type": task_type, "name": task_config["name"]},
+            expected_value=task_config["description"],
+            urgency="scheduled",
+            risk="maintenance_actions_must_pass_safety_gate",
+            required_authorization="safety_gate_and_verification",
+            required_resources=list(task_config["workflow_spec"].get("required_capabilities", ["system_monitoring"])),
+            deduplication_key=dedup_key,
+            retry_state={"attempt": 0, "max_retries": self.config.max_retries_per_task},
+            trace_id=trace_id,
+        )
         try:
-            workflow_spec_dict = task_config["workflow_spec"]
-            
+            workflow_spec_dict = dict(task_config["workflow_spec"])
+            workflow_context = dict(workflow_spec_dict.get("context", {}))
+            workflow_context.update({
+                "autonomous": True,
+                "autonomy_candidate": candidate.to_dict(),
+                "request_context": {
+                    "trace_id": trace_id,
+                    "source": "autonomy",
+                    "channel": "background",
+                    "session_id": f"autonomy_session_{task_type}",
+                },
+            })
+
             # Create WorkflowSpec
             spec = WorkflowSpec(
                 name=workflow_spec_dict.get("name", f"Maintenance: {task_type}"),
@@ -240,7 +309,8 @@ class MaintenanceManager:
                 required_capabilities=workflow_spec_dict.get(
                     "required_capabilities", ["system_monitoring"]
                 ),
-                context=workflow_spec_dict.get("context", {}),
+                context=workflow_context,
+
                 max_steps=workflow_spec_dict.get("max_steps", 5),
                 max_parallel=workflow_spec_dict.get("max_parallel", 1),
                 timeout_seconds=workflow_spec_dict.get("timeout_seconds", 180.0),
@@ -259,7 +329,14 @@ class MaintenanceManager:
                 metadata={
                     "maintenance_task_name": task_config["name"],
                     "interval_seconds": task_config["interval_seconds"],
+                    "source": candidate.source,
+                    "source_id": candidate.source_id,
+                    "reason": candidate.reason,
+                    "deduplication_key": dedup_key,
+                    "autonomy_candidate": candidate.to_dict(),
+                    "trace_id": trace_id,
                 },
+
             )
             work_item.status = "running"
             work_item.workflow_execution_id = execution_id
@@ -270,15 +347,20 @@ class MaintenanceManager:
                 self._active_work[work_item.id] = work_item
                 
             # Start monitoring thread
-            threading.Thread(
+            monitor_thread = threading.Thread(
                 target=self._monitor_work,
                 args=(work_item,),
                 daemon=True,
                 name=f"MaintMonitor-{work_item.id[:8]}"
-            ).start()
-            
-        except Exception:
-            raise
+            )
+            with self._lock:
+                self._monitor_threads[work_item.id] = monitor_thread
+            monitor_thread.start()
+
+        except Exception as exc:
+            with self._lock:
+                self._active_dedup_keys.discard(dedup_key)
+            logger.warning(f"[trace={trace_id}] maintenance work failed before tracking: {exc}")
 
     def _monitor_work(self, work_item: AutonomousWorkItem) -> None:
         """Monitor a maintenance work item until completion."""
@@ -299,24 +381,44 @@ class MaintenanceManager:
                 from app.orchestrator.workflow_orchestrator import WorkflowStatus
                 
                 if status in [WorkflowStatus.COMPLETED, WorkflowStatus.FAILED, WorkflowStatus.CANCELLED]:
-                    success = status == WorkflowStatus.COMPLETED
-                    self._complete_work(work_item, success, {"final_status": status.value})
+                    verification = self._workflow_verification(execution_id)
+                    verified = verification.get("status") == "verified"
+                    success = status == WorkflowStatus.COMPLETED and verified
+                    details = {"final_status": status.value, "verification": verification}
+                    if status == WorkflowStatus.COMPLETED and not verified:
+                        details["error"] = "maintenance workflow reached terminal status without VERIFIED outcome"
+                    self._complete_work(work_item, success, details)
                     break
-                    
+
             except Exception:
                 break
                 
             time.sleep(5.0)
 
+    def _workflow_verification(self, execution_id: str) -> Dict[str, Any]:
+        """Read authoritative verification evidence without trusting terminal status alone."""
+        getter = getattr(self._workflow_orchestrator, "get_workflow_verification", None) if self._workflow_orchestrator else None
+        if not callable(getter):
+            return {"status": "unknown", "reason": "verification API unavailable"}
+        try:
+            evidence = getter(execution_id)
+            return dict(evidence) if isinstance(evidence, dict) else {"status": "unknown"}
+        except Exception as exc:
+            return {"status": "unknown", "reason": str(exc)}
+
     def _complete_work(self, work_item: AutonomousWorkItem, success: bool, details: Dict[str, Any]) -> None:
-        """Mark work as complete."""
+        """Mark work complete only when workflow status and verification both permit it."""
+
         work_item.status = "completed" if success else "failed"
         work_item.metadata["completion_details"] = details
         
         with self._lock:
             if work_item.id in self._active_work:
                 del self._active_work[work_item.id]
+            self._monitor_threads.pop(work_item.id, None)
+            self._active_dedup_keys.discard(work_item.metadata.get("deduplication_key"))
             self._work_history.append(work_item)
+
             if len(self._work_history) > self._max_history:
                 self._work_history = self._work_history[-self._max_history:]
 

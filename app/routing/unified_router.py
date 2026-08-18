@@ -193,9 +193,11 @@ class UnifiedRouter:
         Uses KnowledgeFirstResolver for knowledge-first routing when available.
         """
         route_context = dict(context or {})
-        with correlation_scope(route_context.get("correlation_id"), prefix="request") as correlation_id:
+        with correlation_scope(route_context.get("trace_id") or route_context.get("correlation_id"), prefix="request") as correlation_id:
+            route_context.setdefault("trace_id", correlation_id)
             route_context.setdefault("correlation_id", correlation_id)
             route_context.setdefault("request_id", correlation_id)
+            route_context.setdefault("decision_trace", [])
 
             # 1. Check conversational control FIRST (short-circuits everything)
             control_cmd = self._control_parser.parse(user_input)
@@ -206,6 +208,11 @@ class UnifiedRouter:
                     reason="Control command",
                     is_control=True,
                     control_command=control_cmd,
+                    routing_metadata={
+                        "trace_id": correlation_id,
+                        "session_id": route_context.get("session_id"),
+                        "decision": "system_control",
+                    },
                 )
 
             # 2. Knowledge-first routing is authoritative. Resolver failures are
@@ -226,6 +233,7 @@ class UnifiedRouter:
                 )
                 if resolution.action == "llm_fallback":
                     llm_context = dict(resolution.llm_context or {})
+                    llm_context.setdefault("trace_id", correlation_id)
                     llm_context.setdefault("correlation_id", correlation_id)
                     llm_context.setdefault("request_id", correlation_id)
                     return RouteResult(
@@ -236,7 +244,13 @@ class UnifiedRouter:
                         llm_prompt=resolution.llm_prompt,
                         llm_priority=resolution.llm_priority,
                         llm_context=llm_context,
-                        routing_metadata=resolution.routing_metadata,
+                        routing_metadata={
+                            **dict(resolution.routing_metadata or {}),
+                            "trace_id": correlation_id,
+                            "session_id": route_context.get("session_id"),
+                            "intent_classification": classification.to_contract(),
+                            "decision": "conversation_or_reasoning",
+                        },
                     )
             route_context["intent_type"] = classification.intent.value
 
@@ -248,7 +262,9 @@ class UnifiedRouter:
                 selected_capability = capability_router.get_capability(selected_name)
                 if selected_confidence >= 0.55 and selected_capability is not None:
                     selection_metadata = {
-                        "intent_classification": classification.to_dict(),
+                        "trace_id": correlation_id,
+                        "session_id": route_context.get("session_id"),
+                        "intent_classification": classification.to_contract(),
                         "selected_capability": selected_name,
                         "capability_confidence": selected_confidence,
                     }
@@ -270,12 +286,15 @@ class UnifiedRouter:
                         capability_confidence=selected_confidence,
                         routing_metadata=selection_metadata,
                     )
-                    route_context["selected_capability"] = selected_name
-                    route_context["capability_confidence"] = selected_confidence
             # Engineering intents preserve the classifier planning contract.
             # Knowledge-first answerability is for questions, not project changes.
             if classification.intent.requires_planning:
-                routing_metadata = dict(intent_classification=classification.to_dict())
+                routing_metadata = {
+                    "trace_id": correlation_id,
+                    "session_id": route_context.get("session_id"),
+                    "intent_classification": classification.to_contract(),
+                    "decision": "action" if classification.intent.requires_planning else "conversation",
+                }
                 if classification.should_clarify_engineering:
                     return RouteResult(
                         intent=classification.intent,
@@ -305,7 +324,13 @@ class UnifiedRouter:
                     reason=f"Knowledge-first answer: {', '.join(resolution.sources)}",
                     is_direct_answer=True,
                     answer=resolution.answer,
-                    routing_metadata=resolution.routing_metadata,
+                    routing_metadata={
+                        **dict(resolution.routing_metadata or {}),
+                        "trace_id": correlation_id,
+                        "session_id": route_context.get("session_id"),
+                        "intent_classification": classification.to_contract(),
+                        "decision": "memory_or_answer",
+                    },
                 )
             if resolution.action == "capability":
                 return RouteResult(
@@ -316,10 +341,17 @@ class UnifiedRouter:
                     capability_name=resolution.capability_name,
                     capability_confidence=resolution.capability_confidence,
                     capability_result=resolution.capability_result,
-                    routing_metadata=resolution.routing_metadata,
+                    routing_metadata={
+                        **dict(resolution.routing_metadata or {}),
+                        "trace_id": correlation_id,
+                        "session_id": route_context.get("session_id"),
+                        "intent_classification": classification.to_contract(),
+                        "decision": "capability",
+                    },
                 )
             if resolution.action == "llm_fallback":
                 llm_context = dict(resolution.llm_context or {})
+                llm_context.setdefault("trace_id", correlation_id)
                 llm_context.setdefault("correlation_id", correlation_id)
                 llm_context.setdefault("request_id", correlation_id)
                 return RouteResult(
@@ -330,7 +362,13 @@ class UnifiedRouter:
                     llm_prompt=resolution.llm_prompt,
                     llm_priority=resolution.llm_priority,
                     llm_context=llm_context,
-                    routing_metadata=resolution.routing_metadata,
+                    routing_metadata={
+                        **dict(resolution.routing_metadata or {}),
+                        "trace_id": correlation_id,
+                        "session_id": route_context.get("session_id"),
+                        "intent_classification": classification.to_contract(),
+                        "decision": "llm_fallback",
+                    },
                 )
 
             # Resolver implementations must return one of the above actions.

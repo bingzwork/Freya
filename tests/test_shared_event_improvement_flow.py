@@ -68,7 +68,8 @@ def test_learning_pipeline_publishes_to_shared_bus_and_creates_candidate(shared_
         id="learning-event-1",
         candidate_type=LearningCandidateType.EXECUTION_OUTCOME,
         source_component="ExecutionVerifier",
-        raw_observation={"outcome": "verification failed"},
+        raw_observation={"outcome": "verification failed", "verification_status": "failed"},
+
         context={"task": "verify patch"},
         tags=["verification"],
     )
