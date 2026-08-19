@@ -2031,16 +2031,16 @@ class ResearchCapability(Capability):
         matrix = state.matrix
         if matrix is None or len(entities) < 2:
             return "I could not build a validated comparison from the available evidence."
-        lines = [f"**{entities[0]} vs {entities[1]}**", "", f"The comparison is based on {state.category} evidence for both entities.", "", "| Dimension | " + entities[0] + " | " + entities[1] + " |", "|---|---|---|"]
+        lines = [f"{entities[0]} versus {entities[1]}", "", f"I compared the available {state.category} evidence for both entities.", "", "Evidence by dimension:"]
         for dimension in matrix.dimensions[:8]:
             cells = [matrix.cells[entity][dimension] for entity in entities]
             values = []
             for cell in cells:
                 values.append("; ".join(dict.fromkeys(claim.value for claim in cell.claims))[:220] if cell.claims else "Not established by the retrieved evidence")
-            lines.append(f"| {dimension.title()} | {values[0]} | {values[1]} |")
+            lines.append(f"{dimension.replace('_', ' ').title()}: {entities[0]} — {values[0]}; {entities[1]} — {values[1]}")
         if matrix.sufficiency == SufficiencyStatus.PARTIAL_BUT_USEFUL:
-            lines.extend(["", "**Evidence limits:** Some dimensions remain unverified: " + ", ".join(matrix.missing_evidence[:4]) + "."])
-        lines.extend(["", "**Recommendation:** Choose the entity whose covered strengths match your use case; the retrieved evidence supports the tradeoffs shown above rather than an invented universal winner."])
+            lines.extend(["", "Evidence limits: Some dimensions remain unverified: " + ", ".join(matrix.missing_evidence[:4]) + "."])
+        lines.extend(["", "Bottom line: The available evidence does not establish a universal winner. Choose based on the dimensions that matter most for your use case."])
         return "\n".join(lines)
 
     @staticmethod
@@ -2050,7 +2050,7 @@ class ResearchCapability(Capability):
             return "I could not resolve two comparable entities, so I will not invent the missing side of the comparison."
         matrix = state.matrix
         missing = ", ".join(matrix.missing_evidence[:5]) if matrix else "the required evidence cells"
-        return f"I resolved **{names[0]}** and **{names[1]}**, but the available evidence is insufficient for a reliable full comparison. I will not replace missing facts with snippets or placeholders. Missing coverage: {missing}."
+        return f"I resolved {names[0]} and {names[1]}, but the available evidence is insufficient for a reliable full comparison. I will not replace missing facts with snippets or placeholders. Missing coverage: {missing}."
 
     def _action_semantic_research(self, topic: str, inputs: Dict[str, Any], semantic: RequestSemanticModel) -> Dict[str, Any]:
         if semantic.intent in {ResearchIntent.TECHNICAL_COMPARISON.value, ResearchIntent.PRODUCT_COMPARISON.value}:

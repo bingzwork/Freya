@@ -97,3 +97,57 @@ if __name__ == "__main__":
 # Keep the import visible to type-checkers and make the test's architectural intent explicit.
 assert ResearchIntent.IMAGE_SEARCH.value == "IMAGE_SEARCH"
 assert ResearchMode.IMAGE_SEARCH.value == "IMAGE_SEARCH"
+
+
+def test_cpu_comparison_does_not_inherit_amd_family_for_intel_core_shorthand():
+    from app.research.comparison_intelligence import ComparisonIntelligenceEngine
+
+    semantic = RequestSemanticAnalyzer.analyze("ryzen 7 5700x vs i5 14400")
+    resolved = ComparisonIntelligenceEngine().resolve(semantic)
+    assert [item.canonical_name for item in resolved] == ["AMD Ryzen 7 5700X", "Intel Core i5-14400"]
+    assert [item.manufacturer for item in resolved] == ["AMD", "Intel"]
+    assert all("AMD Ryzen" not in item.canonical_name for item in resolved[1:])
+
+
+def test_cpu_comparison_queries_preserve_independent_manufacturers():
+    from app.research.comparison_intelligence import ComparisonIntelligenceEngine
+
+    semantic = RequestSemanticAnalyzer.analyze("ryzen 7 5700x vs i5 14400")
+    engine = ComparisonIntelligenceEngine()
+    resolved = engine.resolve(semantic)
+    plan = engine.build_plan(semantic, resolved)
+    queries = [item["query"] for item in plan.queries]
+    assert any("Intel Core i5-14400 official specifications" in query for query in queries)
+    assert any("AMD Ryzen 7 5700X vs Intel Core i5-14400" in query for query in queries)
+    assert not any("AMD Ryzen i5" in query for query in queries)
+
+
+def test_comparison_answer_is_plain_composition_not_raw_markdown_table():
+    from app.research.capability import ResearchCapability
+    from app.research.comparison_intelligence import ComparisonState, ComparisonIntelligenceEngine
+
+    semantic = RequestSemanticAnalyzer.analyze("ryzen 7 5700x vs i5 14400")
+    engine = ComparisonIntelligenceEngine()
+    resolved = engine.resolve(semantic)
+    plan = engine.build_plan(semantic, resolved)
+    matrix = engine.build_matrix(resolved, plan.dimensions, [])
+    answer = ResearchCapability._render_partial_comparison(ComparisonState(list(resolved), plan.category, plan, matrix=matrix))
+    assert "**" not in answer
+    assert "| Dimension |" not in answer
+    assert "AMD Ryzen 7 5700X" in answer
+    assert "Intel Core i5-14400" in answer
+
+
+def test_formatter_hides_provider_diagnostics_from_research_answer():
+    from app.capabilities.formatter import ResponseFormatter
+    from app.capabilities.router import CapabilityResult
+
+    result = CapabilityResult(
+        success=True,
+        capability_name="research_capability",
+        data={"answer": "A grounded partial comparison.", "uncertainty": ["Trafilatura page read failed: HTTPError", "DDGSException No usable public page results remained after filtering"]},
+    )
+    rendered = ResponseFormatter().format(result)
+    assert "HTTPError" not in rendered
+    assert "DDGSException" not in rendered
+    assert "Some public sources were unavailable or unreadable" in rendered

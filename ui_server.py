@@ -197,7 +197,8 @@ def _research_text_request(question, semantic=None):
         research_query = re.sub(r"^\s*(?:please\s+)?(?:search|look\s+up|find|show)\s+(?:the\s+)?(?:public\s+)?(?:web|internet)?\s*(?:for|about)?\s*", "", research_query, flags=re.I).strip(" .?!") or research_query
     research_query=re.sub(r"\btoday(?:'s|s)?\b", "latest", research_query, flags=re.I).strip()
     result=_bounded_call(router.execute_capability,RESEARCH_REQUEST_TIMEOUT_SECONDS,"research_capability",research_query,capability_action="research_topic",topic=str(question or "").strip(),normalized_query=research_query,site_constraint=semantic.requested_domain if semantic.shopping else "",allowed_domains=[semantic.requested_domain] if semantic.requested_domain and semantic.shopping else [],original_request=question,semantic=semantic.to_dict(),intent=semantic.intent,mode=semantic.execution_mode,response_type=semantic.response_type,requested_count=semantic.requested_count,freshness=semantic.freshness,max_sources=max(5, int(semantic.requested_count or 5)))
-    data=getattr(result,"data",None) if isinstance(getattr(result,"data",None),dict) else {}
+    raw_data=getattr(result,"data",None) if isinstance(getattr(result,"data",None),dict) else {}
+    data=raw_data.get("data") if isinstance(raw_data.get("data"),dict) else raw_data
     data=dict(data)
     data.setdefault("shopping_query", shopping.to_dict())
     if hasattr(result, "data"):
@@ -918,7 +919,30 @@ class Handler(BaseHTTPRequestHandler):
                         composed += "\n\n[ROUTING INSTRUCTION] Preserve the complete user request when selecting or composing downstream capability queries. Never use only the first command verb as a search query. Use visual context only as grounded evidence."
                     self._active_exchange_recorded=True
                     answer=_bounded_call(FREYA.system.facade.chat, DIRECT_CHAT_TIMEOUT_SECONDS, composed, context={**request_context.to_dict(),"original_request":message,"attachment_paths":attachments,"visual_context":context,"has_images":False,"research_requested":research_requested})
-                emit_avatar("SPEAKING",activity="response");                 self.send_payload(200,{"answer":answer,"image_results":image_results,"image_search_metrics":image_search_metrics,"response_type":semantic_model.response_type,"requested_count":semantic_model.requested_count,"vision_observations":vision_meta.get("observations",{}) if isinstance(vision_meta,dict) else {},"research_queries":research_data.get("queries",[]) if isinstance(research_data,dict) else [],"multimodal_semantic":semantic_model.to_dict()}); emit_avatar("SUCCESS"); emit_avatar("IDLE")
+                emit_avatar("SPEAKING", activity="response")
+                comparison_payload = None
+                if isinstance(research_data, dict) and research_data.get("comparison_intelligence"):
+                    comparison_payload = {
+                        "comparison_intelligence": research_data.get("comparison_intelligence") or {},
+                        "citations": research_data.get("citations") or [],
+                        "sources": research_data.get("sources") or [],
+                        "uncertainty": [str(item) for item in (research_data.get("uncertainty") or []) if item],
+                        "partial": bool(research_data.get("partial")),
+                        "answer_plan": str(research_data.get("answer_plan") or ""),
+                    }
+                self.send_payload(200, {
+                    "answer": answer,
+                    "image_results": image_results,
+                    "image_search_metrics": image_search_metrics,
+                    "response_type": semantic_model.response_type,
+                    "requested_count": semantic_model.requested_count,
+                    "vision_observations": vision_meta.get("observations", {}) if isinstance(vision_meta, dict) else {},
+                    "research_queries": research_data.get("queries", []) if isinstance(research_data, dict) else [],
+                    "multimodal_semantic": semantic_model.to_dict(),
+                    "comparison": comparison_payload,
+                })
+                emit_avatar("SUCCESS")
+                emit_avatar("IDLE")
 
             except (BrokenPipeError,ConnectionResetError,ConnectionAbortedError): emit_avatar("IDLE")
             except Exception as error:

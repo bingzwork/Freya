@@ -327,6 +327,12 @@ class ComparisonIntelligenceEngine:
             errors.append("comparison evidence matrix is missing")
         elif state.matrix.sufficiency == SufficiencyStatus.INSUFFICIENT:
             errors.append("evidence is insufficient for a complete comparison")
+        for item in state.resolved_entities:
+            raw = item.raw_text.lower()
+            if state.category == "cpu" and re.search(r"\b(?:intel\s+)?(?:core\s+)?i[3579]\s*[- ]?\s*\d{3,5}\b", raw, re.I) and item.manufacturer != "Intel":
+                errors.append(f"Intel CPU was normalized with the wrong manufacturer: {item.canonical_name}")
+            if state.category == "cpu" and re.search(r"\bryzen\b", raw, re.I) and item.manufacturer != "AMD":
+                errors.append(f"AMD Ryzen CPU was normalized with the wrong manufacturer: {item.canonical_name}")
         for claim in state.claims:
             if self._placeholder(claim.entity) or not claim.property or not claim.value or not claim.source_url:
                 errors.append("untyped or unsupported claim entered comparison state")
@@ -360,9 +366,21 @@ class ComparisonIntelligenceEngine:
                 manufacturer, family = "Samsung", "Galaxy S"
                 model = re.search(r"\bS?\d{1,2}(?:\s*(?:ultra|plus|fe))?\b", value, re.I)
                 canonical = f"Samsung Galaxy S{model.group(0).lstrip('Ss') if model else value}".strip()
-        elif category == "cpu" and ("ryzen" in lowered or (inherited and inherited.family == "Ryzen")):
-            manufacturer, family = "AMD", "Ryzen"
-            canonical = f"AMD Ryzen {value.lower().replace('ryzen', '').strip().upper()}".strip()
+        elif category == "cpu":
+            intel_match = re.search(r"\b(?:intel\s+)?(?:core\s+)?(i[3579])\s*[- ]?\s*(\d{3,5})([a-z]{0,3})?\b", lowered, re.I)
+            ryzen_match = re.search(r"\bryzen\s+(?:(\d)\s+)?(\d{3,5})([a-z]{0,3})\b", lowered, re.I)
+            if intel_match:
+                manufacturer, family = "Intel", "Core"
+                model = f"{intel_match.group(1).lower()}-{intel_match.group(2)}{(intel_match.group(3) or '').upper()}"
+                canonical = f"Intel Core {model}"
+            elif ryzen_match:
+                manufacturer, family = "AMD", "Ryzen"
+                series = f"{ryzen_match.group(1)} " if ryzen_match.group(1) else ""
+                canonical = f"AMD Ryzen {series}{ryzen_match.group(2)}{(ryzen_match.group(3) or '').upper()}"
+            elif inherited and inherited.family in {"Ryzen", "Core"} and re.fullmatch(r"\d{3,5}[a-z]{0,3}", lowered):
+                manufacturer, family = inherited.manufacturer, inherited.family
+                prefix = "AMD Ryzen" if family == "Ryzen" else "Intel Core"
+                canonical = f"{prefix} {value.upper()}"
         elif category == "console" and ("playstation" in lowered or lowered.startswith("ps") or (inherited and inherited.family == "PlayStation")):
             manufacturer, family = "Sony", "PlayStation"
             suffix = value.lower().replace("playstation", "").replace("ps", "").strip()

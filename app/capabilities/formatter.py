@@ -345,7 +345,9 @@ class ResponseFormatter:
             for citation in [*citations, *source_records]:
                 if not isinstance(citation, dict):
                     continue
-                url = citation.get("source_url") or citation.get("url")
+                page = citation.get("page") if isinstance(citation.get("page"), dict) else {}
+                search_result = citation.get("search_result") if isinstance(citation.get("search_result"), dict) else {}
+                url = citation.get("source_url") or citation.get("url") or page.get("url") or search_result.get("url")
                 if not url:
                     continue
                 parsed = urlparse(str(url))
@@ -354,16 +356,25 @@ class ResponseFormatter:
                 if not canonical_url or canonical_url in seen_urls:
                     continue
                 seen_urls.add(canonical_url)
-                title = self._clean_research_display(citation.get("source_title") or citation.get("title") or canonical_url)
+                title = self._clean_research_display(citation.get("source_title") or citation.get("title") or page.get("title") or search_result.get("title") or canonical_url)
                 source_lines.append(f"- {title}: {canonical_url}")
             if source_lines:
                 response += "\n\nSources:\n" + "\n".join(source_lines[:5])
             uncertainty = data.get("uncertainty") or []
             cleaned_uncertainty = []
+            hidden_diagnostic_seen = False
+            diagnostic_pattern = re.compile(r"(?:exception|httperror|traceback|ddgs|failed\s+to\s+fetch|failed\s+to\s+read|provider\s+attempt|connection\s+reset|timeout)", re.I)
             for item in uncertainty:
                 cleaned = self._clean_research_display(item)
-                if cleaned and cleaned not in cleaned_uncertainty:
+                if not cleaned:
+                    continue
+                if diagnostic_pattern.search(cleaned):
+                    hidden_diagnostic_seen = True
+                    continue
+                if cleaned not in cleaned_uncertainty:
                     cleaned_uncertainty.append(cleaned)
+            if hidden_diagnostic_seen:
+                cleaned_uncertainty.append("Some public sources were unavailable or unreadable; the comparison uses the evidence that remained.")
             if cleaned_uncertainty:
                 response += "\n\nEvidence notes: " + " ".join(cleaned_uncertainty[:3])
             return response
