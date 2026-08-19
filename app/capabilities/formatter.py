@@ -6,6 +6,7 @@ Hides internal implementation details unless debug mode is enabled.
 
 import json
 from typing import Any, Dict, List, Optional, Union
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from app.capabilities.router import CapabilityResult, router
 from app.core.logger import logger
@@ -312,6 +313,17 @@ class ResponseFormatter:
         answer = data.get("answer")
         if answer:
             response = str(answer)
+            candidates = data.get("product_candidates") or data.get("candidates") or []
+            if isinstance(candidates, list) and candidates:
+                rows = ["\n\nPrice comparison:", "| Product | Price | Seller | Marketplace |", "|---|---:|---|---|"]
+                for item in candidates[:8]:
+                    if not isinstance(item, dict):
+                        continue
+                    price = item.get("price")
+                    price_text = f"{item.get('currency', '')} {float(price):,.2f}".strip() if isinstance(price, (int, float)) else "Not exposed"
+                    rows.append(f"| {str(item.get('product_name') or 'Listing').replace('|', '/')} | {price_text} | {str(item.get('seller') or 'Not exposed').replace('|', '/')} | {str(item.get('marketplace') or 'Not exposed').replace('|', '/')} |")
+                if len(rows) > 3:
+                    response += "\n".join(rows)
             citations = data.get("citations") or []
             source_records = data.get("sources") or []
             source_lines = []
@@ -320,11 +332,16 @@ class ResponseFormatter:
                 if not isinstance(citation, dict):
                     continue
                 url = citation.get("source_url") or citation.get("url")
-                if not url or url in seen_urls:
+                if not url:
                     continue
-                seen_urls.add(url)
-                title = citation.get("source_title") or citation.get("title") or url
-                source_lines.append(f"- {title}: {url}")
+                parsed = urlparse(str(url))
+                query = [(key, val) for key, val in parse_qsl(parsed.query, keep_blank_values=True) if not key.lower().startswith("utm_") and key.lower() not in {"ref", "tag", "spm"}]
+                canonical_url = urlunparse((parsed.scheme.lower(), (parsed.hostname or "").lower(), parsed.path.rstrip("/") or "/", "", urlencode(query), ""))
+                if not canonical_url or canonical_url in seen_urls:
+                    continue
+                seen_urls.add(canonical_url)
+                title = citation.get("source_title") or citation.get("title") or canonical_url
+                source_lines.append(f"- {title}: {canonical_url}")
             if source_lines:
                 response += "\n\nSources:\n" + "\n".join(source_lines[:5])
             uncertainty = data.get("uncertainty") or []

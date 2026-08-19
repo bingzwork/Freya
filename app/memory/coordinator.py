@@ -157,11 +157,12 @@ class MemoryCoordinator:
         """Persist and index a conversation turn through the canonical write path."""
         role = turn.get("role") if isinstance(turn, dict) else getattr(turn, "role", None)
         content = turn.get("content") if isinstance(turn, dict) else getattr(turn, "content", None)
+        shopping_state = turn.get("shopping_state") if isinstance(turn, dict) else getattr(turn, "shopping_state", None)
         if not role or not content:
             raise ValueError("Conversation turns require non-empty role and content")
 
         with self._lock:
-            persisted_turn = self._conversation.add_message(str(role), str(content))
+            persisted_turn = self._conversation.add_message(str(role), str(content), shopping_state=shopping_state if isinstance(shopping_state, dict) else {})
             self._infer_cross_memory_references(
                 "conversation", persisted_turn.timestamp, persisted_turn.content
             )
@@ -463,6 +464,7 @@ class MemoryCoordinator:
                 "role": turn.role,
                 "content": turn.content,
                 "timestamp": turn.timestamp,
+                "shopping_state": dict(getattr(turn, "shopping_state", {}) or {}),
             }
             for turn in history
         ]

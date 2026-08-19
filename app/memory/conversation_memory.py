@@ -41,7 +41,8 @@ class ConversationTurn:
     role: str  # "user" or "assistant"
     content: str
     timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-    entities: Dict[str, str] = field(default_factory=dict)  # Extracted entities for reference resolution
+    entities: Dict[str, Any] = field(default_factory=dict)  # Extracted entities for reference resolution
+    shopping_state: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -972,12 +973,13 @@ class ConversationMemory:
             if self._summary_storage_path.exists():
                 self._summary_storage_path.unlink()
 
-    def add_message(self, role: str, content: str) -> ConversationTurn:
+    def add_message(self, role: str, content: str, shopping_state: Optional[Dict[str, Any]] = None) -> ConversationTurn:
         """Add a message to the conversation history.
 
         Args:
             role: "user" or "assistant"
             content: Message content
+            shopping_state: Optional structured shopping state for this turn
 
         Returns:
             The created ConversationTurn
@@ -986,7 +988,8 @@ class ConversationMemory:
             turn = ConversationTurn(
                 role=role,
                 content=content,
-                entities=self._extract_entities(content, role)
+                entities=self._extract_entities(content, role),
+                shopping_state=dict(shopping_state or {}),
             )
             self._turns.append(turn)
             self._update_entity_index(len(self._turns) - 1, turn.entities)

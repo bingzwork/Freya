@@ -22,7 +22,7 @@ import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence
-from urllib.parse import quote_plus, urljoin, urlparse, parse_qs, urlencode
+from urllib.parse import quote_plus, urljoin, urlparse, parse_qs, parse_qsl, urlencode, urlunparse
 from urllib.request import Request, urlopen
 from bs4 import BeautifulSoup
 
@@ -52,7 +52,53 @@ class SearchResult:
 
 
 @dataclass
+class ShoppingQuery:
+    raw_query: str
+    intent: str = "product_research"
+    product_category: str = ""
+    use_case: str = ""
+    ranking: str = ""
+    requested_site: str = ""
+    requested_domain: str = ""
+    allowed_domains: List[str] = field(default_factory=list)
+    preferred_marketplace: str = ""
+    region: str = ""
+    normalized_query: str = ""
+    follow_up: bool = False
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class ProductListing:
+    product_name: str
+    model: str = ""
+    product_type: str = ""
+    price: Optional[float] = None
+    currency: str = ""
+    seller: str = ""
+    marketplace: str = ""
+    source_url: str = ""
+    product_url: str = ""
+    image_url: str = ""
+    availability: str = ""
+    shipping: Optional[float] = None
+    rating: Optional[float] = None
+    review_count: Optional[int] = None
+    specifications: Dict[str, Any] = field(default_factory=dict)
+    source: str = ""
+    retrieved_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    confidence: float = 0.0
+    evidence: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
 class WebPage:
+
     url: str
     title: str
     content: str
@@ -230,6 +276,171 @@ def _is_product_query(query: str) -> bool:
     return bool(_PRODUCT_QUERY_WORDS.intersection({token.lower() for token in re.findall(r"[a-z0-9]{3,}", str(query or ""))}))
 
 
+_SITE_ALIASES = {
+    "shopee": "shopee.ph",
+    "shopee.ph": "shopee.ph",
+    "shopee.com": "shopee.com",
+    "amazon": "amazon.com",
+    "amazon.com": "amazon.com",
+    "lazada": "lazada.com.ph",
+    "lazada.com": "lazada.com",
+    "lazada.com.ph": "lazada.com.ph",
+    "ebay": "ebay.com",
+    "ebay.com": "ebay.com",
+    "walmart": "walmart.com",
+    "walmart.com": "walmart.com",
+    "newegg": "newegg.com",
+    "newegg.com": "newegg.com",
+}
+_SITE_PATTERNS = re.compile(r"\b(shopee(?:\.com(?:\.ph)?|\.ph)?|amazon(?:\.com)?|lazada(?:\.com(?:\.ph)?|\.ph)?|ebay(?:\.com)?|walmart(?:\.com)?|newegg(?:\.com)?)\b", re.I)
+_RANKING_PATTERNS = re.compile(r"\b(?:cheapest|cheaper|lowest(?:\s+price)?|best\s+price|most\s+affordable|affordable|price|prices|compare|comparison)\b", re.I)
+_QUERY_FILLER = re.compile(r"\b(?:how\s+about|what\s+about|can\s+you|could\s+you|please|find|show\s+me|look\s+for|search\s+for|in|on|from|the|a|an|me|one|it|that|now|today)\b", re.I)
+
+
+def canonicalize_url(value: Any) -> str:
+    """Canonicalize public evidence URLs for source and listing deduplication."""
+    raw = str(value or "").strip()
+    if not raw.startswith(("http://", "https://")):
+        return ""
+    parsed = urlparse(raw)
+    query = [(key, val) for key, val in parse_qsl(parsed.query, keep_blank_values=True)
+             if not (key.lower().startswith("utm_") or key.lower() in {"ref", "ref_", "tag", "linkcode", "camp", "psc", "spm"})]
+    path = re.sub(r"/{2,}", "/", parsed.path or "/")
+    host = (parsed.hostname or "").lower()
+    if host.endswith("amazon.com") and re.match(r"^/(?:dp|gp/product)/", path, re.I):
+        query = []
+    return urlunparse((parsed.scheme.lower(), host, path.rstrip("/") or "/", "", urlencode(query), ""))
+
+
+def normalize_shopping_query(query: str, *, region: str = "") -> ShoppingQuery:
+    raw = re.sub(r"\s+", " ", str(query or "")).strip(" .?!")
+    lowered = raw.lower()
+    site_match = _SITE_PATTERNS.search(lowered)
+    requested_site = site_match.group(1).lower() if site_match else ""
+    requested_domain = _SITE_ALIASES.get(requested_site, requested_site)
+    region_value = str(region or "").strip().lower()
+    if re.search(r"\b(?:philippines|philippine|pinoy|manila|peso|php|₱)\b", lowered):
+        region_value = "ph"
+    if requested_site == "shopee" and region_value in {"", "ph", "philippines"}:
+        requested_domain = "shopee.ph"
+    ranking_match = _RANKING_PATTERNS.search(lowered)
+    ranking = "cheapest" if ranking_match and re.search(r"\b(?:cheapest|cheaper|lowest|affordable)\b", lowered) else (ranking_match.group(0).lower() if ranking_match else "")
+    use_case = ""
+    use_match = re.search(r"\bfor\s+(.+?)(?:\s+on\s+|\s+in\s+|\s+from\s+|\s*$)", lowered)
+    if use_match:
+        use_case = re.sub(r"\s+", " ", use_match.group(1)).strip(" .?!")
+    topical = _SITE_PATTERNS.sub(" ", lowered)
+    topical = _RANKING_PATTERNS.sub(" ", topical)
+    topical = _QUERY_FILLER.sub(" ", topical)
+    topical = re.sub(r"\b(?:photo\s+printing|photo\s+print(?:ing)?)\b", "photo printer", topical)
+    topical = re.sub(r"\bprinter\s+(?:for\s+)?photo\s+printer\b", "photo printer", topical)
+    topical = re.sub(r"\bprinter\s+photo\b", "photo printer", topical)
+    topical = re.sub(r"\s+", " ", topical).strip(" .?!")
+    if not topical:
+        topical = re.sub(r"\s+", " ", raw).strip(" .?!")
+    normalized = topical
+    if requested_domain and not normalized:
+        normalized = "product"
+    return ShoppingQuery(
+        raw_query=raw,
+        product_category=topical,
+        use_case=use_case,
+        ranking=ranking,
+        requested_site=requested_site,
+        requested_domain=requested_domain,
+        allowed_domains=[requested_domain] if requested_domain else [],
+        preferred_marketplace=requested_domain,
+        region=region_value,
+        normalized_query=normalized,
+        follow_up=bool(re.search(r"\b(?:it|that|the\s+cheapest|the\s+best|one|printer|laptop|product)\b", lowered)),
+    )
+
+
+def _parse_price(text: str) -> tuple[Optional[float], str]:
+    value = re.sub(r"\s+", " ", str(text or ""))
+    patterns = [
+        (r"(?:₱|PHP)\s*([0-9][0-9,]*(?:\.\d{1,2})?)", "PHP"),
+        (r"(?:\$|USD)\s*([0-9][0-9,]*(?:\.\d{1,2})?)", "USD"),
+        (r"(?:€|EUR)\s*([0-9][0-9,.]*(?:\d{1,2})?)", "EUR"),
+        (r"(?:£|GBP)\s*([0-9][0-9,.]*(?:\d{1,2})?)", "GBP"),
+        (r"\b([0-9][0-9,]*(?:\.\d{1,2})?)\s*(PHP|USD|EUR|GBP)\b", None),
+    ]
+    for pattern, currency in patterns:
+        match = re.search(pattern, value, re.I)
+        if not match:
+            continue
+        try:
+            amount = float(match.group(1).replace(",", ""))
+        except ValueError:
+            continue
+        return amount, (currency or match.group(2).upper())
+    return None, ""
+
+
+def _is_search_landing_page(page: WebPage) -> bool:
+    sample = f"{page.title} {page.content[:5000]}".lower()
+    path = (urlparse(page.url).path or "").lower()
+    markers = ("sort by: featured", "results for", "search results", "refine your", "skip to main", "select address", "1-16 of")
+    marketplace_search_path = path in {"/s", "/search", "/search/", "/sch/i.html", "/catalog/"} or path.startswith("/search/")
+    return marketplace_search_path or any(marker in sample for marker in markers) or any(marker in sample for marker in ("sign in or create account", "create account", "login to continue"))
+
+
+def _extract_product_listing(raw_result: Dict[str, Any], page: WebPage, shopping: ShoppingQuery) -> Optional[ProductListing]:
+    if _is_search_landing_page(page):
+        return None
+    source_url = canonicalize_url(page.url or raw_result.get("url"))
+    if not source_url:
+        return None
+    title = re.sub(r"\s+", " ", str(page.title or raw_result.get("title") or "")).strip()
+    title = re.sub(r"\s*[|–-]\s*(?:Amazon|Shopee|Lazada|eBay|Walmart).*?$", "", title, flags=re.I).strip()
+    content = re.sub(r"\s+", " ", str(page.content or ""))
+    price, currency = _parse_price(content[:30000])
+    if price is None:
+        price, currency = _parse_price(str(raw_result.get("snippet") or ""))
+    host = (urlparse(source_url).hostname or "").lower()
+    marketplace = next((domain for domain in shopping.allowed_domains if host == domain or host.endswith("." + domain)), host.replace("www.", ""))
+    seller_match = re.search(r"\b(?:sold by|seller|store)\s*[:\-]?\s*([A-Z0-9][^|.;]{2,80})", content, re.I)
+    seller = re.sub(r"\s+", " ", seller_match.group(1)).strip() if seller_match else marketplace
+    seller = re.split(r"\s+(?:this price|price:|available|ships? from|delivery)\b", seller, maxsplit=1, flags=re.I)[0].strip(" .:-") or marketplace
+    availability_match = re.search(r"\b(in stock|out of stock|available|unavailable|pre[- ]?order)\b", content, re.I)
+    rating_match = re.search(r"\b([1-5](?:\.\d)?)\s*(?:out of 5|/5|stars?)\b", content, re.I)
+    review_match = re.search(r"\b([0-9][0-9,]*)\s+(?:ratings?|reviews?)\b", content, re.I)
+    metadata = page.source_metadata if isinstance(page.source_metadata, dict) else {}
+    image_results = metadata.get("image_results") if isinstance(metadata.get("image_results"), list) else []
+    image_url = ""
+    for item in image_results:
+        if isinstance(item, dict) and item.get("image_url"):
+            image_url = str(item["image_url"])
+            break
+    if not image_url:
+        try:
+            from app.free_image_research_providers import extract_public_page_images
+            exact_images = extract_public_page_images(source_url, limit=3)
+            if exact_images:
+                image_url = str(exact_images[0].get("image_url") or "")
+        except Exception:
+            image_url = ""
+    confidence = 0.75 if price is not None else 0.45
+
+    return ProductListing(
+        product_name=title[:240] or str(raw_result.get("title") or shopping.normalized_query)[:240],
+        product_type=shopping.product_category,
+        price=price,
+        currency=currency,
+        seller=seller[:120],
+        marketplace=marketplace,
+        source_url=source_url,
+        product_url=source_url,
+        image_url=image_url,
+        availability=availability_match.group(1).lower() if availability_match else "",
+        rating=float(rating_match.group(1)) if rating_match else None,
+        review_count=int(review_match.group(1).replace(",", "")) if review_match else None,
+        source=str(raw_result.get("source") or "public_web"),
+        confidence=confidence,
+        evidence=content[:1200],
+    )
+
+
 def _query_relevant_public_search_results(records: Any, query: str) -> list[dict[str, Any]]:
     usable = _usable_public_search_results(records)
     terms = {token.lower() for token in re.findall(r"[a-z0-9]{3,}", str(query or "").lower()) if token.lower() not in _SEARCH_STOPWORDS}
@@ -360,7 +571,7 @@ class WebSearchTool:
             primary_error = "Primary web-search provider returned no usable public page results"
         except Exception as error:
             primary_error = str(error)
-        logger.warning("Primary web search unavailable; trying DuckDuckGo fallback: %s", primary_error)
+        logger.debug("Primary web search unavailable; trying DuckDuckGo fallback: %s", primary_error)
         try:
             fallback = await asyncio.to_thread(self._duckduckgo_fallback, normalized, max_results)
             fallback.setdefault("errors", [])
@@ -567,9 +778,12 @@ class CrossReference:
         return len(a & b) / max(1, min(len(a), len(b)))
 
     @classmethod
-    def _has_conflicting_value(cls, left: str, right: str) -> bool:
+    def _has_conflicting_value(cls, left: str, right: str, *, distinct_sources: bool = False) -> bool:
         numbers_left = re.findall(r"\b\d+(?:\.\d+)?%?\b", left)
         numbers_right = re.findall(r"\b\d+(?:\.\d+)?%?\b", right)
+        listing_markers = r"(?:price|cost|listing|seller|store|shop|amazon|shopee|lazada|ebay|walmart|newegg|usd|php|eur|gbp|₱|\$|€|£)"
+        if distinct_sources and re.search(listing_markers, left, re.I) and re.search(listing_markers, right, re.I):
+            return False
         if numbers_left and numbers_right and numbers_left != numbers_right:
             return True
         left_negated = bool(cls._tokens(left) & cls._NEGATIONS)
@@ -595,9 +809,9 @@ class CrossReference:
         conflicting: List[Dict[str, Any]] = []
         unique: List[Dict[str, Any]] = []
         for group in groups:
-            source_urls = list(dict.fromkeys(item.source_url for item in group))
+            source_urls = list(dict.fromkeys(canonicalize_url(item.source_url) or item.source_url for item in group))
             values_conflict = any(
-                self._has_conflicting_value(group[index].claim, group[other].claim)
+                self._has_conflicting_value(group[index].claim, group[other].claim, distinct_sources=len(source_urls) > 1)
                 for index in range(len(group)) for other in range(index + 1, len(group))
             )
             payload = {
@@ -874,109 +1088,78 @@ class ResearchCapability(Capability):
                 break
         return records
 
-    def _browser_search(self, query: str, max_results: int) -> Dict[str, Any]:
-        """Search public web pages through the existing Playwright capability.
+    def _browser_search(self, query: str, max_results: int, *, site_constraint: str = "", allowed_domains: Optional[Sequence[str]] = None, normalized_query: str = "") -> Dict[str, Any]:
+        """Search public pages through the existing Playwright fallback.
 
-        This is deliberately a fallback: provider search remains cheaper and is
-        attempted first.  Browser results are accepted only when they contain
-        real external links with visible titles, never a search homepage alone.
+        Explicit marketplace constraints are hard constraints: the browser opens
+        only the requested marketplace and accepted result URLs are filtered to
+        that domain. It never substitutes Amazon or another marketplace.
         """
         if self.browser_capability is None:
             return {"success": False, "results": [], "errors": ["Browser fallback is unavailable"]}
         query = str(query or "").strip()
         if not query:
             return {"success": False, "results": [], "errors": ["query is required"]}
-        search_query = re.sub(r"^\s*(?:what(?:'s| is)|who is|where is|can you tell me|find me|find|search for|look up|research)\b", "", query, flags=re.IGNORECASE)
-        search_query = re.sub(r"\b(?:today|right now)\b", "", search_query, flags=re.IGNORECASE)
-        search_query = re.sub(r"\s+", " ", search_query).strip(" .?!")
-        search_query = re.sub(r"^the\s+", "", search_query, flags=re.IGNORECASE)
+        shopping = normalize_shopping_query(query)
+        domains = [str(domain).lower().removeprefix("www.") for domain in (allowed_domains or ([site_constraint] if site_constraint else shopping.allowed_domains)) if str(domain).strip()]
+        search_query = re.sub(r"\s+", " ", str(normalized_query or shopping.normalized_query or query)).strip(" .?!")
         search_query = search_query or query
         topical_terms = [token for token in re.findall(r"[a-z0-9]{3,}", search_query.lower()) if token not in _SEARCH_STOPWORDS]
         if len(topical_terms) >= 2:
             search_query = " ".join(topical_terms)
-        search_hosts = {
-            "google.com", "www.google.com", "bing.com", "www.bing.com",
-            "duckduckgo.com", "html.duckduckgo.com", "search.yahoo.com",
+        search_hosts = {"google.com", "www.google.com", "bing.com", "www.bing.com", "duckduckgo.com", "html.duckduckgo.com", "search.yahoo.com"}
+        query_terms = {token.lower() for token in re.findall(r"[a-z0-9]{3,}", search_query.lower()) if token.lower() not in _SEARCH_STOPWORDS}
+        marketplace_urls = {
+            "shopee.ph": "https://shopee.ph/search?" + urlencode({"keyword": search_query}),
+            "shopee.com": "https://shopee.com/search?" + urlencode({"keyword": search_query}),
+            "amazon.com": "https://www.amazon.com/s?" + urlencode({"k": search_query}),
+            "lazada.com.ph": "https://www.lazada.com.ph/catalog/?" + urlencode({"q": search_query}),
+            "lazada.com": "https://www.lazada.com/catalog/?" + urlencode({"q": search_query}),
+            "ebay.com": "https://www.ebay.com/sch/i.html?" + urlencode({"_nkw": search_query}),
+            "walmart.com": "https://www.walmart.com/search?" + urlencode({"q": search_query}),
+            "newegg.com": "https://www.newegg.com/p/pl?" + urlencode({"d": search_query}),
         }
-        query_terms = {
-            token.lower() for token in re.findall(r"[a-z0-9]{3,}", search_query.lower())
-            if token.lower() not in {"the", "and", "for", "with", "from", "search", "latest", "newest", "today", "current", "currently", "what", "is", "of", "to", "me", "please", "find", "information", "about", "can", "you"}
-        }
-        engines = (
-            "https://html.duckduckgo.com/html/?q=" + quote_plus(search_query),
-            "https://www.bing.com/search?" + urlencode({"q": search_query, "count": min(10, max_results * 2), "setlang": "en-US", "setmkt": "en-US", "cc": "us"}),
-            "https://news.google.com/rss/search?" + urlencode({"q": search_query, "hl": "en-US", "gl": "US", "ceid": "US:en"}),
-            "https://www.google.com/search?" + urlencode({"q": search_query, "num": min(10, max_results * 2)}),
-        )
-        if _is_product_query(query):
-            engines = (
-                "https://www.google.com/search?" + urlencode({"tbm": "shop", "q": search_query, "num": min(10, max_results * 2)}),
-                "https://www.bing.com/shop?" + urlencode({"q": search_query, "setlang": "en-US", "setmkt": "en-US"}),
-                "https://www.amazon.com/s" + "?" + urlencode({"k": search_query}),
-                "https://www.newegg.com/p/pl" + "?" + urlencode({"d": search_query}),
-                "https://www.bestbuy.com/site/searchpage.jsp" + "?" + urlencode({"st": search_query}),
-                "https://www.ebay.com/sch/i.html" + "?" + urlencode({"_nkw": search_query}),
-                "https://www.walmart.com/search" + "?" + urlencode({"q": search_query}),
-                "https://www.microcenter.com/search/search_results.aspx" + "?" + urlencode({"Ntt": search_query}),
-                *engines,
-            )
+        if domains:
+            engines = (marketplace_urls.get(domains[0], f"https://{domains[0]}/search?" + urlencode({"q": search_query})),)
+        else:
+            engines = ("https://html.duckduckgo.com/html/?q=" + quote_plus(search_query), "https://www.bing.com/search?" + urlencode({"q": search_query, "count": min(10, max_results * 2), "setlang": "en-US", "setmkt": "en-US", "cc": "us"}), "https://news.google.com/rss/search?" + urlencode({"q": search_query, "hl": "en-US", "gl": "US", "ceid": "US:en"}), "https://www.google.com/search?" + urlencode({"q": search_query, "num": min(10, max_results * 2)}))
+            if _is_product_query(query):
+                engines = (("https://www.google.com/search?" + urlencode({"tbm": "shop", "q": search_query, "num": min(10, max_results * 2)}), "https://www.bing.com/shop?" + urlencode({"q": search_query, "setlang": "en-US", "setmkt": "en-US"})) + engines)
         errors: List[str] = []
         for engine_url in engines:
             try:
-                opened = self.browser_capability.execute("open_url", {
-                    "url": engine_url,
-                    "wait_until": "domcontentloaded",
-                    "timeout_ms": int(os.getenv("FREYA_BROWSER_NAVIGATION_TIMEOUT", "25000")),
-                    "safe_read_only": True,
-                })
+                opened = self.browser_capability.execute("open_url", {"url": engine_url, "wait_until": "domcontentloaded", "timeout_ms": int(os.getenv("FREYA_BROWSER_NAVIGATION_TIMEOUT", "25000")), "safe_read_only": True})
                 if not opened.get("success"):
-                    errors.append(str(opened.get("error") or "Browser search page could not be opened"))
-                    continue
+                    errors.append(str(opened.get("error") or "Browser search page could not be opened")); continue
                 extracted = self.browser_capability.execute("extract_links", {"selector": "a[href]", "limit": 120, "safe_read_only": True})
                 if not extracted.get("success"):
-                    errors.append(str(extracted.get("error") or "Browser search results could not be inspected"))
-                    continue
-                records: List[Dict[str, Any]] = []
-                seen: set[str] = set()
-                for link in extracted.get("data", {}).get("links", []) if isinstance(extracted.get("data"), dict) else []:
-                    if not isinstance(link, dict):
-                        continue
-                    url = self._browser_result_url(link.get("href"))
-                    if not url or url in seen:
-                        continue
-                    parsed = urlparse(url)
-                    host = (parsed.hostname or "").lower()
-                    path_lower = (parsed.path or "").lower()
-                    if host in search_hosts or host.endswith(".google.com") or any(marker in path_lower for marker in ("/search", "/searchpage", "/p/pl", "/sch/", "/site/search")):
-                        continue
-                    title = str(link.get("text") or link.get("title") or "").strip()
-                    title_lower = title.lower()
-                    if len(title) < 4 or any(term in title_lower for term in _BLOCKED_BROWSER_RESULT_TERMS):
-                        continue
-                    haystack = (title + " " + url).lower()
-                    overlap = sum(1 for term in query_terms if term in haystack)
-                    if query_terms and overlap < (2 if len(query_terms) >= 2 else 1):
-                        continue
-                    seen.add(url)
-                    records.append({
-                        "title": title[:240],
-                        "url": url,
-                        "snippet": "",
-                        "source": "playwright_chromium",
-                    })
-                    if len(records) >= max_results:
-                        break
-                if not records:
-                    body_result = self.browser_capability.execute("read_page", {"selector": "body", "max_chars": 50000, "safe_read_only": True})
-                    body_data = body_result.get("data") if isinstance(body_result.get("data"), dict) else {}
-                    body_text = str(body_result.get("text") or body_data.get("text") or "")
-                    records = self._browser_rss_records(body_text, search_query, max_results)
+                    errors.append(str(extracted.get("error") or "Browser search results could not be inspected")); continue
+                records: List[Dict[str, Any]] = []; seen: set[str] = set()
+                links = extracted.get("data", {}).get("links", []) if isinstance(extracted.get("data"), dict) else []
+                for link in links if isinstance(links, list) else []:
+                    if not isinstance(link, dict): continue
+                    url = canonicalize_url(self._browser_result_url(link.get("href")))
+                    if not url or url in seen: continue
+                    parsed = urlparse(url); host = (parsed.hostname or "").lower(); path_lower = (parsed.path or "").lower()
+                    if domains:
+                        if not any(host == domain or host.endswith("." + domain) for domain in domains): continue
+                        if path_lower in {"", "/", "/search", "/search/", "/mall/search"} or path_lower.startswith("/search/"): continue
+                    elif host in search_hosts or host.endswith(".google.com") or any(marker in path_lower for marker in ("/search", "/searchpage", "/p/pl", "/sch/", "/site/search")): continue
+                    title = str(link.get("text") or link.get("title") or "").strip(); title_lower = title.lower()
+                    if len(title) < 4 or any(term in title_lower for term in _BLOCKED_BROWSER_RESULT_TERMS): continue
+                    haystack = (title + " " + url).lower(); overlap = sum(1 for term in query_terms if term in haystack)
+                    if query_terms and overlap < (1 if domains else (2 if len(query_terms) >= 2 else 1)): continue
+                    seen.add(url); records.append({"title": title[:240], "url": url, "source_url": url, "snippet": "", "source": "playwright_chromium", "source_domain": host, "allowed_domain": bool(domains)})
+                    if len(records) >= max_results: break
+                if not records and not domains:
+                    body_result = self.browser_capability.execute("read_page", {"selector": "body", "max_chars": 50000, "safe_read_only": True}); body_data = body_result.get("data") if isinstance(body_result.get("data"), dict) else {}; body_text = str(body_result.get("text") or body_data.get("text") or ""); records = self._browser_rss_records(body_text, search_query, max_results)
                 if records:
-                    return {"success": True, "query": query, "results": records, "errors": errors, "provider": "playwright_chromium"}
-                errors.append("Browser search page contained no usable public result links")
+                    return {"success": True, "query": query, "normalized_query": search_query, "results": records, "errors": errors, "provider": "playwright_chromium", "site_constraint": domains[0] if domains else ""}
+                errors.append("Constrained marketplace page contained no usable product links" if domains else "Browser search page contained no usable public result links")
             except Exception as error:
                 errors.append(str(error))
-        return {"success": False, "query": query, "results": [], "errors": errors, "provider": "playwright_chromium"}
+        if domains: errors.insert(0, f"No usable results were found on the required site {domains[0]}; no other marketplace was searched.")
+        return {"success": False, "query": query, "normalized_query": search_query, "results": [], "errors": errors, "provider": "playwright_chromium", "site_constraint": domains[0] if domains else ""}
 
     def _browser_read_page(self, url: str) -> Dict[str, Any]:
         """Read visible text from a public page through the browser fallback."""
@@ -1024,12 +1207,19 @@ class ResearchCapability(Capability):
                 return {"success": False, "url": url, "page": None, "error": "Browser page was a login wall, challenge, or empty result page"}
             if not visible.get("success") or len(text) < 80:
                 return {"success": False, "url": url, "page": None, "error": "Browser page contained insufficient readable public content"}
+            page_url = str(visible.get("url") or result.get("url") or url)
+            image_results = []
+            try:
+                from app.free_image_research_providers import extract_public_page_images
+                image_results = extract_public_page_images(page_url, limit=5)
+            except Exception:
+                image_results = []
             page = WebPage(
-                url=str(visible.get("url") or result.get("url") or url),
+                url=page_url,
                 title=title,
                 content=text,
                 retrieved_at=datetime.now(timezone.utc).isoformat(),
-                source_metadata={"provider": "playwright_chromium", "browser_fallback": True},
+                source_metadata={"provider": "playwright_chromium", "browser_fallback": True, "image_results": image_results},
             )
             return {"success": True, "url": page.url, "page": page, "error": None}
         except Exception as error:
@@ -1092,21 +1282,37 @@ class ResearchCapability(Capability):
         max_results = max(1, min(int(inputs.get("max_results", 5)), 20))
         if not query:
             return {"success": False, "error": "query is required", "results": []}
-        result = self._invoke("search", query=query, max_results=max_results)
+        shopping = normalize_shopping_query(query)
+        shopping_request = _is_product_query(query) or bool(shopping.requested_domain) or bool(shopping.ranking)
+        requested_domain = str(inputs.get("site_constraint") or shopping.requested_domain or "").lower().removeprefix("www.")
+        allowed_domains = [str(item).lower().removeprefix("www.") for item in (inputs.get("allowed_domains") or ([requested_domain] if requested_domain else [])) if str(item).strip()]
+        normalized_query = str(inputs.get("normalized_query") or (shopping.normalized_query if shopping_request else query)).strip()
+        result = self._invoke("search", query=normalized_query, max_results=max_results)
         if not isinstance(result, dict):
             result = {"success": False, "error": "Invalid search tool response", "results": []}
         result.setdefault("results", [])
-        if result.get("provider") or result.get("source"):
-            result["results"] = _query_relevant_public_search_results(result["results"], query)[:max_results]
+        if allowed_domains:
+            filtered = []
+            for item in result.get("results", []) if isinstance(result.get("results"), list) else []:
+                if not isinstance(item, dict):
+                    continue
+                host = (urlparse(str(item.get("url") or item.get("source_url") or "")).hostname or "").lower()
+                if any(host == domain or host.endswith("." + domain) for domain in allowed_domains):
+                    item = dict(item); item["url"] = canonicalize_url(item.get("url") or item.get("source_url")); filtered.append(item)
+            result["results"] = filtered[:max_results]
+        elif result.get("provider") or result.get("source"):
+            result["results"] = _query_relevant_public_search_results(result["results"], normalized_query)[:max_results]
         else:
             result["results"] = _usable_public_search_results(result["results"])[:max_results]
         result["success"] = bool(result["results"])
         if not result["success"]:
             result.setdefault("errors", []).append("No usable public page results remained after filtering search homepages")
-            browser_result = self._browser_search(query, max_results)
+            browser_result = self._browser_search(query, max_results, site_constraint=requested_domain, allowed_domains=allowed_domains, normalized_query=normalized_query)
             if browser_result.get("success"):
                 browser_result["errors"] = list(result.get("errors", [])) + list(browser_result.get("errors", []))
                 result = browser_result
+            elif allowed_domains:
+                result = {**result, "success": False, "results": [], "site_constraint": allowed_domains[0], "errors": list(result.get("errors", [])) + list(browser_result.get("errors", []))}
 
         self._publish_event(
             "research.search.completed" if result["success"] else "research.search.failed",
@@ -1163,125 +1369,131 @@ class ResearchCapability(Capability):
         if not topic:
             return {"success": False, "error": "topic is required"}
         max_sources = max(1, min(int(inputs.get("max_sources", 5)), 10))
-        search = self.action_search_web({"query": topic, "max_results": max_sources})
+        shopping = normalize_shopping_query(topic, region=str(inputs.get("region") or ""))
+        product_query = _is_product_query(topic) or bool(shopping.requested_domain) or bool(shopping.ranking)
+        search_query = shopping.normalized_query if product_query else topic
+        search = self.action_search_web({
+            "query": topic,
+            "normalized_query": search_query,
+            "site_constraint": shopping.requested_domain,
+            "allowed_domains": shopping.allowed_domains,
+            "max_results": max_sources,
+        })
         errors = list(search.get("errors", [])) if isinstance(search, dict) else ["Search failed"]
         if not search.get("success") and not search.get("results"):
-            result = ResearchResult(topic, "Insufficient evidence was retrieved to answer this question.", [], [], [], [], [], [str(error) for error in errors], 0.0, errors=errors, partial=False)
-            return {"success": False, "data": result.to_dict(), "error": "; ".join(map(str, errors))}
+            message = (f"I could not find usable public listings on {shopping.requested_domain}; I did not substitute another marketplace."
+                       if shopping.requested_domain else "Insufficient evidence was retrieved to answer this question.")
+            result = ResearchResult(topic, message, [], [], [], [], [], list(dict.fromkeys(map(str, errors))), 0.0, errors=errors, partial=False)
+            data = result.to_dict()
+            data.update({"shopping_query": shopping.to_dict(), "product_candidates": [], "candidates": [], "winner": None, "image_results": [], "comparison": {"basis": shopping.ranking or "price", "currency": "", "lowest_price": None}})
+            return {"success": False, "data": data, "error": "; ".join(map(str, errors))}
 
         pages: List[WebPage] = []
         sources: List[Dict[str, Any]] = []
         facts: List[Fact] = []
+        candidates: List[ProductListing] = []
         seen_urls: set[str] = set()
-        product_query = _is_product_query(topic)
-        topic_terms = {token.lower() for token in re.findall(r"[a-z0-9]{3,}", topic.lower()) if token.lower() not in _SEARCH_STOPWORDS and token.lower() not in _PRODUCT_QUERY_WORDS}
+        topic_terms = {token.lower() for token in re.findall(r"[a-z0-9]{3,}", shopping.normalized_query.lower()) if token.lower() not in _SEARCH_STOPWORDS and token.lower() not in _PRODUCT_QUERY_WORDS}
 
         for raw_result in search.get("results", []):
-            url = raw_result.get("url") if isinstance(raw_result, dict) else None
+            if not isinstance(raw_result, dict):
+                continue
+            url = canonicalize_url(raw_result.get("url") or raw_result.get("source_url"))
             if not url or url in seen_urls:
                 continue
+            if shopping.allowed_domains:
+                host = (urlparse(url).hostname or "").lower()
+                if not any(host == domain or host.endswith("." + domain) for domain in shopping.allowed_domains):
+                    continue
             seen_urls.add(url)
             page_response = self.action_read_page({"url": url})
-            if not page_response.get("success") and isinstance(raw_result, dict):
-                source_url = str(raw_result.get("source_url") or "").strip()
-                if source_url.startswith(("http://", "https://")) and source_url != url:
-                    source_retry = self.action_read_page({"url": source_url})
-                    if source_retry.get("success"):
-                        page_response = source_retry
-                        page_response.setdefault("source_metadata", {})
-                        if isinstance(page_response.get("page"), dict):
-                            page_response["page"].setdefault("source_metadata", {})["rss_source_fallback"] = True
             if not page_response.get("success"):
                 errors.append(str(page_response.get("error") or f"Failed to read {url}"))
                 continue
-
             page = self._dict_page(page_response.get("page"))
             if page is None:
                 errors.append(f"Invalid page result for {url}")
                 continue
             pages.append(page)
-            if product_query and topic_terms:
-                page_tokens = set(re.findall(r"[a-z0-9]{3,}", f"{page.title} {page.content}".lower()))
-                if sum(1 for term in topic_terms if term in page_tokens) < min(2, len(topic_terms)):
-                    sources.append({"search_result": raw_result, "page": page.to_dict(), "quality": {"relevance_score": 0.0, "rationale": ["Page did not contain enough requested product terms"]}})
+            if product_query:
+                listing = _extract_product_listing(raw_result, page, shopping)
+                if listing is None:
+                    sources.append({"search_result": raw_result, "page": page.to_dict(), "role": "discovery_only", "quality": {"rationale": ["Search or category page was not used as final product evidence"]}})
                     continue
+                candidates.append(listing)
+                sources.append({"search_result": raw_result, "page": page.to_dict(), "product_listing": listing.to_dict(), "role": "product_listing", "quality": {"relevance_score": listing.confidence, "rationale": ["Readable product page with parsed listing fields"]}})
+                continue
             quality_raw = self._invoke("evaluate", page=page.to_dict(), query=topic)
-
             quality = quality_raw if isinstance(quality_raw, dict) else _jsonable(quality_raw)
             sources.append({"search_result": raw_result, "page": page.to_dict(), "quality": quality})
             facts_raw = self._invoke("facts", page=page.to_dict(), query=topic, source_quality=quality)
             if isinstance(facts_raw, list):
                 extracted_facts = [self._dict_fact(item) for item in facts_raw]
-                if product_query and topic_terms:
-                    extracted_facts = [fact for fact in extracted_facts if topic_terms.intersection(set(re.findall(r"[a-z0-9]{3,}", f"{fact.claim} {fact.evidence}".lower())))]
                 facts.extend(extracted_facts)
 
         if product_query:
-            for raw_result in search.get("results", []):
-                if not isinstance(raw_result, dict):
+            deduped: List[ProductListing] = []
+            seen_listing_keys: set[tuple[str, Optional[float], str]] = set()
+            for listing in candidates:
+                key = (canonicalize_url(listing.source_url), listing.price, re.sub(r"\W+", " ", listing.product_name.lower()).strip())
+                if key in seen_listing_keys:
                     continue
-                title = str(raw_result.get("title") or "").strip()
-                snippet = str(raw_result.get("snippet") or "").strip()
-                evidence = " ".join(part for part in (title, snippet) if part).strip()
-                if not evidence or not re.search(r"(?:[$€£¥]\s?\d|\d[\d,.]*\s?(?:usd|eur|gbp|cad|price|cost)|\b(?:price|deal|sale|costs?)\b)", evidence, re.IGNORECASE):
-                    continue
-                result_terms = {token.lower() for token in re.findall(r"[a-z0-9]{3,}", evidence.lower())}
-                if topic_terms and len(topic_terms.intersection(result_terms)) < 1:
-                    continue
-                source_url = str(raw_result.get("source_url") or raw_result.get("url") or "").strip()
-                facts.insert(0, Fact(
-                    claim=f"Public result: {title}",
-                    evidence=evidence[:1200],
-                    source_url=source_url,
-                    source_title=title[:240] or "Public product result",
-                    retrieved_at=datetime.now(timezone.utc).isoformat(),
-                    context="Search-result evidence; it does not establish that the item is the cheapest across all current listings.",
-                    confidence=0.55,
-                    fact_id=f"search-result-{abs(hash(source_url + title))}",
-                ))
-        cross_raw = self._invoke("cross_reference", facts=[fact.to_dict() for fact in facts], claims_to_check=[topic])
+                seen_listing_keys.add(key); deduped.append(listing)
+            candidates = deduped
+            priced = [item for item in candidates if item.price is not None]
+            priced.sort(key=lambda item: (item.price, item.currency or "", item.product_name.lower()))
+            unpriced = [item for item in candidates if item.price is None]
+            candidates = priced + unpriced
+            winner = priced[0] if priced else (candidates[0] if candidates else None)
+            candidate_dicts = [item.to_dict() for item in candidates]
+            image_results = []
+            for item in candidates:
+                if item.image_url:
+                    image_results.append({"title": item.product_name, "image_url": item.image_url, "thumbnail_url": item.image_url, "source_domain": item.marketplace, "url": item.product_url, "snippet": item.evidence[:500], "match_type": "exact_product_page"})
+            image_results = image_results[:8]
+            if winner and winner.price is not None:
+                price_text = f"{winner.currency + ' ' if winner.currency else ''}{winner.price:,.2f}".strip()
+                answer = f"Among the {shopping.requested_domain + ' ' if shopping.requested_domain else ''}product listings I could verify, the cheapest was **{winner.product_name}** at **{price_text}** from **{winner.seller}**."
+                if len(priced) > 1:
+                    answer += f" I compared {len(priced)} priced listing(s); the results are ordered from lowest to highest price."
+            elif candidates:
+                answer = f"I found {len(candidates)} {shopping.requested_domain + ' ' if shopping.requested_domain else ''}product listing(s), but the available pages did not expose a verifiable numeric price, so I cannot honestly identify the cheapest one."
+            else:
+                answer = (f"I could not verify a readable product listing on {shopping.requested_domain}; I did not return results from another marketplace." if shopping.requested_domain else "I could not verify a readable product listing from the available public pages.")
+            normal_fallback_markers = ("primary web-search provider", "duckduckgo returned", "google html returned", "bounded free-provider fallbacks", "filtering search homepages")
+            uncertainty = list(dict.fromkeys(str(item) for item in errors if item and not any(marker in str(item).lower() for marker in normal_fallback_markers)))
+            if candidates and not priced:
+                uncertainty.append("The available product pages did not expose numeric prices.")
+            comparison = {"basis": shopping.ranking or "price", "currency": winner.currency if winner else "", "lowest_price": winner.price if winner else None, "priced_count": len(priced), "candidate_count": len(candidates), "ordered_candidates": candidate_dicts}
+            confidence = round(sum(item.confidence for item in candidates) / len(candidates), 3) if candidates else 0.0
+            result = ResearchResult(topic=topic, answer=answer, key_findings=candidate_dicts, supporting_evidence=candidate_dicts, sources=sources, citations=[{"title": item.product_name, "url": item.source_url, "snippet": item.evidence[:500]} for item in candidates], conflicts=[], uncertainty=uncertainty, confidence=confidence, errors=errors, partial=bool(errors or not pages))
+            data = result.to_dict()
+            data.update({"shopping_query": shopping.to_dict(), "product_candidates": candidate_dicts, "candidates": candidate_dicts, "winner": winner.to_dict() if winner else None, "image_results": image_results, "comparison": comparison})
+            data["uncertainty"] = uncertainty
+            result.uncertainty = uncertainty
+            result.key_findings = candidate_dicts
+            result.supporting_evidence = candidate_dicts
+            data["answer"] = answer
+            payload = {"success": bool(candidates), "data": data, "errors": errors}
+            self._publish_event("research.completed" if payload["success"] else "research.partial_or_failed", {"topic": topic[:200], "source_count": len(sources), "fact_count": len(candidates), "error_count": len(errors), "partial": result.partial, "shopping": True})
+            return payload
 
+        cross_raw = self._invoke("cross_reference", facts=[fact.to_dict() for fact in facts], claims_to_check=[topic])
         cross = cross_raw if isinstance(cross_raw, dict) else _jsonable(cross_raw)
         citations_raw = self._invoke("citations", facts=[fact.to_dict() for fact in facts])
         citations = citations_raw if isinstance(citations_raw, list) else []
         key_findings = [fact.to_dict() for fact in facts]
         conflicts = list(cross.get("conflicting_claims", [])) if isinstance(cross, dict) else []
         uncertainty = list(cross.get("uncertainty", [])) if isinstance(cross, dict) else []
-        if not pages:
-            uncertainty.append("No selected search result could be read successfully.")
-        if errors:
-            uncertainty.append("Some sources failed and the result is partial.")
-        corroborated = len(cross.get("corroborating_claims", [])) if isinstance(cross, dict) else 0
+        if not pages: uncertainty.append("No selected search result could be read successfully.")
+        if errors: uncertainty.append("Some sources failed and the result is partial.")
         confidence = float(cross.get("confidence", 0.0)) if isinstance(cross, dict) else 0.0
-        if not confidence and facts:
-            confidence = min(0.75, max(fact.confidence for fact in facts))
-        if conflicts:
-            confidence = min(confidence, 0.5)
-        if facts:
-            answer = "Based on the retrieved sources: " + " ".join(fact.claim for fact in facts[:3])
-            if product_query:
-                answer += " I could not establish that any result is the cheapest across all current listings; treat this as a limited-source comparison."
-        else:
-            answer = "Insufficient readable evidence was retrieved to answer this question."
-
-        result = ResearchResult(
-            topic=topic,
-            answer=answer,
-            key_findings=key_findings,
-            supporting_evidence=[fact.to_dict() for fact in facts],
-            sources=sources,
-            citations=citations,
-            conflicts=conflicts,
-            uncertainty=list(dict.fromkeys(uncertainty)),
-            confidence=round(max(0.0, min(1.0, confidence)), 3),
-            errors=errors,
-            partial=bool(errors or not pages),
-        )
+        if not confidence and facts: confidence = min(0.75, max(fact.confidence for fact in facts))
+        if conflicts: confidence = min(confidence, 0.5)
+        answer = "Based on the retrieved sources: " + " ".join(fact.claim for fact in facts[:3]) if facts else "Insufficient readable evidence was retrieved to answer this question."
+        result = ResearchResult(topic=topic, answer=answer, key_findings=key_findings, supporting_evidence=[fact.to_dict() for fact in facts], sources=sources, citations=citations, conflicts=conflicts, uncertainty=list(dict.fromkeys(uncertainty)), confidence=round(max(0.0, min(1.0, confidence)), 3), errors=errors, partial=bool(errors or not pages))
         payload = {"success": bool(facts), "data": result.to_dict(), "errors": errors}
-        self._publish_event(
-            "research.completed" if payload["success"] else "research.partial_or_failed",
-            {"topic": topic[:200], "source_count": len(sources), "fact_count": len(facts), "error_count": len(errors), "partial": result.partial},
-        )
+        self._publish_event("research.completed" if payload["success"] else "research.partial_or_failed", {"topic": topic[:200], "source_count": len(sources), "fact_count": len(facts), "error_count": len(errors), "partial": result.partial})
         if inputs.get("remember"):
             payload["learning"] = self.action_learn_finding({"research_result": result.to_dict()})
         return payload

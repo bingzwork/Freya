@@ -28,6 +28,8 @@ RESEARCH_REQUEST_TIMEOUT_SECONDS = max(45.0, float(os.getenv("FREYA_RESEARCH_REQ
 DIRECT_CHAT_TIMEOUT_SECONDS = max(30.0, float(os.getenv("FREYA_DIRECT_CHAT_TIMEOUT_SECONDS", "90")))
 BROWSER_ACTION_TIMEOUT_SECONDS = max(15.0, float(os.getenv("FREYA_BROWSER_ACTION_TIMEOUT_SECONDS", "45")))
 LOCK=threading.Lock()
+SHOPPING_STATE_LOCK=threading.RLock()
+SHOPPING_STATES={}
 SUPPORTED_EXTENSIONS={".jpg",".jpeg",".png",".webp",".mp3",".wav",".m4a",".flac",".mp4",".mov",".webm",".txt",".md",".pdf",".docx",".csv",".xlsx",".json"}
 IMAGE_EXTENSIONS={".jpg",".jpeg",".png",".webp",".gif",".bmp"}
 RESEARCH_WORDS=("research","search","look this up","find information","deep web","latest","recent","current")
@@ -181,27 +183,31 @@ def _research_text_request(question):
     router=getattr(getattr(getattr(FREYA,"system",None),"facade",None),"_router",None)
     if router is None:
         raise RuntimeError("Research routing is unavailable because the canonical router is not initialized")
-    research_query=re.sub(r"^\s*(?:please\s+)?(?:search|look\s+up|find|show)\s+(?:the\s+)?(?:public\s+)?(?:web|internet)?\s*(?:for|about)?\s*", "", str(question or ""), flags=re.I).strip(" .?!") or str(question or "").strip()
+    from app.research.capability import normalize_shopping_query
+    shopping=normalize_shopping_query(str(question or ""))
+    research_query=shopping.normalized_query or re.sub(r"^\s*(?:please\s+)?(?:search|look\s+up|find|show)\s+(?:the\s+)?(?:public\s+)?(?:web|internet)?\s*(?:for|about)?\s*", "", str(question or ""), flags=re.I).strip(" .?!") or str(question or "").strip()
     research_query=re.sub(r"\btoday(?:'s|s)?\b", "latest", research_query, flags=re.I).strip()
-    result=_bounded_call(router.execute_capability,RESEARCH_REQUEST_TIMEOUT_SECONDS,"research_capability",research_query,capability_action="research_topic",topic=research_query,original_request=question,max_sources=5)
+    result=_bounded_call(router.execute_capability,RESEARCH_REQUEST_TIMEOUT_SECONDS,"research_capability",research_query,capability_action="research_topic",topic=str(question or "").strip(),normalized_query=research_query,site_constraint=shopping.requested_domain,allowed_domains=shopping.allowed_domains,original_request=question,max_sources=5)
     data=getattr(result,"data",None) if isinstance(getattr(result,"data",None),dict) else {}
+    data=dict(data)
+    data.setdefault("shopping_query", shopping.to_dict())
+    if hasattr(result, "data"):
+        result.data=data
     if getattr(result,"success",False):
+        return result,data
+    if shopping.requested_domain:
         return result,data
     try:
         from app.research.capability import WebSearchTool
         search=WebSearchTool().search(research_query,max_results=8)
         records=search.get("results",[]) if isinstance(search,dict) else []
         if records:
-            lines=[]
-            citations=[]
+            lines=[]; citations=[]
             for item in records:
-                if not isinstance(item,dict):
-                    continue
-                title=str(item.get("title") or "Public web result").strip()
-                url=str(item.get("url") or "").strip()
+                if not isinstance(item,dict): continue
+                title=str(item.get("title") or "Public web result").strip(); url=str(item.get("url") or "").strip()
                 if url:
-                    lines.append(f"- {title}: {url}")
-                    citations.append({"title":title,"url":url,"snippet":str(item.get("snippet") or "")})
+                    lines.append(f"- {title}: {url}"); citations.append({"title":title,"url":url,"snippet":str(item.get("snippet") or "")})
             if lines:
                 message="I found public-web results for this request. Full page synthesis was unavailable, so I am showing the retrieved sources without inventing claims.\n\n"+"\n".join(lines)
                 fallback=CapabilityResult(success=True,data={"sources":citations,"citations":citations,"results":records,"partial":True},message=message,capability_name="research_capability")
@@ -229,11 +235,58 @@ def _bounded_call(function, timeout_seconds, *args, **kwargs):
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
 
-def _record_conversation_turn(role, content, request_context=None):
+def _shopping_session_key(session_id=None):
+    return str(session_id or UI_SESSION_ID)
+
+
+def _get_shopping_state(session_id=None):
+    with SHOPPING_STATE_LOCK:
+        return dict(SHOPPING_STATES.get(_shopping_session_key(session_id), {}) or {})
+
+
+def _set_shopping_state(session_id, state):
+    if not isinstance(state, dict):
+        return
+    clean=dict(state)
+    clean.setdefault("active_topic", "")
+    clean.setdefault("site_constraint", "")
+    clean.setdefault("candidates", clean.get("product_candidates", []))
+    clean.setdefault("winner", None)
+    clean.setdefault("image_refs", {})
+    clean.setdefault("comparison_basis", "price")
+    with SHOPPING_STATE_LOCK:
+        SHOPPING_STATES[_shopping_session_key(session_id)] = clean
+
+
+def _shopping_state_from_research(data, previous=None):
+    previous=dict(previous or {})
+    query=data.get("shopping_query") if isinstance(data, dict) and isinstance(data.get("shopping_query"), dict) else {}
+    has_new_query=bool(query)
+    candidates=(data.get("product_candidates") or data.get("candidates") or []) if isinstance(data, dict) else []
+    if not candidates and not has_new_query:
+        candidates=previous.get("candidates") or []
+    winner=data.get("winner") if isinstance(data, dict) else None
+    if winner is None and (not has_new_query or not query.get("requested_domain")):
+        winner=previous.get("winner")
+    image_refs=dict(previous.get("image_refs") or {})
+    for item in candidates if isinstance(candidates, list) else []:
+        if isinstance(item, dict) and item.get("product_name") and item.get("image_url"):
+            image_refs[str(item["product_name"])] = str(item["image_url"])
+    return {
+        "active_topic": str(query.get("normalized_query") or query.get("product_category") or previous.get("active_topic") or ""),
+        "site_constraint": str(query.get("requested_domain") or previous.get("site_constraint") or ""),
+        "candidates": list(candidates) if isinstance(candidates, list) else [],
+        "winner": winner,
+        "image_refs": image_refs,
+        "comparison_basis": str((data.get("comparison") or {}).get("basis") if isinstance(data, dict) and isinstance(data.get("comparison"), dict) else previous.get("comparison_basis") or "price"),
+    }
+
+
+def _record_conversation_turn(role, content, request_context=None, shopping_state=None):
     try:
         memory=getattr(getattr(FREYA,"system",None),"_memory_coordinator",None)
         if memory is not None and hasattr(memory,"record_conversation"):
-            memory.record_conversation({"role":role,"content":str(content)})
+            memory.record_conversation({"role":role,"content":str(content),"shopping_state":dict(shopping_state or {})})
     except Exception:
         pass
 
@@ -299,6 +352,43 @@ def _image_search_by_text(question):
     if not query:
         return CapabilityResult(success=False,data={"image_results":[]},message="I couldn't determine what subject to search for in the image request.",capability_name="research_capability")
     return _bounded_call(router.execute_capability,25.0,"research_capability",query,capability_action="image_search",max_results=8,original_request=question)
+
+
+def _known_product_image_followup(question, session_id):
+    state=_get_shopping_state(session_id)
+    winner=state.get("winner") if isinstance(state,dict) else None
+    if not isinstance(winner,dict):
+        if state.get("active_topic"):
+            site=state.get("site_constraint")
+            return f"I do not have a verified product winner from the previous {site + ' ' if site else ''}search, so I cannot retrieve an exact product photo yet. I did not substitute a generic image.", []
+        return None, []
+    image_url=str(winner.get("image_url") or "").strip()
+    if not image_url:
+        try:
+            from app.free_image_research_providers import extract_public_page_images
+            matches=extract_public_page_images(str(winner.get("product_url") or winner.get("source_url") or ""), limit=3)
+            image_url=str((matches[0] or {}).get("image_url") or "") if matches else ""
+            if image_url:
+                winner=dict(winner); winner["image_url"]=image_url
+                state["winner"]=winner
+                state.setdefault("image_refs", {})[str(winner.get("product_name") or "product")]=image_url
+                _set_shopping_state(session_id,state)
+        except Exception:
+            image_url=""
+    product_name=str(winner.get("product_name") or state.get("active_topic") or "the selected product")
+    if image_url:
+        return f"Here is the exact product image I retrieved for **{product_name}**, the cheapest listing from the previous comparison.", [{"title":product_name,"image_url":image_url,"thumbnail_url":image_url,"source_domain":str(winner.get("marketplace") or ""),"url":str(winner.get("product_url") or winner.get("source_url") or ""),"snippet":str(winner.get("evidence") or "")[:500],"match_type":"exact_product_page"}]
+    return f"I retained **{product_name}** as the selected listing, but I could not retrieve a usable image from that exact product page. I did not substitute a generic image.", []
+
+
+def _shopping_followup_without_winner(question, state):
+    if not isinstance(state, dict) or state.get("winner") or not state.get("active_topic"):
+        return None
+    if not re.search(r"\b(?:which one|what about|the cheapest|the lowest|reviews?|rating|compare|it|that one|the printer|the laptop|the product)\b", str(question or ""), re.I):
+        return None
+    site = str(state.get("site_constraint") or "")
+    return f"I cannot answer that follow-up reliably because the previous {site + ' ' if site else ''}search did not produce a verified product listing or winner. I will not substitute an unrelated product."
+
 
 def _is_shopping_research_request(question):
     normalized=" ".join(str(question or "").lower().split())
@@ -510,8 +600,9 @@ class Handler(BaseHTTPRequestHandler):
         if isinstance(payload,dict) and getattr(self,"_active_trace_id",None):
             payload=dict(payload); payload.setdefault("trace_id",self._active_trace_id)
             if getattr(self,"_active_chat_message",None) and not getattr(self,"_active_exchange_recorded",False) and ("answer" in payload or "error" in payload):
-                _record_conversation_turn("user",self._active_chat_message,getattr(self,"_active_request_context",None))
-                _record_conversation_turn("assistant",payload.get("answer") or payload.get("error"),getattr(self,"_active_request_context",None))
+                active_state=getattr(self,"_active_shopping_state",None) or _get_shopping_state((getattr(self,"_active_request_context",{}) or {}).get("session_id"))
+                _record_conversation_turn("user",self._active_chat_message,getattr(self,"_active_request_context",None),active_state)
+                _record_conversation_turn("assistant",payload.get("answer") or payload.get("error"),getattr(self,"_active_request_context",None),active_state)
                 self._active_exchange_recorded=True
         data=payload if isinstance(payload,bytes) else json.dumps(payload,ensure_ascii=False).encode("utf-8"); self.send_response(status); self.send_header("Content-Type",content_type); self.send_header("Access-Control-Allow-Origin","*"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(data))); self.end_headers(); self.wfile.write(data)
     def do_OPTIONS(self):
@@ -550,8 +641,9 @@ class Handler(BaseHTTPRequestHandler):
         if path=="/api/chat":
             try:
                 payload=json.loads(body.decode("utf-8")); message=str(payload.get("message","")).strip(); attachments=payload.get("attachments",[])
-                request_context=RequestContext.create(message,session_id=str(payload.get("session_id") or UI_SESSION_ID),attachments=attachments,source="user",channel="web",metadata={"content_type":self.headers.get("Content-Type","application/json")})
-                self._active_trace_id=request_context.trace_id; self._active_chat_message=message; self._active_request_context=request_context.to_dict(); self._active_exchange_recorded=False
+                session_id=str(payload.get("session_id") or UI_SESSION_ID)
+                request_context=RequestContext.create(message,session_id=session_id,attachments=attachments,source="user",channel="web",metadata={"content_type":self.headers.get("Content-Type","application/json")})
+                self._active_trace_id=request_context.trace_id; self._active_chat_message=message; self._active_request_context=request_context.to_dict(); self._active_exchange_recorded=False; self._active_shopping_state=_get_shopping_state(session_id)
                 if not message and not attachments: self.send_payload(400,{"error":"Write a message or attach a file first."}); return
                 context,vision_meta=attachment_context(self.workspace,attachments,message,inputs_return_meta=True); privacy,blocked=_privacy_response(message,context)
                 social_response=_direct_social_response(message) if not attachments and not blocked else None
@@ -624,11 +716,18 @@ class Handler(BaseHTTPRequestHandler):
                 elif browser_answer is not None:
                     answer = browser_answer
                     research_data = browser_data if isinstance(browser_data, dict) else {}
-                elif research_requested:
+                elif _shopping_followup_without_winner(message,self._active_shopping_state) and not image_search_requested:
+                    answer=_shopping_followup_without_winner(message,self._active_shopping_state)
+                elif research_requested and not (image_search_requested and self._active_shopping_state.get("active_topic")):
                         research_result,research_data=_research_text_request(message)
                         research_data=getattr(research_result,"data",None) if isinstance(getattr(research_result,"data",None),dict) else {}
+                        if _is_shopping_research_request(message) or research_data.get("shopping_query") or research_data.get("product_candidates"):
+                            from app.research.capability import normalize_shopping_query
+                            research_data.setdefault("shopping_query", normalize_shopping_query(message).to_dict())
+                            self._active_shopping_state=_shopping_state_from_research(research_data,self._active_shopping_state)
+                            _set_shopping_state(session_id,self._active_shopping_state)
                         if not getattr(research_result,"success",False):
-                            answer=str(getattr(research_result,"message","") or "I couldn't retrieve enough reliable current evidence from the available public-web providers right now.")
+                            answer=str(research_data.get("answer") or getattr(research_result,"message","") or "I couldn't retrieve enough reliable current evidence from the available public-web providers right now.")
                             image_results=[]
                         else:
                             answer=format_capability_result(research_result)
@@ -639,16 +738,21 @@ class Handler(BaseHTTPRequestHandler):
                     image_results=_dedupe_image_results(research_data.get("image_results") or research_data.get("matches") or [])
                     answer=format_capability_result(research_result) if getattr(research_result,"success",False) else str(getattr(research_result,"error",None) or getattr(research_result,"message",None) or "Free reverse-image research returned no usable public candidates.")
                 elif image_search_requested:
-                    global LAST_IMAGE_SUBJECT
-                    LAST_IMAGE_SUBJECT = _image_search_query(message)
-                    image_result = _image_search_by_text(message)
-                    image_data = getattr(image_result, "data", None) if isinstance(getattr(image_result, "data", None), dict) else {}
-                    raw_images = image_data.get("image_results", []) if isinstance(image_data, dict) else []
-                    image_results = _dedupe_image_results(raw_images)
-                    if image_results:
-                        answer = f"I found public image results for {_image_search_query(message)}."
+                    known_answer, known_images = _known_product_image_followup(message,session_id)
+                    if known_answer is not None:
+                        answer=known_answer
+                        image_results=known_images
                     else:
-                        answer = str(getattr(image_result, "message", "") or "I searched the public web, but the available image-search providers returned no usable image results.")
+                        global LAST_IMAGE_SUBJECT
+                        LAST_IMAGE_SUBJECT = _image_search_query(message)
+                        image_result = _image_search_by_text(message)
+                        image_data = getattr(image_result, "data", None) if isinstance(getattr(image_result, "data", None), dict) else {}
+                        raw_images = image_data.get("image_results", []) if isinstance(image_data, dict) else []
+                        image_results = _dedupe_image_results(raw_images)
+                        if image_results:
+                            answer = f"I found public image results for {_image_search_query(message)}."
+                        else:
+                            answer = str(getattr(image_result, "message", "") or "I searched the public web, but the available image-search providers returned no usable image results.")
                 elif research_requested:
                     research_result,research_data=_research_text_request(message)
                     if getattr(research_result,"success",False):
