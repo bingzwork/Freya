@@ -38,6 +38,7 @@ from app.research.web_adapter import (
     ResearchMode,
     WebResearchAdapter,
 )
+from app.research.comparison_intelligence import ComparisonIntelligenceEngine, ComparisonState, SufficiencyStatus
 from app.research.intelligence import (
     EvidenceClassifier,
     EvidenceType,
@@ -1053,6 +1054,7 @@ class ResearchCapability(Capability):
         self.evidence_classifier = EvidenceClassifier()
         self.strategy_selector = ResearchStrategySelector()
         self.synthesis_engine = SynthesisEngine()
+        self.comparison_engine = ComparisonIntelligenceEngine()
 
         self.fact_extractor = FactExtractor()
 
@@ -1634,6 +1636,8 @@ class ResearchCapability(Capability):
         if not topic:
             return {"success": False, "error": "topic is required", "mode": ResearchMode.DEEP_RESEARCH.value}
         semantic = self._semantic_model(topic, inputs)
+        if semantic.intent in {ResearchIntent.TECHNICAL_COMPARISON.value, ResearchIntent.PRODUCT_COMPARISON.value}:
+            return self._action_comparison_research(topic, inputs, semantic)
         bounded_inputs = dict(inputs)
         if semantic.intent == ResearchIntent.NEWS_RESEARCH.value:
             bounded_inputs.setdefault("max_queries", 1)
@@ -1824,7 +1828,131 @@ class ResearchCapability(Capability):
         self._publish_event("research.completed" if facts else "research.partial_or_failed", {"topic": topic[:200], "mode": ResearchMode.DEEP_RESEARCH.value, "query_count": len(seen_queries), "source_count": len(sources), "page_count": len(pages), "fact_count": len(facts), "partial": result.partial, "stopping_reason": stopping_reason})
         return {"success": bool(facts), "data": data, "errors": result.errors, "mode": ResearchMode.DEEP_RESEARCH.value, "message": answer}
 
+    def _action_comparison_research(self, topic: str, inputs: Dict[str, Any], semantic: RequestSemanticModel) -> Dict[str, Any]:
+        """Run comparison-specific research before ordinary synthesis."""
+        context = inputs.get("context") if isinstance(inputs.get("context"), dict) else {}
+        resolved = self.comparison_engine.resolve(semantic, context=context)
+        if len(resolved) < 2:
+            answer = "I could not resolve two comparable entities from that request. Please provide the full names or models so I do not invent a comparison target."
+            data = {"answer": answer, "entities": [], "comparison_status": SufficiencyStatus.INSUFFICIENT.value, "semantic": semantic.to_dict(), "errors": ["two comparable entities could not be resolved"]}
+            return {"success": False, "data": data, "answer": answer, "errors": data["errors"], "mode": semantic.execution_mode}
+        semantic = self.comparison_engine.resolve_semantic(semantic, context=context)
+        plan = self.comparison_engine.build_plan(semantic, resolved)
+        max_queries = max(3, min(int(inputs.get("max_queries", plan.max_queries)), 10))
+        max_sources = max(4, min(int(inputs.get("max_sources", 8)), 16))
+        started = time.monotonic()
+        errors: List[str] = []
+        facts: List[Dict[str, Any]] = []
+        sources: List[Dict[str, Any]] = []
+        seen_urls: set[str] = set()
+        executed_queries: List[Dict[str, Any]] = []
+
+        def collect(query_item: Dict[str, Any]) -> None:
+            if len(executed_queries) >= max_queries or time.monotonic() - started > float(inputs.get("max_duration", 90)):
+                return
+            query = str(query_item.get("query") or "").strip()
+            if not query or query in {str(item.get("query")) for item in executed_queries}:
+                return
+            executed_queries.append(dict(query_item))
+            search = self.action_search_web({"query": query, "normalized_query": query, "max_results": max(4, min(max_sources, 8)), "mode": ResearchMode.DEEP_RESEARCH.value, "semantic": semantic.to_dict(), "original_request": topic})
+            if isinstance(search, dict):
+                errors.extend(str(item) for item in search.get("errors", []) if item)
+            for raw_result in search.get("results", []) if isinstance(search, dict) and isinstance(search.get("results"), list) else []:
+                if len(sources) >= max_sources or time.monotonic() - started > float(inputs.get("max_duration", 90)):
+                    break
+                if not isinstance(raw_result, dict):
+                    continue
+                url = canonicalize_url(raw_result.get("url") or raw_result.get("source_url"))
+                if not url or url in seen_urls:
+                    continue
+                evidence = self._classify_evidence({**raw_result, "url": url}, semantic)
+                if evidence["metadata"].get("blocked_or_garbage"):
+                    continue
+                planned_entity = str(query_item.get("entity") or "")
+                if planned_entity not in {"", "shared", "gap"}:
+                    target = next((item for item in resolved if item.canonical_name == planned_entity), None)
+                    if target is not None and not self.comparison_engine.entity_matches_text(target, f"{raw_result.get('title', '')} {raw_result.get('snippet', '')} {url}"):
+                        continue
+                page_response = self.action_read_page({"url": url})
+                if not page_response.get("success"):
+                    errors.append(str(page_response.get("error") or f"Failed to read {url}"))
+                    snippet = str(raw_result.get("snippet") or raw_result.get("evidence") or "").strip()
+                    if snippet and len(snippet) >= 20:
+                        facts.append({"claim": snippet, "evidence": snippet, "source_url": url, "source_title": str(raw_result.get("title") or "Search result"), "retrieved_at": datetime.now(timezone.utc).isoformat(), "confidence": 0.48, "evidence_type": evidence["metadata"].get("evidence_type", EvidenceType.GENERAL_WEB.value), "source_role": evidence["metadata"].get("source_role", EvidenceType.GENERAL_WEB.value), "source_quality": evidence["metadata"].get("source_quality", 0.0), "snippet_only": True})
+                    continue
+                page = self._dict_page(page_response.get("page"))
+                if page is None:
+                    continue
+                page_evidence = self._classify_evidence({"url": page.url, "title": page.title, "content": page.content, "source_metadata": page.source_metadata}, semantic)
+                if page_evidence["metadata"].get("blocked_or_garbage"):
+                    continue
+                seen_urls.add(url)
+                quality_raw = self._invoke("evaluate", page=page.to_dict(), query=query)
+                quality = quality_raw if isinstance(quality_raw, dict) else _jsonable(quality_raw)
+                source = {"search_result": evidence["record"], "page": page.to_dict(), "quality": quality, "evidence": page_evidence["metadata"], "planned_entity": query_item.get("entity"), "planned_role": query_item.get("role"), "query": query}
+                sources.append(source)
+                extracted = self._invoke("facts", page=page.to_dict(), query=query, source_quality=quality, max_facts=8)
+                for raw_fact in extracted if isinstance(extracted, list) else []:
+                    item = raw_fact.to_dict() if isinstance(raw_fact, Fact) else dict(raw_fact) if isinstance(raw_fact, dict) else {}
+                    if not item:
+                        continue
+                    item.update({"evidence_type": page_evidence["metadata"].get("evidence_type", EvidenceType.GENERAL_WEB.value), "source_role": page_evidence["metadata"].get("source_role", EvidenceType.GENERAL_WEB.value), "source_quality": float(quality.get("score", 0.0)) if isinstance(quality, dict) else 0.0})
+                    facts.append(item)
+
+        for query_item in plan.queries[:max_queries]:
+            collect(query_item)
+        claims = self.comparison_engine.extract_claims(facts, resolved, plan.category)
+        matrix = self.comparison_engine.build_matrix(resolved, plan.dimensions, claims)
+        if matrix.sufficiency != SufficiencyStatus.SUFFICIENT and matrix.gap_queries:
+            for gap_query in matrix.gap_queries[:2]:
+                if len(executed_queries) >= max_queries:
+                    break
+                collect({"query": gap_query, "entity": "gap", "role": EvidenceType.BENCHMARK.value})
+            claims = self.comparison_engine.extract_claims(facts, resolved, plan.category)
+            matrix = self.comparison_engine.build_matrix(resolved, plan.dimensions, claims)
+        conflicts = self.comparison_engine.detect_conflicts(claims) if matrix.sufficiency != SufficiencyStatus.INSUFFICIENT else []
+        state = ComparisonState(resolved_entities=list(resolved), category=plan.category, plan=plan, claims=claims, matrix=matrix, conflicts=conflicts)
+        state.validation_errors = self.comparison_engine.validate(state)
+        citations = [{"claim": claim.direct_quote, "url": claim.source_url, "title": claim.source_title, "entity": claim.entity, "property": claim.property} for claim in claims[:12] if claim.source_url]
+        answer = self._render_comparison_answer(state)
+        if matrix.sufficiency == SufficiencyStatus.INSUFFICIENT or state.validation_errors:
+            answer = self._render_partial_comparison(state)
+        result = ResearchResult(topic=topic, answer=answer, key_findings=[claim.to_dict() for claim in claims], supporting_evidence=[claim.to_dict() for claim in claims], sources=sources, citations=citations, conflicts=conflicts, uncertainty=list(dict.fromkeys(errors + matrix.missing_evidence[:6])), confidence=round(0.82 if matrix.sufficiency == SufficiencyStatus.SUFFICIENT else 0.55 if matrix.sufficiency == SufficiencyStatus.PARTIAL_BUT_USEFUL else 0.0, 3), errors=list(dict.fromkeys(errors)), partial=matrix.sufficiency != SufficiencyStatus.SUFFICIENT, semantic=semantic.to_dict(), answer_plan="comparison_matrix")
+        data = result.to_dict()
+        data.update({"comparison_intelligence": state.to_dict(), "resolved_entities": [item.canonical_name for item in resolved], "resolved_entity_records": [item.to_dict() for item in resolved], "category": plan.category, "comparison_plan": plan.to_dict(), "evidence_matrix": matrix.to_dict(), "sufficiency": matrix.sufficiency.value, "queries": executed_queries, "gap_queries": matrix.gap_queries, "answer": answer})
+        self._publish_event("research.comparison.completed", {"topic": topic[:200], "category": plan.category, "entities": [item.canonical_name for item in resolved], "sufficiency": matrix.sufficiency.value, "claim_count": len(claims), "source_count": len(sources)})
+        return {"success": bool(claims) and len(resolved) >= 2, "data": data, "errors": result.errors, "mode": semantic.execution_mode, "message": answer}
+
+    @staticmethod
+    def _render_comparison_answer(state: ComparisonState) -> str:
+        entities = [item.canonical_name for item in state.resolved_entities]
+        matrix = state.matrix
+        if matrix is None or len(entities) < 2:
+            return "I could not build a validated comparison from the available evidence."
+        lines = [f"**{entities[0]} vs {entities[1]}**", "", f"The comparison is based on {state.category} evidence for both entities.", "", "| Dimension | " + entities[0] + " | " + entities[1] + " |", "|---|---|---|"]
+        for dimension in matrix.dimensions[:8]:
+            cells = [matrix.cells[entity][dimension] for entity in entities]
+            values = []
+            for cell in cells:
+                values.append("; ".join(dict.fromkeys(claim.value for claim in cell.claims))[:220] if cell.claims else "Not established by the retrieved evidence")
+            lines.append(f"| {dimension.title()} | {values[0]} | {values[1]} |")
+        if matrix.sufficiency == SufficiencyStatus.PARTIAL_BUT_USEFUL:
+            lines.extend(["", "**Evidence limits:** Some dimensions remain unverified: " + ", ".join(matrix.missing_evidence[:4]) + "."])
+        lines.extend(["", "**Recommendation:** Choose the entity whose covered strengths match your use case; the retrieved evidence supports the tradeoffs shown above rather than an invented universal winner."])
+        return "\n".join(lines)
+
+    @staticmethod
+    def _render_partial_comparison(state: ComparisonState) -> str:
+        names = [item.canonical_name for item in state.resolved_entities]
+        if len(names) < 2:
+            return "I could not resolve two comparable entities, so I will not invent the missing side of the comparison."
+        matrix = state.matrix
+        missing = ", ".join(matrix.missing_evidence[:5]) if matrix else "the required evidence cells"
+        return f"I resolved **{names[0]}** and **{names[1]}**, but the available evidence is insufficient for a reliable full comparison. I will not replace missing facts with snippets or placeholders. Missing coverage: {missing}."
+
     def _action_semantic_research(self, topic: str, inputs: Dict[str, Any], semantic: RequestSemanticModel) -> Dict[str, Any]:
+        if semantic.intent in {ResearchIntent.TECHNICAL_COMPARISON.value, ResearchIntent.PRODUCT_COMPARISON.value}:
+            return self._action_comparison_research(topic, inputs, semantic)
         limits = ResearchLimits.from_inputs(inputs, deep=semantic.execution_mode == ResearchMode.DEEP_RESEARCH.value)
         max_sources = min(limits.max_sources, max(1, int(inputs.get("max_sources", limits.max_sources))))
         queries = self.strategy_selector.build_queries(semantic, max_queries=limits.max_queries)
@@ -1935,6 +2063,8 @@ class ResearchCapability(Capability):
             return {"success": False, "error": "topic is required"}
         semantic = self._semantic_model(topic, inputs)
         mode = ResearchMode.coerce(inputs.get("mode"), topic)
+        if semantic.intent in {ResearchIntent.TECHNICAL_COMPARISON.value, ResearchIntent.PRODUCT_COMPARISON.value}:
+            return self._action_comparison_research(topic, inputs, semantic)
         if not inputs.get("mode") and semantic.execution_mode == ResearchMode.DEEP_RESEARCH.value:
             mode = ResearchMode.DEEP_RESEARCH
         if mode == ResearchMode.DEEP_RESEARCH:

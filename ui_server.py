@@ -203,6 +203,8 @@ def _research_text_request(question, semantic=None):
         result.data=data
     if getattr(result,"success",False):
         return result,data
+    if semantic.intent in {ResearchIntent.TECHNICAL_COMPARISON.value, ResearchIntent.PRODUCT_COMPARISON.value}:
+        return result,data
     if shopping.requested_domain:
         return result,data
     try:
