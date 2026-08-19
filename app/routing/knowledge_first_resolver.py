@@ -24,6 +24,7 @@ from app.core.llm_stack import LLMStack
 from app.core.priority_llm import LLMPriority
 from app.core.logger import logger
 from app.intent import IntentType
+from app.research.intelligence import RequestSemanticAnalyzer
 
 
 def _classify_conversational_request(query: str) -> Optional[str]:
@@ -353,13 +354,16 @@ class KnowledgeFirstResolver:
     ) -> ResolutionResult:
         """Invoke the one registered research capability through CapabilityRouter."""
         research_context = dict(context or {})
-        research_mode = self._research_mode_for(query, routing_metadata)
+        semantic = RequestSemanticAnalyzer.analyze(query, context=research_context)
+        research_mode = semantic.execution_mode
         research_context.update(
             {
                 "capability_action": self._research_action_for(query, routing_metadata),
                 "mode": research_mode,
                 "topic": query,
                 "claim": self._claim_from_query(query),
+                "semantic": semantic.to_dict(),
+                "intent": semantic.intent,
                 "routing_metadata": routing_metadata,
             }
         )

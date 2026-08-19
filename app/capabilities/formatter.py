@@ -4,7 +4,9 @@ Converts structured capability results into natural language responses.
 Hides internal implementation details unless debug mode is enabled.
 """
 
+import html
 import json
+import re
 from typing import Any, Dict, List, Optional, Union
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
@@ -303,8 +305,20 @@ class ResponseFormatter:
         time_str = data.get("time", "unknown")
         return f"The current time is {time_str}."
 
+    @staticmethod
+    def _clean_research_display(value: Any) -> str:
+        text = html.unescape(str(value or ""))
+        text = re.sub(r"<[^>]+>", " ", text)
+        text = re.sub(r"\[[^\]]{0,240}\]", " ", text)
+        text = text.replace("[", " ").replace("]", " ")
+        text = text.replace("â", " ").replace("Â", " ").replace("¯", " ").replace("�", " ")
+        text = re.sub(r"[ \t]+", " ", text)
+        text = re.sub(r"\n{3,}", "\n\n", text).strip()
+        return text
+
     def _format_research_capability(self, result: CapabilityResult) -> str:
         """Present canonical research output without dropping provenance."""
+
         payload = result.data if isinstance(result.data, dict) else {}
         data = payload.get("data", payload) if isinstance(payload, dict) else {}
         if not isinstance(data, dict):
@@ -312,7 +326,7 @@ class ResponseFormatter:
 
         answer = data.get("answer")
         if answer:
-            response = str(answer)
+            response = self._clean_research_display(answer)
             candidates = data.get("product_candidates") or data.get("candidates") or []
             if isinstance(candidates, list) and candidates:
                 rows = ["\n\nPrice comparison:", "| Product | Price | Seller | Marketplace |", "|---|---:|---|---|"]
@@ -340,13 +354,18 @@ class ResponseFormatter:
                 if not canonical_url or canonical_url in seen_urls:
                     continue
                 seen_urls.add(canonical_url)
-                title = citation.get("source_title") or citation.get("title") or canonical_url
+                title = self._clean_research_display(citation.get("source_title") or citation.get("title") or canonical_url)
                 source_lines.append(f"- {title}: {canonical_url}")
             if source_lines:
                 response += "\n\nSources:\n" + "\n".join(source_lines[:5])
             uncertainty = data.get("uncertainty") or []
-            if uncertainty:
-                response += "\n\nCaveats: " + " ".join(str(item) for item in uncertainty[:3])
+            cleaned_uncertainty = []
+            for item in uncertainty:
+                cleaned = self._clean_research_display(item)
+                if cleaned and cleaned not in cleaned_uncertainty:
+                    cleaned_uncertainty.append(cleaned)
+            if cleaned_uncertainty:
+                response += "\n\nEvidence notes: " + " ".join(cleaned_uncertainty[:3])
             return response
 
         status = data.get("status")

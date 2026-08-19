@@ -20,6 +20,7 @@ from app.capabilities.formatter import format_capability_result
 from app.capabilities.router import CapabilityResult
 from app.core.request_context import RequestContext
 from app.ui.agent_console import get_agent_console_snapshot, get_autonomy_snapshot, get_tasks_snapshot, get_memory_snapshot, get_system_snapshot
+from app.research.intelligence import RequestSemanticAnalyzer, ResearchIntent
 FREYA=None
 SUBSCRIBERS=set()
 LAST_IMAGE_SUBJECT = ""
@@ -180,15 +181,20 @@ def _is_freshness_sensitive_request(question):
     normalized=" ".join(str(question or "").lower().split())
     return bool(re.search(r"\b(?:latest|newest|current|currently|today|now|recent|price|cost|benchmark|specs?|specification|release|availability|version|generation|vs\.?|versus|compare|comparison)\b", normalized))
 
-def _research_text_request(question):
+def _research_text_request(question, semantic=None):
     router=getattr(getattr(getattr(FREYA,"system",None),"facade",None),"_router",None)
     if router is None:
         raise RuntimeError("Research routing is unavailable because the canonical router is not initialized")
     from app.research.capability import normalize_shopping_query
+    semantic = semantic if semantic is not None else RequestSemanticAnalyzer.analyze(str(question or ""))
     shopping=normalize_shopping_query(str(question or ""))
-    research_query=shopping.normalized_query or re.sub(r"^\s*(?:please\s+)?(?:search|look\s+up|find|show)\s+(?:the\s+)?(?:public\s+)?(?:web|internet)?\s*(?:for|about)?\s*", "", str(question or ""), flags=re.I).strip(" .?!") or str(question or "").strip()
+    research_query = str(question or "").strip()
+    if semantic.shopping:
+        research_query = shopping.normalized_query or research_query
+    else:
+        research_query = re.sub(r"^\s*(?:please\s+)?(?:search|look\s+up|find|show)\s+(?:the\s+)?(?:public\s+)?(?:web|internet)?\s*(?:for|about)?\s*", "", research_query, flags=re.I).strip(" .?!") or research_query
     research_query=re.sub(r"\btoday(?:'s|s)?\b", "latest", research_query, flags=re.I).strip()
-    result=_bounded_call(router.execute_capability,RESEARCH_REQUEST_TIMEOUT_SECONDS,"research_capability",research_query,capability_action="research_topic",topic=str(question or "").strip(),normalized_query=research_query,site_constraint=shopping.requested_domain,allowed_domains=shopping.allowed_domains,original_request=question,max_sources=5)
+    result=_bounded_call(router.execute_capability,RESEARCH_REQUEST_TIMEOUT_SECONDS,"research_capability",research_query,capability_action="research_topic",topic=str(question or "").strip(),normalized_query=research_query,site_constraint=semantic.requested_domain if semantic.shopping else "",allowed_domains=[semantic.requested_domain] if semantic.requested_domain and semantic.shopping else [],original_request=question,semantic=semantic.to_dict(),intent=semantic.intent,mode=semantic.execution_mode,max_sources=5)
     data=getattr(result,"data",None) if isinstance(getattr(result,"data",None),dict) else {}
     data=dict(data)
     data.setdefault("shopping_query", shopping.to_dict())
@@ -720,6 +726,7 @@ class Handler(BaseHTTPRequestHandler):
                 session_id=str(payload.get("session_id") or UI_SESSION_ID)
                 request_context=RequestContext.create(message,session_id=session_id,attachments=attachments,source="user",channel="web",metadata={"content_type":self.headers.get("Content-Type","application/json")})
                 self._active_trace_id=request_context.trace_id; self._active_chat_message=message; self._active_request_context=request_context.to_dict(); self._active_exchange_recorded=False; self._active_shopping_state=_get_shopping_state(session_id)
+                semantic_model = RequestSemanticAnalyzer.analyze(message, context={"shopping_state": self._active_shopping_state})
                 if not message and not attachments: self.send_payload(400,{"error":"Write a message or attach a file first."}); return
                 context,vision_meta=attachment_context(self.workspace,attachments,message,inputs_return_meta=True); privacy,blocked=_privacy_response(message,context)
                 social_response=_direct_social_response(message) if not attachments and not blocked else None
@@ -735,8 +742,8 @@ class Handler(BaseHTTPRequestHandler):
                 browser_data = {}
                 if not attachments and not vision_meta.get("processed"):
                     browser_answer, browser_data = _browser_ui_request(message) or (None, {})
-                research_requested=_is_research_request(message) or _is_freshness_sensitive_request(message) or _is_shopping_research_request(message)
-                image_search_requested=_is_image_search_request(message)
+                research_requested=_is_research_request(message) or _is_freshness_sensitive_request(message) or _is_shopping_research_request(message) or semantic_model.should_research
+                image_search_requested=_is_image_search_request(message) or semantic_model.intent == ResearchIntent.IMAGE_SEARCH.value
                 image_results=[]
                 research_data={}
                 if research_requested: emit_avatar("SEARCHING",activity="research")
@@ -792,15 +799,15 @@ class Handler(BaseHTTPRequestHandler):
                 elif browser_answer is not None:
                     answer = browser_answer
                     research_data = browser_data if isinstance(browser_data, dict) else {}
-                elif _shopping_followup_without_winner(message,self._active_shopping_state) and not image_search_requested:
+                elif _shopping_followup_without_winner(message,self._active_shopping_state) and not image_search_requested and semantic_model.uses_shopping_context:
                     answer=_shopping_followup_without_winner(message,self._active_shopping_state)
                 elif research_requested and not (image_search_requested and self._active_shopping_state.get("active_topic")):
-                        research_result,research_data=_research_text_request(message)
+                        research_result,research_data=_research_text_request(message, semantic_model)
                         research_data=getattr(research_result,"data",None) if isinstance(getattr(research_result,"data",None),dict) else {}
                         shopping_payload = research_data.get("shopping_query") if isinstance(research_data.get("shopping_query"), dict) else {}
                         is_product_result = bool(research_data.get("product_candidates") or research_data.get("candidates") or research_data.get("winner"))
                         is_constrained_shopping = bool(shopping_payload.get("requested_domain") or shopping_payload.get("ranking"))
-                        if _is_shopping_research_request(message) or is_product_result or is_constrained_shopping:
+                        if semantic_model.shopping or _is_shopping_research_request(message) or is_product_result or is_constrained_shopping:
                             from app.research.capability import normalize_shopping_query
                             research_data.setdefault("shopping_query", normalize_shopping_query(message).to_dict())
                             self._active_shopping_state=_shopping_state_from_research(research_data,self._active_shopping_state)
@@ -833,7 +840,7 @@ class Handler(BaseHTTPRequestHandler):
                         else:
                             answer = str(getattr(image_result, "message", "") or "I searched the public web, but the available image-search providers returned no usable image results.")
                 elif research_requested:
-                    research_result,research_data=_research_text_request(message)
+                    research_result,research_data=_research_text_request(message, semantic_model)
                     if getattr(research_result,"success",False):
                         answer=format_capability_result(research_result)
                     else:

@@ -298,6 +298,7 @@ def test_research_formatter_preserves_citations_and_safe_failure_message():
 
     assert "The sources agree on the result." in rendered
     assert "https://example.org/official" in rendered
-    assert "Caveats:" in rendered
+    assert "Evidence notes:" in rendered
+
     failure_message = format_capability_result(failure)
     assert "enough reliable current evidence" in failure_message

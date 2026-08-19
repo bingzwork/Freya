@@ -38,6 +38,15 @@ from app.research.web_adapter import (
     ResearchMode,
     WebResearchAdapter,
 )
+from app.research.intelligence import (
+    EvidenceClassifier,
+    EvidenceType,
+    RequestSemanticAnalyzer,
+    RequestSemanticModel,
+    ResearchIntent,
+    ResearchStrategySelector,
+    SynthesisEngine,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +108,10 @@ class ProductListing:
     retrieved_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     confidence: float = 0.0
     evidence: str = ""
+    evidence_type: str = "GENERAL_WEB"
+    source_role: str = "GENERAL_WEB"
+    price_type: str = "UNKNOWN_PRICE"
+    commerce_verified: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -136,6 +149,11 @@ class SourceQuality:
     spam_flags: List[str] = field(default_factory=list)
     rationale: List[str] = field(default_factory=list)
     uncertainty: List[str] = field(default_factory=list)
+    evidence_type: str = "GENERAL_WEB"
+    source_role: str = "GENERAL_WEB"
+    published_date: str = ""
+    event_date: str = ""
+    updated_date: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -143,6 +161,7 @@ class SourceQuality:
 
 @dataclass
 class Fact:
+
     claim: str
     evidence: str
     source_url: str
@@ -151,6 +170,12 @@ class Fact:
     context: str = ""
     confidence: float = 0.0
     fact_id: str = ""
+    evidence_type: str = "GENERAL_WEB"
+    source_role: str = "GENERAL_WEB"
+    published_date: str = ""
+    event_date: str = ""
+    updated_date: str = ""
+    price_type: str = "UNKNOWN_PRICE"
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -158,6 +183,7 @@ class Fact:
 
 @dataclass
 class Citation:
+
     citation_id: str
     claim: str
     evidence: str
@@ -205,6 +231,8 @@ class ResearchResult:
     confidence: float
     errors: List[str] = field(default_factory=list)
     partial: bool = False
+    semantic: Dict[str, Any] = field(default_factory=dict)
+    answer_plan: str = "direct_answer"
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -393,9 +421,13 @@ def _is_search_landing_page(page: WebPage) -> bool:
     return marketplace_search_path or any(marker in sample for marker in markers) or any(marker in sample for marker in ("sign in or create account", "create account", "login to continue"))
 
 
-def _extract_product_listing(raw_result: Dict[str, Any], page: WebPage, shopping: ShoppingQuery) -> Optional[ProductListing]:
+def _extract_product_listing(raw_result: Dict[str, Any], page: WebPage, shopping: ShoppingQuery, evidence_metadata: Optional[Dict[str, Any]] = None) -> Optional[ProductListing]:
     if _is_search_landing_page(page):
         return None
+    classification = dict(evidence_metadata or EvidenceClassifier.classify({"url": page.url, "title": page.title, "content": page.content}, None))
+    if not classification.get("commerce_verified"):
+        return None
+
     source_url = canonicalize_url(page.url or raw_result.get("url"))
     if not source_url:
         return None
@@ -446,6 +478,10 @@ def _extract_product_listing(raw_result: Dict[str, Any], page: WebPage, shopping
         source=str(raw_result.get("source") or "public_web"),
         confidence=confidence,
         evidence=content[:1200],
+        evidence_type=str(classification.get("evidence_type") or EvidenceType.RETAIL_LISTING.value),
+        source_role=str(classification.get("source_role") or classification.get("evidence_type") or "RETAIL_LISTING"),
+        price_type=str(classification.get("price_type") or "UNKNOWN_PRICE"),
+        commerce_verified=True,
     )
 
 
@@ -907,7 +943,9 @@ class CrossReference:
         missing = ["No independent source corroboration was available."] if normalized and not corroborating else []
         uncertainty: List[str] = []
         if conflicting:
-            uncertainty.append("Credible-looking sources contain conflicting claims; the conflict is unresolved.")
+
+            uncertainty.append("Materially different values were reported for the same requested property; source conditions should be checked.")
+
         if unsupported:
             uncertainty.append("One or more requested claims were not supported by retrieved evidence.")
         if not normalized:
@@ -1011,8 +1049,13 @@ class ResearchCapability(Capability):
         self.browser_capability = None
 
         self.source_evaluator = SourceEvaluator()
+        self.semantic_analyzer = RequestSemanticAnalyzer()
+        self.evidence_classifier = EvidenceClassifier()
+        self.strategy_selector = ResearchStrategySelector()
+        self.synthesis_engine = SynthesisEngine()
 
         self.fact_extractor = FactExtractor()
+
         self.cross_reference = CrossReference()
         self.citation_manager = CitationManager()
         self.web_search = WebSearchCapability(self.search_tool)
@@ -1152,7 +1195,41 @@ class ResearchCapability(Capability):
                 break
         return records
 
-    def _browser_search(self, query: str, max_results: int, *, site_constraint: str = "", allowed_domains: Optional[Sequence[str]] = None, normalized_query: str = "") -> Dict[str, Any]:
+    def _news_rss_search(self, query: str, max_results: int) -> Dict[str, Any]:
+        """Fetch a small, date-bearing news feed before generic web fallbacks."""
+        rss_url = "https://news.google.com/rss/search?" + urlencode({"q": query, "hl": "en-US", "gl": "US", "ceid": "US:en"})
+        try:
+            response = requests.get(
+                rss_url,
+                headers={"User-Agent": "Freya/1.0 public news research"},
+                timeout=max(3.0, float(os.getenv("FREYA_NEWS_RSS_TIMEOUT", "10"))),
+            )
+            response.raise_for_status()
+            records = self._browser_rss_records(response.text, query, max_results)
+            for record in records:
+                record["source"] = "google_news_rss"
+            return {
+                "success": bool(records),
+                "query": query,
+                "normalized_query": query,
+                "results": records,
+                "errors": [] if records else ["Google News RSS returned no topic-relevant stories"],
+                "provider": "google_news_rss",
+                "attempts": [{"provider": "google_news_rss", "success": bool(records)}],
+            }
+        except Exception as error:
+            return {
+                "success": False,
+                "query": query,
+                "normalized_query": query,
+                "results": [],
+                "errors": [f"Google News RSS failed: {type(error).__name__}"],
+                "provider": "google_news_rss",
+                "attempts": [{"provider": "google_news_rss", "success": False}],
+            }
+
+    def _browser_search(self, query: str, max_results: int, *, site_constraint: str = "", allowed_domains: Optional[Sequence[str]] = None, normalized_query: str = "", semantic: Optional[RequestSemanticModel] = None) -> Dict[str, Any]:
+
         """Search public pages through the existing Playwright fallback.
 
         Explicit marketplace constraints are hard constraints: the browser opens
@@ -1318,7 +1395,34 @@ class ResearchCapability(Capability):
         return value if isinstance(value, Fact) else Fact(**value)
 
     @staticmethod
+    def _headline_fact(record: Dict[str, Any], evidence: Dict[str, Any]) -> Optional[Fact]:
+        """Represent a readable news headline without pretending the article was read."""
+        title = str(record.get("title") or record.get("source_title") or "").strip()
+        snippet = str(record.get("snippet") or record.get("description") or "").strip()
+        claim = title
+        if snippet and snippet.lower() not in title.lower():
+            claim = f"{title}: {snippet[:500]}"
+        url = canonicalize_url(record.get("url") or record.get("source_url"))
+        if not title or not url:
+            return None
+        return Fact(
+            claim=claim,
+            evidence=snippet or title,
+            source_url=url,
+            source_title=title,
+            retrieved_at=datetime.now(timezone.utc).isoformat(),
+            context="Headline-level public news result; the linked article page was not readable.",
+            confidence=0.45,
+            evidence_type=str(evidence.get("evidence_type") or EvidenceType.NEWS_ARTICLE.value),
+            source_role=str(evidence.get("source_role") or EvidenceType.NEWS_ARTICLE.value),
+            published_date=str(record.get("published_at") or record.get("published") or ""),
+            event_date=str(record.get("event_date") or ""),
+            updated_date=str(record.get("updated_at") or ""),
+        )
+
+    @staticmethod
     def _rank_image_candidates(query: str, records: Any, limit: int) -> List[Dict[str, Any]]:
+
         terms = [token.lower() for token in re.findall(r"[a-z0-9][a-z0-9._-]{1,}", str(query or "").lower()) if token not in {"show", "find", "search", "photo", "photos", "picture", "pictures", "image", "images", "of", "the", "a", "an", "me", "this", "that", "one", "another"}]
         ranked: List[tuple[float, Dict[str, Any]]] = []
         seen: set[str] = set()
@@ -1368,12 +1472,24 @@ class ResearchCapability(Capability):
         max_results = max(1, min(int(inputs.get("max_results", 5)), 20))
         if not query:
             return {"success": False, "error": "query is required", "results": []}
+        semantic = self._semantic_model(query, inputs)
         shopping = normalize_shopping_query(query)
-        shopping_request = _is_product_query(query) or bool(shopping.requested_domain) or bool(shopping.ranking)
-        requested_domain = str(inputs.get("site_constraint") or shopping.requested_domain or "").lower().removeprefix("www.")
+        shopping_request = semantic.intent in {ResearchIntent.SHOPPING_DISCOVERY.value, ResearchIntent.SHOPPING_PRICE_SEARCH.value} or bool(inputs.get("site_constraint"))
+        requested_domain = str(inputs.get("site_constraint") or (shopping.requested_domain if shopping_request else "")).lower().removeprefix("www.")
+
         allowed_domains = [str(item).lower().removeprefix("www.") for item in (inputs.get("allowed_domains") or ([requested_domain] if requested_domain else [])) if str(item).strip()]
         normalized_query = str(inputs.get("normalized_query") or (shopping.normalized_query if shopping_request else query)).strip()
+        if semantic.intent in {ResearchIntent.TECHNICAL_COMPARISON.value, ResearchIntent.PRODUCT_COMPARISON.value, ResearchIntent.NEWS_RESEARCH.value, ResearchIntent.REVIEW_RESEARCH.value}:
+            normalized_query = query
+
+        if semantic.news and not requested_domain:
+            rss_result = self._news_rss_search(normalized_query, max_results)
+            if rss_result.get("success"):
+                self._publish_event("research.search.completed", {"query": query[:200], "result_count": len(rss_result["results"]), "error_count": 0})
+                return rss_result
+
         result = self._invoke("search", query=normalized_query, max_results=max_results)
+
         if not isinstance(result, dict):
             result = {"success": False, "error": "Invalid search tool response", "results": []}
         result.setdefault("results", [])
@@ -1393,7 +1509,8 @@ class ResearchCapability(Capability):
         result["success"] = bool(result["results"])
         if not result["success"]:
             result.setdefault("errors", []).append("No usable public page results remained after filtering search homepages")
-            browser_result = self._browser_search(query, max_results, site_constraint=requested_domain, allowed_domains=allowed_domains, normalized_query=normalized_query)
+            browser_result = self._browser_search(query, max_results, site_constraint=requested_domain, allowed_domains=allowed_domains, normalized_query=normalized_query, semantic=semantic)
+
             if browser_result.get("success"):
                 browser_result["errors"] = list(result.get("errors", [])) + list(browser_result.get("errors", []))
                 result = browser_result
@@ -1450,15 +1567,86 @@ class ResearchCapability(Capability):
         )
         return normalized
 
+    def _semantic_model(self, topic: str, inputs: Optional[Dict[str, Any]] = None) -> RequestSemanticModel:
+        values = dict(inputs or {})
+        supplied = values.get("semantic")
+        if isinstance(supplied, dict):
+            allowed = {field_name for field_name in RequestSemanticModel.__dataclass_fields__}
+            payload = {key: value for key, value in supplied.items() if key in allowed}
+            payload.setdefault("query", topic)
+            try:
+                return RequestSemanticModel(**payload)
+            except Exception:
+                pass
+        return self.semantic_analyzer.analyze(topic, context=values.get("context") if isinstance(values.get("context"), dict) else None)
+
+    def _classify_evidence(self, record: Dict[str, Any], semantic: Optional[RequestSemanticModel] = None) -> Dict[str, Any]:
+        metadata = self.evidence_classifier.classify(record, semantic)
+        enriched = dict(record)
+        enriched.update({"evidence_type": metadata.get("evidence_type"), "source_role": metadata.get("source_role"), "price_type": metadata.get("price_type"), "commerce_verified": metadata.get("commerce_verified", False), "topic_relevance": metadata.get("topic_relevance", {})})
+        return {"record": enriched, "metadata": metadata}
+
+    @staticmethod
+    def _relevant_evidence(metadata: Dict[str, Any], semantic: Optional[RequestSemanticModel]) -> bool:
+        if semantic is None:
+            return True
+        if metadata.get("blocked_or_garbage"):
+            return False
+        if not semantic.news:
+            return True
+        evidence_type = str(metadata.get("evidence_type") or "GENERAL_WEB")
+        if evidence_type not in {EvidenceType.NEWS_ARTICLE.value, EvidenceType.OFFICIAL_ANNOUNCEMENT.value}:
+            return False
+        relevance = metadata.get("topic_relevance") if isinstance(metadata, dict) else {}
+        return bool(relevance.get("relevant", True)) if isinstance(relevance, dict) else True
+
+    def _synthesize_research(self, semantic: RequestSemanticModel, facts: Sequence[Dict[str, Any]], sources: Sequence[Dict[str, Any]], conflicts: Sequence[Dict[str, Any]] = (), citations: Sequence[Dict[str, Any]] = ()) -> Dict[str, Any]:
+        return self.synthesis_engine.synthesize(semantic, facts, sources, conflicts, citations)
+
+    @staticmethod
+    def _material_conflicts(conflicts: Sequence[Dict[str, Any]], semantic: RequestSemanticModel) -> List[Dict[str, Any]]:
+        material: List[Dict[str, Any]] = []
+        entity_tokens = {token for entity in semantic.entities for token in re.findall(r"[a-z0-9]+", entity.lower()) if len(token) >= 3}
+        for raw in conflicts:
+            if not isinstance(raw, dict):
+                continue
+            claims = raw.get("claims") if isinstance(raw.get("claims"), list) else []
+            texts = [str(item.get("claim") or item.get("evidence") or "") for item in claims if isinstance(item, dict)]
+            if len(texts) < 2:
+                continue
+            shared_tokens = set(re.findall(r"[a-z0-9]+", texts[0].lower()))
+            for text in texts[1:]:
+                shared_tokens &= set(re.findall(r"[a-z0-9]+", text.lower()))
+            if entity_tokens and not (shared_tokens & entity_tokens):
+                continue
+            numbers = [tuple(re.findall(r"\b\d+(?:\.\d+)?%?\b", text)) for text in texts]
+            if not any(numbers) or len(set(numbers)) < 2:
+                continue
+            item = dict(raw)
+            item["description"] = "Sources report materially different numeric values for the same requested subject; the differing values and source conditions are retained for review."
+            item["material"] = True
+            material.append(item)
+        return material
+
     def action_deep_research(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+
         topic = str(inputs.get("topic") or inputs.get("query") or "").strip()
         if not topic:
             return {"success": False, "error": "topic is required", "mode": ResearchMode.DEEP_RESEARCH.value}
-        limits = ResearchLimits.from_inputs(inputs, deep=True)
+        semantic = self._semantic_model(topic, inputs)
+        bounded_inputs = dict(inputs)
+        if semantic.intent == ResearchIntent.NEWS_RESEARCH.value:
+            bounded_inputs.setdefault("max_queries", 1)
+            bounded_inputs.setdefault("max_sources", 4)
+            bounded_inputs.setdefault("max_pages", 3)
+            bounded_inputs.setdefault("max_duration", 60)
+        limits = ResearchLimits.from_inputs(bounded_inputs, deep=True)
         started = time.monotonic()
         context = dict(inputs.get("context") or {}) if isinstance(inputs.get("context"), dict) else {}
         context.setdefault("site_constraint", str(inputs.get("site_constraint") or ""))
-        queries = DeepResearchCoordinator.build_queries(topic, context=context, max_queries=limits.max_queries)
+        context["semantic"] = semantic.to_dict()
+        queries = self.strategy_selector.build_queries(semantic, max_queries=limits.max_queries)
+
         errors: List[str] = []
         pages: List[WebPage] = []
         facts: List[Fact] = []
@@ -1483,7 +1671,9 @@ class ResearchCapability(Capability):
                 "allowed_domains": inputs.get("allowed_domains") or context.get("allowed_domains") or [],
                 "max_results": min(limits.max_sources, max(3, limits.max_pages)),
                 "mode": ResearchMode.DEEP_RESEARCH.value,
+                "semantic": semantic.to_dict(),
             })
+
             if not isinstance(search, dict):
                 errors.append("Search returned an invalid response")
                 return
@@ -1499,20 +1689,35 @@ class ResearchCapability(Capability):
                 url = canonicalize_url(raw_result.get("url") or raw_result.get("source_url"))
                 if not url or url in seen_urls:
                     continue
-                seen_urls.add(url)
+                result_evidence = self._classify_evidence({**raw_result, "url": url}, semantic)
+                if not self._relevant_evidence(result_evidence["metadata"], semantic):
+                    continue
                 self._publish_event("research.phase", {"mode": ResearchMode.DEEP_RESEARCH.value, "phase": "READING", "source_count": len(sources), "depth": depth})
                 page_response = self.action_read_page({"url": url})
+
                 if not page_response.get("success"):
                     errors.append(str(page_response.get("error") or f"Failed to read {url}"))
+                    if semantic.news:
+                        headline_fact = self._headline_fact(result_evidence["record"], result_evidence["metadata"])
+                        if headline_fact is not None:
+                            sources.append({"search_result": result_evidence["record"], "page": None, "quality": {"headline_only": True}, "evidence": result_evidence["metadata"], "role": result_evidence["metadata"].get("source_role"), "query": query, "depth": depth})
+                            facts.append(headline_fact)
+                            seen_urls.add(url)
                     continue
                 page = self._dict_page(page_response.get("page"))
                 if page is None:
                     errors.append(f"Invalid page result for {url}")
                     continue
+                page_evidence = self._classify_evidence({"url": page.url, "title": page.title, "content": page.content, "source_metadata": page.source_metadata}, semantic)
+                if not self._relevant_evidence(page_evidence["metadata"], semantic):
+                    continue
+                seen_urls.add(url)
                 pages.append(page)
                 quality_raw = self._invoke("evaluate", page=page.to_dict(), query=topic)
+
                 quality = quality_raw if isinstance(quality_raw, dict) else _jsonable(quality_raw)
-                sources.append({"search_result": raw_result, "page": page.to_dict(), "quality": quality, "query": query, "depth": depth})
+                sources.append({"search_result": result_evidence["record"], "page": page.to_dict(), "quality": quality, "evidence": page_evidence["metadata"], "role": page_evidence["metadata"].get("source_role"), "query": query, "depth": depth})
+
                 facts_raw = self._invoke("facts", page=page.to_dict(), query=topic, source_quality=quality, max_facts=8)
                 if isinstance(facts_raw, list):
                     for item in facts_raw:
@@ -1520,7 +1725,12 @@ class ResearchCapability(Capability):
                             facts.append(item)
                         elif isinstance(item, dict):
                             try:
-                                facts.append(self._dict_fact(item))
+                                fact = self._dict_fact(item)
+                                fact.evidence_type = str(page_evidence["metadata"].get("evidence_type") or "GENERAL_WEB")
+                                fact.source_role = str(page_evidence["metadata"].get("source_role") or fact.evidence_type)
+                                fact.price_type = str(page_evidence["metadata"].get("price_type") or "UNKNOWN_PRICE")
+                                facts.append(fact)
+
                             except Exception:
                                 continue
                 if len(pages) >= limits.max_pages:
@@ -1552,7 +1762,9 @@ class ResearchCapability(Capability):
         cross = cross_raw if isinstance(cross_raw, dict) else _jsonable(cross_raw)
         citations_raw = self._invoke("citations", facts=[fact.to_dict() for fact in facts])
         citations = citations_raw if isinstance(citations_raw, list) else []
-        conflicts = list(cross.get("conflicting_claims", [])) if isinstance(cross, dict) else []
+        raw_conflicts = list(cross.get("conflicting_claims", [])) if isinstance(cross, dict) else []
+        conflicts = self._material_conflicts(raw_conflicts, semantic)
+
         uncertainty = list(cross.get("uncertainty", [])) if isinstance(cross, dict) else []
         if errors:
             uncertainty.append("Some providers or pages failed; this is a bounded partial result.")
@@ -1572,8 +1784,11 @@ class ResearchCapability(Capability):
             stopping_reason = "evidence gaps were followed up within the bounded budget"
         else:
             stopping_reason = "core evidence covered or no high-value evidence gap detected"
-        answer = "Based on the retrieved sources: " + " ".join(fact.claim for fact in facts[:5]) if facts else "Insufficient readable evidence was retrieved to answer this question."
+        synthesis = self._synthesize_research(semantic, [fact.to_dict() for fact in facts], sources, conflicts, citations)
+        answer = str(synthesis.get("answer") or ("Insufficient readable evidence was retrieved to answer this question." if not facts else "The retrieved sources support the findings below."))
+        uncertainty.extend(str(item) for item in synthesis.get("uncertainty", []) if item)
         result = ResearchResult(
+
             topic=topic,
             answer=answer,
             key_findings=[fact.to_dict() for fact in facts],
@@ -1585,7 +1800,10 @@ class ResearchCapability(Capability):
             confidence=round(max(0.0, min(1.0, confidence)), 3),
             errors=list(dict.fromkeys(errors)),
             partial=bool(errors or not pages),
+            semantic=semantic.to_dict(),
+            answer_plan=semantic.output_goal,
         )
+
         data = result.to_dict()
         data.update({
             "research_mode": ResearchMode.DEEP_RESEARCH.value,
@@ -1597,25 +1815,140 @@ class ResearchCapability(Capability):
             "source_count": len(sources),
             "provider_attempts": provider_attempts,
             "elapsed_seconds": round(time.monotonic() - started, 3),
+            "intent": semantic.intent,
+            "semantic": semantic.to_dict(),
+            "answer_plan": semantic.output_goal,
+
         })
         self._publish_event("research.phase", {"mode": ResearchMode.DEEP_RESEARCH.value, "phase": "SYNTHESIZING", "source_count": len(sources), "page_count": len(pages)})
         self._publish_event("research.completed" if facts else "research.partial_or_failed", {"topic": topic[:200], "mode": ResearchMode.DEEP_RESEARCH.value, "query_count": len(seen_queries), "source_count": len(sources), "page_count": len(pages), "fact_count": len(facts), "partial": result.partial, "stopping_reason": stopping_reason})
         return {"success": bool(facts), "data": data, "errors": result.errors, "mode": ResearchMode.DEEP_RESEARCH.value, "message": answer}
 
+    def _action_semantic_research(self, topic: str, inputs: Dict[str, Any], semantic: RequestSemanticModel) -> Dict[str, Any]:
+        limits = ResearchLimits.from_inputs(inputs, deep=semantic.execution_mode == ResearchMode.DEEP_RESEARCH.value)
+        max_sources = min(limits.max_sources, max(1, int(inputs.get("max_sources", limits.max_sources))))
+        queries = self.strategy_selector.build_queries(semantic, max_queries=limits.max_queries)
+        errors: List[str] = []
+        facts: List[Fact] = []
+        sources: List[Dict[str, Any]] = []
+        citations: List[Dict[str, Any]] = []
+        seen_urls: set[str] = set()
+        started = time.monotonic()
+        for query in queries:
+            if time.monotonic() - started >= limits.max_duration_seconds or len(sources) >= max_sources:
+                break
+            search = self.action_search_web({"query": query, "normalized_query": query, "max_results": max_sources, "mode": semantic.execution_mode, "semantic": semantic.to_dict()})
+            errors.extend(str(item) for item in (search.get("errors", []) if isinstance(search, dict) else []) if item)
+            for raw_result in search.get("results", []) if isinstance(search, dict) and isinstance(search.get("results"), list) else []:
+                if len(sources) >= max_sources or time.monotonic() - started >= limits.max_duration_seconds:
+                    break
+                if not isinstance(raw_result, dict):
+                    continue
+                url = canonicalize_url(raw_result.get("url") or raw_result.get("source_url"))
+                if not url or url in seen_urls:
+                    continue
+                raw_evidence = self._classify_evidence({**raw_result, "url": url}, semantic)
+                if not self._relevant_evidence(raw_evidence["metadata"], semantic):
+                    continue
+                page_response = self.action_read_page({"url": url})
+                if not page_response.get("success"):
+                    errors.append(str(page_response.get("error") or f"Failed to read {url}"))
+                    if semantic.news:
+                        headline_fact = self._headline_fact(raw_evidence["record"], raw_evidence["metadata"])
+                        if headline_fact is not None:
+                            sources.append({"search_result": raw_evidence["record"], "page": None, "quality": {"headline_only": True}, "evidence": raw_evidence["metadata"], "role": raw_evidence["metadata"].get("source_role"), "query": query})
+                            facts.append(headline_fact)
+                            seen_urls.add(url)
+                    continue
+                page = self._dict_page(page_response.get("page"))
+                if page is None:
+                    continue
+                page_evidence = self._classify_evidence({"url": page.url, "title": page.title, "content": page.content, "source_metadata": page.source_metadata}, semantic)
+                if not self._relevant_evidence(page_evidence["metadata"], semantic):
+                    continue
+                seen_urls.add(url)
+                quality_raw = self._invoke("evaluate", page=page.to_dict(), query=" ".join(semantic.entities) or topic)
+                quality = quality_raw if isinstance(quality_raw, dict) else _jsonable(quality_raw)
+                source_record = {"search_result": raw_evidence["record"], "page": page.to_dict(), "quality": quality, "evidence": page_evidence["metadata"], "role": page_evidence["metadata"].get("source_role"), "query": query}
+                sources.append(source_record)
+                facts_raw = self._invoke("facts", page=page.to_dict(), query=" ".join(semantic.entities) or topic, source_quality=quality, max_facts=8)
+                for raw_fact in facts_raw if isinstance(facts_raw, list) else []:
+                    if isinstance(raw_fact, Fact):
+                        fact = raw_fact
+                    elif isinstance(raw_fact, dict):
+                        try:
+                            fact = self._dict_fact(raw_fact)
+                        except Exception:
+                            continue
+                    else:
+                        continue
+                    fact.evidence_type = str(page_evidence["metadata"].get("evidence_type") or "GENERAL_WEB")
+                    fact.source_role = str(page_evidence["metadata"].get("source_role") or fact.evidence_type)
+                    fact.price_type = str(page_evidence["metadata"].get("price_type") or "UNKNOWN_PRICE")
+                    dates = page.source_metadata if isinstance(page.source_metadata, dict) else {}
+                    fact.published_date = str(dates.get("published_at") or dates.get("published") or dates.get("date") or "")
+                    fact.event_date = str(dates.get("event_date") or "")
+                    fact.updated_date = str(dates.get("updated_at") or dates.get("updated") or "")
+                    facts.append(fact)
+        deduped: List[Fact] = []
+        seen_claims: set[tuple[str, str]] = set()
+        for fact in facts:
+            key = (re.sub(r"\W+", " ", fact.claim.lower()).strip(), canonicalize_url(fact.source_url))
+            if key in seen_claims:
+                continue
+            seen_claims.add(key)
+            deduped.append(fact)
+        facts = deduped
+        cross_raw = self._invoke("cross_reference", facts=[fact.to_dict() for fact in facts], claims_to_check=[" ".join(semantic.entities) or topic])
+        cross = cross_raw if isinstance(cross_raw, dict) else _jsonable(cross_raw)
+        raw_conflicts = list(cross.get("conflicting_claims", [])) if isinstance(cross, dict) else []
+        conflicts = self._material_conflicts(raw_conflicts, semantic)
+        citations_raw = self._invoke("citations", facts=[fact.to_dict() for fact in facts])
+        citations = citations_raw if isinstance(citations_raw, list) else []
+        synthesis = self._synthesize_research(semantic, [fact.to_dict() for fact in facts], sources, conflicts, citations)
+        uncertainty = list(synthesis.get("uncertainty", []))
+        if errors:
+            uncertainty.append("Some public providers or pages failed; the answer uses the remaining bounded evidence.")
+        result = ResearchResult(
+            topic=topic,
+            answer=str(synthesis.get("answer") or "I could not verify enough relevant public evidence to answer that reliably."),
+            key_findings=synthesis.get("facts", []),
+            supporting_evidence=[fact.to_dict() for fact in facts],
+            sources=sources,
+            citations=citations,
+            conflicts=conflicts,
+            uncertainty=list(dict.fromkeys(uncertainty)),
+            confidence=round(float(cross.get("confidence", 0.0)) if isinstance(cross, dict) else (0.6 if facts else 0.0), 3),
+            errors=list(dict.fromkeys(errors)),
+            partial=bool(errors or not sources),
+            semantic=semantic.to_dict(),
+            answer_plan=semantic.output_goal,
+        )
+        data = result.to_dict()
+        data.update({"research_mode": semantic.execution_mode, "intent": semantic.intent, "semantic": semantic.to_dict(), "queries": queries, "evidence_count": len(facts), "source_count": len(sources), "answer_plan": semantic.output_goal, "stopping_reason": "semantic evidence budget reached or relevant evidence covered"})
+        self._publish_event("research.completed" if facts else "research.partial_or_failed", {"topic": topic[:200], "mode": semantic.execution_mode, "intent": semantic.intent, "source_count": len(sources), "fact_count": len(facts), "partial": result.partial})
+        return {"success": bool(facts), "data": data, "errors": result.errors, "mode": semantic.execution_mode, "message": result.answer}
+
     def action_research_topic(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
         topic = str(inputs.get("topic") or inputs.get("query") or "").strip()
         if not topic:
             return {"success": False, "error": "topic is required"}
+        semantic = self._semantic_model(topic, inputs)
         mode = ResearchMode.coerce(inputs.get("mode"), topic)
+        if not inputs.get("mode") and semantic.execution_mode == ResearchMode.DEEP_RESEARCH.value:
+            mode = ResearchMode.DEEP_RESEARCH
         if mode == ResearchMode.DEEP_RESEARCH:
-            return self.action_deep_research({**inputs, "topic": topic, "mode": mode.value})
+            return self.action_deep_research({**inputs, "topic": topic, "mode": mode.value, "semantic": semantic.to_dict()})
         if mode == ResearchMode.IMAGE_SEARCH:
             image_data = self.action_image_search({**inputs, "query": topic, "mode": mode.value})
             return {"success": bool(image_data.get("image_results")), "data": image_data, "mode": mode.value, "message": image_data.get("error") or f"Image search completed for {topic}."}
+        if semantic.intent not in {ResearchIntent.SHOPPING_DISCOVERY.value, ResearchIntent.SHOPPING_PRICE_SEARCH.value}:
+            return self._action_semantic_research(topic, {**inputs, "semantic": semantic.to_dict()}, semantic)
         max_sources = max(1, min(int(inputs.get("max_sources", 5)), 10))
 
         shopping = normalize_shopping_query(topic, region=str(inputs.get("region") or ""))
-        product_query = _is_product_query(topic) or bool(shopping.requested_domain) or bool(shopping.ranking)
+        product_query = semantic.intent in {ResearchIntent.SHOPPING_DISCOVERY.value, ResearchIntent.SHOPPING_PRICE_SEARCH.value}
+
         search_query = shopping.normalized_query if product_query else topic
         search = self.action_search_web({
             "query": topic,
@@ -1728,14 +2061,17 @@ class ResearchCapability(Capability):
         citations_raw = self._invoke("citations", facts=[fact.to_dict() for fact in facts])
         citations = citations_raw if isinstance(citations_raw, list) else []
         key_findings = [fact.to_dict() for fact in facts]
-        conflicts = list(cross.get("conflicting_claims", [])) if isinstance(cross, dict) else []
+        raw_conflicts = list(cross.get("conflicting_claims", [])) if isinstance(cross, dict) else []
+        conflicts = self._material_conflicts(raw_conflicts, semantic)
+
         uncertainty = list(cross.get("uncertainty", [])) if isinstance(cross, dict) else []
         if not pages: uncertainty.append("No selected search result could be read successfully.")
         if errors: uncertainty.append("Some sources failed and the result is partial.")
         confidence = float(cross.get("confidence", 0.0)) if isinstance(cross, dict) else 0.0
         if not confidence and facts: confidence = min(0.75, max(fact.confidence for fact in facts))
         if conflicts: confidence = min(confidence, 0.5)
-        answer = "Based on the retrieved sources: " + " ".join(fact.claim for fact in facts[:3]) if facts else "Insufficient readable evidence was retrieved to answer this question."
+        answer = " ".join(fact.claim for fact in facts[:3]) if facts else "Insufficient readable evidence was retrieved to answer this question."
+
         result = ResearchResult(topic=topic, answer=answer, key_findings=key_findings, supporting_evidence=[fact.to_dict() for fact in facts], sources=sources, citations=citations, conflicts=conflicts, uncertainty=list(dict.fromkeys(uncertainty)), confidence=round(max(0.0, min(1.0, confidence)), 3), errors=errors, partial=bool(errors or not pages))
         payload = {"success": bool(facts), "data": result.to_dict(), "errors": errors}
         self._publish_event("research.completed" if payload["success"] else "research.partial_or_failed", {"topic": topic[:200], "source_count": len(sources), "fact_count": len(facts), "error_count": len(errors), "partial": result.partial})
