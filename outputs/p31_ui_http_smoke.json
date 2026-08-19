@@ -1,0 +1,7 @@
+﻿{
+    "ui_status":  200,
+    "ui_has_root":  true,
+    "chat_status":  200,
+    "chat_answer":  "Hello. Iâm Freya. I can help with questions, research, comparisons, recommendations, files, images, and local computer tasks. What would you like to work on?",
+    "chat_type":  "conversation"
+}

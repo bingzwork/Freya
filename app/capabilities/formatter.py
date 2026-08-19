@@ -327,6 +327,7 @@ class ResponseFormatter:
         answer = data.get("answer")
         if answer:
             response = self._clean_research_display(answer)
+            response = re.split(r"\n\s*Sources:\s*\n", response, maxsplit=1, flags=re.I)[0].strip()
             candidates = data.get("product_candidates") or data.get("candidates") or []
             if isinstance(candidates, list) and candidates:
                 rows = ["\n\nPrice comparison:", "| Product | Price | Seller | Marketplace |", "|---|---:|---|---|"]
@@ -342,7 +343,7 @@ class ResponseFormatter:
             source_records = data.get("sources") or []
             source_lines = []
             seen_urls = set()
-            for citation in [*citations, *source_records]:
+            for citation in [*source_records, *citations]:
                 if not isinstance(citation, dict):
                     continue
                 page = citation.get("page") if isinstance(citation.get("page"), dict) else {}
@@ -356,18 +357,33 @@ class ResponseFormatter:
                 if not canonical_url or canonical_url in seen_urls:
                     continue
                 seen_urls.add(canonical_url)
-                title = self._clean_research_display(citation.get("source_title") or citation.get("title") or page.get("title") or search_result.get("title") or canonical_url)
+                title = self._clean_research_display(citation.get("source_title") or citation.get("title") or page.get("title") or search_result.get("title") or "Public source")
+                title = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", title)
+                title = re.sub(r"(?i)(nvidia|amd|intel|python|geforce|ryzen|core|rtx)(?=\1)", r"\1 · ", title)
+                for repeated in re.findall(r"(?i)\b(?:rtx|ryzen|core\s+i[3579]|python)\s+\d[\w.-]*", title):
+                    first = title.lower().find(repeated.lower())
+                    second = title.lower().find(repeated.lower(), first + len(repeated))
+                    if second > 24:
+                        title = title[:second].rstrip(" -:;,.…")
+                        break
+                title = re.sub(r"\s+", " ", title).strip()
+                if len(title) > 90:
+                    title = title[:87].rsplit(" ", 1)[0] + "…"
                 source_lines.append(f"- {title}: {canonical_url}")
             if source_lines:
                 response += "\n\nSources:\n" + "\n".join(source_lines[:5])
             uncertainty = data.get("uncertainty") or []
             cleaned_uncertainty = []
             hidden_diagnostic_seen = False
-            diagnostic_pattern = re.compile(r"(?:exception|httperror|traceback|ddgs|failed\s+to\s+fetch|failed\s+to\s+read|provider\s+attempt|connection\s+reset|timeout)", re.I)
+            diagnostic_pattern = re.compile(r"(?:exception|httperror|traceback|ddgs|failed\s+to\s+fetch|failed\s+to\s+read|provider\s+attempt|connection\s+reset|timeout|no\s+usable\s+public\s+page|browser\s+page\s+contained|insufficient\s+readable\s+public\s+content|maintained\s+extractor|no\s+content\s+extracted)", re.I)
             for item in uncertainty:
                 cleaned = self._clean_research_display(item)
                 if not cleaned:
                     continue
+                if re.search(r"materially different numeric values", cleaned, re.I):
+                    cleaned = "Some sources disagree on numeric details; the answer follows the strongest available evidence."
+                elif re.search(r"answer-quality verification|unsupported or insufficiently grounded claims", cleaned, re.I):
+                    cleaned = "The answer is limited to claims supported by the available evidence."
                 if diagnostic_pattern.search(cleaned):
                     hidden_diagnostic_seen = True
                     continue
@@ -393,11 +409,27 @@ class ResponseFormatter:
         search_results = data.get("results") or payload.get("results") or []
         if search_results:
             lines = []
-            for item in search_results[:5]:
-                if isinstance(item, dict) and item.get("url"):
-                    lines.append(f"- {item.get('title') or item['url']}: {item['url']}")
+            for item in search_results[:4]:
+                if not isinstance(item, dict) or not item.get("url"):
+                    continue
+                title = self._clean_research_display(item.get("title") or "Public source")
+                title = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", title)
+                title = re.sub(r"(?i)(nvidia|amd|intel|python|geforce|ryzen|core|rtx)(?=\1)", r"\1 · ", title)
+                for repeated in re.findall(r"(?i)\b(?:rtx|ryzen|core\s+i[3579]|python)\s+\d[\w.-]*", title):
+                    first = title.lower().find(repeated.lower())
+                    second = title.lower().find(repeated.lower(), first + len(repeated))
+                    if second > 24:
+                        title = title[:second].rstrip(" -:;,.…")
+                        break
+                title = re.sub(r"\s+", " ", title).strip()
+                if len(title) > 90:
+                    title = title[:87].rsplit(" ", 1)[0] + "…"
+                url = str(item.get("url") or "").strip()
+                if title and url:
+                    lines.append(f"[{title}]({url})")
             if lines:
-                return "I found these relevant sources:\n" + "\n".join(lines)
+                count = len(search_results)
+                return f"I found {count} potentially relevant public sources, but I could not read enough reliable page content to synthesize a grounded answer. You can open the strongest matches below:\n\n" + "\n".join(lines)
 
         return result.message or "I could not retrieve verifiable research results."
 

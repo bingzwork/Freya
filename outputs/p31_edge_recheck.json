@@ -1,0 +1,1494 @@
+[
+  {
+    "name": "image",
+    "prompt": "find me 10 photos of River Lynn",
+    "status": 200,
+    "elapsed_seconds": 34.95,
+    "answer": "The public image providers did not return enough verifiable image candidates within Freya's local time budget.",
+    "response_type": "image_results",
+    "image_count": 0,
+    "image_metrics": {
+      "requested_count": 10,
+      "candidates": 0,
+      "validated": 0,
+      "duplicates": 0,
+      "rejected_mismatch": 0,
+      "rejected_broken_asset": 0,
+      "rejected_weak_asset": 0,
+      "rejected_unsafe_asset": 0,
+      "excluded_previous": 0,
+      "returned_count": 0,
+      "coverage_gap": "COUNT_GAP"
+    },
+    "comparison": null
+  },
+  {
+    "name": "image_followup",
+    "prompt": "show me 5 more",
+    "status": 200,
+    "elapsed_seconds": 16.91,
+    "answer": "The public image providers did not return enough verifiable image candidates within Freya's local time budget.",
+    "response_type": "image_results",
+    "image_count": 0,
+    "image_metrics": {
+      "requested_count": 5,
+      "candidates": 0,
+      "validated": 0,
+      "duplicates": 0,
+      "rejected_mismatch": 0,
+      "rejected_broken_asset": 0,
+      "rejected_weak_asset": 0,
+      "rejected_unsafe_asset": 0,
+      "excluded_previous": 0,
+      "returned_count": 0,
+      "coverage_gap": "COUNT_GAP"
+    },
+    "comparison": null
+  },
+  {
+    "name": "correction_without_subject",
+    "prompt": "That's wrong; use the official source and correct the version.",
+    "status": 200,
+    "elapsed_seconds": 0.02,
+    "answer": "Which previous answer should I correct? Please name the subject or paste the claim you want me to verify against an official source.",
+    "response_type": "clarification",
+    "image_count": 0,
+    "image_metrics": null,
+    "comparison": null
+  },
+  {
+    "name": "ambiguous_without_subject",
+    "prompt": "Find the best one.",
+    "status": 200,
+    "elapsed_seconds": 0.0,
+    "answer": "What subject should I use? Please name the product, person, topic, or claim instead of referring to an unspecified one.",
+    "response_type": "clarification",
+    "image_count": 0,
+    "image_metrics": null,
+    "comparison": null
+  },
+  {
+    "name": "anaphoric_without_subject",
+    "prompt": "what about the other one",
+    "status": 200,
+    "elapsed_seconds": 0.0,
+    "answer": "What subject should I use? Please name the product, person, topic, or claim instead of referring to an unspecified one.",
+    "response_type": "clarification",
+    "image_count": 0,
+    "image_metrics": null,
+    "comparison": null
+  },
+  {
+    "name": "comparison",
+    "prompt": "ryzen 7 5700x vs i5 14400",
+    "status": 200,
+    "elapsed_seconds": 120.95,
+    "answer": "I resolved AMD Ryzen 7 5700X and Intel Core i5-14400, but the available evidence is insufficient for a reliable full comparison. I will not replace missing facts with snippets or placeholders. Missing coverage: AMD Ryzen 7 5700X: gaming performance, AMD Ryzen 7 5700X: productivity performance, AMD Ryzen 7 5700X: price/value, Intel Core i5-14400: gaming performance, Intel Core i5-14400: productivity performance.\n\nSources:\n- AMD Ryzen 7 5700 X Specs | Tech Power Up CPU Database AMD: https://www.techpowerup.com/cpu-specs/ryzen-7-5700x.c2755\n- AMD Ryzen 7 5700 X - Benchmarks, Specifications, User Reviews ...AMD: https://www.cpu-monkey.com/en/cpu-amd_ryzen_7_5700x\n- Specifications: https://www.intel.com/content/www/us/en/products/sku/236788/intel-core-i5-processor-14400-20m-cache-up-to-4-70-ghz/specifications.html\n- Specifications: https://www.intel.com/content/www/us/en/products/sku/236777/intel-core-i5-processor-14400f-20m-cache-up-to-4-70-ghz/specifications.html\n- Intel Core i5 14400: benchmarks and specs | NR - Nano Review: https://nanoreview.net/en/cpu/intel-core-i5-14400\n\nEvidence notes: AMD Ryzen 7 5700X: gaming performance AMD Ryzen 7 5700X: productivity performance AMD Ryzen 7 5700X: price/value",
+    "response_type": "comparison",
+    "image_count": 0,
+    "image_metrics": {},
+    "comparison": {
+      "comparison_intelligence": {
+        "resolved_entities": [
+          {
+            "raw_text": "ryzen 7 5700x",
+            "canonical_name": "AMD Ryzen 7 5700X",
+            "manufacturer": "AMD",
+            "family": "Ryzen",
+            "model": "7 5700X",
+            "category": "cpu",
+            "aliases": [
+              "ryzen 7 5700x",
+              "AMD Ryzen 7 5700X"
+            ],
+            "confidence": 0.91,
+            "resolution_source": "deterministic_entity_pattern",
+            "verification_evidence": [],
+            "ambiguous_candidates": []
+          },
+          {
+            "raw_text": "i5 14400",
+            "canonical_name": "Intel Core i5-14400",
+            "manufacturer": "Intel",
+            "family": "Core",
+            "model": "i5-14400",
+            "category": "cpu",
+            "aliases": [
+              "i5 14400",
+              "Intel Core i5-14400"
+            ],
+            "confidence": 0.96,
+            "resolution_source": "contextual_inheritance",
+            "verification_evidence": [],
+            "ambiguous_candidates": []
+          }
+        ],
+        "category": "cpu",
+        "plan": {
+          "entities": [
+            {
+              "raw_text": "ryzen 7 5700x",
+              "canonical_name": "AMD Ryzen 7 5700X",
+              "manufacturer": "AMD",
+              "family": "Ryzen",
+              "model": "7 5700X",
+              "category": "cpu",
+              "aliases": [
+                "ryzen 7 5700x",
+                "AMD Ryzen 7 5700X"
+              ],
+              "confidence": 0.91,
+              "resolution_source": "deterministic_entity_pattern",
+              "verification_evidence": [],
+              "ambiguous_candidates": []
+            },
+            {
+              "raw_text": "i5 14400",
+              "canonical_name": "Intel Core i5-14400",
+              "manufacturer": "Intel",
+              "family": "Core",
+              "model": "i5-14400",
+              "category": "cpu",
+              "aliases": [
+                "i5 14400",
+                "Intel Core i5-14400"
+              ],
+              "confidence": 0.96,
+              "resolution_source": "contextual_inheritance",
+              "verification_evidence": [],
+              "ambiguous_candidates": []
+            }
+          ],
+          "category": "cpu",
+          "dimensions": [
+            "gaming performance",
+            "productivity performance",
+            "price/value"
+          ],
+          "required_evidence_roles": [
+            "OFFICIAL_PRODUCT",
+            "OFFICIAL_DOCUMENTATION",
+            "BENCHMARK",
+            "REVIEW",
+            "TECHNICAL_COMPARISON"
+          ],
+          "queries": [
+            {
+              "query": "AMD Ryzen 7 5700X official specifications",
+              "entity": "AMD Ryzen 7 5700X",
+              "role": "OFFICIAL_PRODUCT"
+            },
+            {
+              "query": "AMD Ryzen 7 5700X independent benchmarks review",
+              "entity": "AMD Ryzen 7 5700X",
+              "role": "BENCHMARK"
+            },
+            {
+              "query": "Intel Core i5-14400 official specifications",
+              "entity": "Intel Core i5-14400",
+              "role": "OFFICIAL_PRODUCT"
+            },
+            {
+              "query": "Intel Core i5-14400 independent benchmarks review",
+              "entity": "Intel Core i5-14400",
+              "role": "BENCHMARK"
+            },
+            {
+              "query": "AMD Ryzen 7 5700X vs Intel Core i5-14400 benchmark comparison",
+              "entity": "shared",
+              "role": "TECHNICAL_COMPARISON"
+            },
+            {
+              "query": "AMD Ryzen 7 5700X vs Intel Core i5-14400 review value",
+              "entity": "shared",
+              "role": "REVIEW"
+            }
+          ],
+          "max_queries": 6
+        },
+        "claims": [
+          {
+            "entity": "Intel Core i5-14400",
+            "property": "cores/threads",
+            "value": "10 cores, 16 threads",
+            "unit": "",
+            "evidence_role": "BENCHMARK",
+            "source_url": "https://nanoreview.net/en/cpu/intel-core-i5-14400",
+            "source_title": "",
+            "conditions": {},
+            "confidence": 0.575,
+            "direct_quote": "Core i5 14400 - desktop processor produced by Intel for socket LGA-1700 that has 10 cores and 16 threads.",
+            "comparable": true,
+            "source_quality": 0.558
+          }
+        ],
+        "matrix": {
+          "entities": [
+            "AMD Ryzen 7 5700X",
+            "Intel Core i5-14400"
+          ],
+          "dimensions": [
+            "gaming performance",
+            "productivity performance",
+            "price/value"
+          ],
+          "cells": {
+            "AMD Ryzen 7 5700X": {
+              "gaming performance": {
+                "entity": "AMD Ryzen 7 5700X",
+                "dimension": "gaming performance",
+                "claims": [],
+                "status": "missing",
+                "support_count": 0,
+                "comparable": null,
+                "conflicting": false
+              },
+              "productivity performance": {
+                "entity": "AMD Ryzen 7 5700X",
+                "dimension": "productivity performance",
+                "claims": [],
+                "status": "missing",
+                "support_count": 0,
+                "comparable": null,
+                "conflicting": false
+              },
+              "price/value": {
+                "entity": "AMD Ryzen 7 5700X",
+                "dimension": "price/value",
+                "claims": [],
+                "status": "missing",
+                "support_count": 0,
+                "comparable": null,
+                "conflicting": false
+              }
+            },
+            "Intel Core i5-14400": {
+              "gaming performance": {
+                "entity": "Intel Core i5-14400",
+                "dimension": "gaming performance",
+                "claims": [],
+                "status": "missing",
+                "support_count": 0,
+                "comparable": null,
+                "conflicting": false
+              },
+              "productivity performance": {
+                "entity": "Intel Core i5-14400",
+                "dimension": "productivity performance",
+                "claims": [],
+                "status": "missing",
+                "support_count": 0,
+                "comparable": null,
+                "conflicting": false
+              },
+              "price/value": {
+                "entity": "Intel Core i5-14400",
+                "dimension": "price/value",
+                "claims": [],
+                "status": "missing",
+                "support_count": 0,
+                "comparable": null,
+                "conflicting": false
+              }
+            }
+          },
+          "shared_claims": [],
+          "sufficiency": "INSUFFICIENT",
+          "missing_evidence": [
+            "AMD Ryzen 7 5700X: gaming performance",
+            "AMD Ryzen 7 5700X: productivity performance",
+            "AMD Ryzen 7 5700X: price/value",
+            "Intel Core i5-14400: gaming performance",
+            "Intel Core i5-14400: productivity performance",
+            "Intel Core i5-14400: price/value"
+          ],
+          "gap_queries": [
+            "AMD Ryzen 7 5700X gaming performance independent evidence",
+            "AMD Ryzen 7 5700X productivity performance independent evidence",
+            "AMD Ryzen 7 5700X price/value independent evidence",
+            "Intel Core i5-14400 gaming performance independent evidence"
+          ]
+        },
+        "conflicts": [],
+        "validation_errors": [
+          "evidence is insufficient for a complete comparison"
+        ]
+      },
+      "citations": [
+        {
+          "claim": "Core i5 14400 - desktop processor produced by Intel for socket LGA-1700 that has 10 cores and 16 threads.",
+          "url": "https://nanoreview.net/en/cpu/intel-core-i5-14400",
+          "title": "",
+          "entity": "Intel Core i5-14400",
+          "property": "cores/threads"
+        }
+      ],
+      "sources": [
+        {
+          "search_result": {
+            "title": "AMD Ryzen 7 5700X Specs | TechPowerUp CPU DatabaseAMD Ryzen 7 5700X - Benchmarks, Specifications, User Reviews ...AMD Ryzen 7 5700X Specs | TechSpotAMD Ryzen 7 5700X - Benchmark, Test and SpecsAMD Ryzen 7 5700X: Detailed Specifications and ",
+            "url": "https://www.techpowerup.com/cpu-specs/ryzen-7-5700x.c2755",
+            "snippet": "2 days ago · The AMD Ryzen 7 5700X is a desktop processor with 8 cores, launched in April 2022, at an MSRP of $299. It is part of the Ryzen 7 lineup, using the Zen 3 (Vermeer) architecture with Socket AM4. Aug 6, 2026 · Benchmarks, specifications, and user reviews for AMD Ryzen 7 5700X. Compare the CPU with other processors and find out how it performs in tests. The AMD Ryzen 7 5700X is a desktop 8-core, 16-thread processor featuring a 3.4 GHz base clock, built on the 7 nm Vermeer (Zen 3) architecture for the Socket AM4 platform. The processor AMD Ryzen 7 5700X is developed on the 7 nm technology node and architecture Vermeer (Zen 3). Its base clock speed is 3.40 GHz, and maximum clock speed in turbo boost - 4.20 GHz. AMD Ryzen 7 5700X contains 8 processing cores. The AMD Ryzen 7 5700X pro",
+            "source": "ddgs",
+            "source_domain": "www.techpowerup.com",
+            "rank": 1,
+            "relevance": 1.0,
+            "provider": "ddgs",
+            "source_profile_bonus": -0.062,
+            "vertical": "PRODUCTS",
+            "evidence_type": "BENCHMARK",
+            "source_role": "BENCHMARK",
+            "price_type": "MSRP",
+            "commerce_verified": false,
+            "topic_relevance": {
+              "score": 0.75,
+              "relevant": true,
+              "reasons": [
+                "matched entity term: yzen",
+                "matched entity term: 5700",
+                "matched entity term: ore"
+              ]
+            }
+          },
+          "page": {
+            "url": "https://www.techpowerup.com/cpu-specs/ryzen-7-5700x.c2755",
+            "title": "",
+            "content": "Automated bot check in progress\nThis should only take a few seconds. If you have issues, please do contact us, we want to learn about any problems.\nThis should only take a few seconds. If you have issues, please do contact us, we want to learn about any problems.",
+            "retrieved_at": "2026-08-19T20:29:25.759309+00:00",
+            "source_metadata": {
+              "provider": "trafilatura",
+              "extraction_backend": "trafilatura",
+              "author": "",
+              "published_at": "",
+              "sitename": "",
+              "links": [],
+              "images": [],
+              "adapter_attempts": [
+                {
+                  "provider": "trafilatura",
+                  "success": true
+                }
+              ]
+            },
+            "fetch_error": null
+          },
+          "quality": {
+            "url": "https://www.techpowerup.com/cpu-specs/ryzen-7-5700x.c2755",
+            "title": "",
+            "domain": "www.techpowerup.com",
+            "score": 0.35,
+            "authority": "unclear",
+            "source_type": "secondary/unclear",
+            "relevance_score": 0.0,
+            "recency_score": null,
+            "corroboration_score": 0.0,
+            "spam_flags": [],
+            "rationale": [],
+            "uncertainty": [
+              "domain authority could not be established from URL metadata",
+              "primary-source status is not explicit"
+            ],
+            "evidence_type": "GENERAL_WEB",
+            "source_role": "GENERAL_WEB",
+            "published_date": "",
+            "event_date": "",
+            "updated_date": ""
+          },
+          "evidence": {
+            "evidence_type": "REVIEW",
+            "source_role": "REVIEW",
+            "source_quality": 0.7,
+            "allowed_fields": [
+              "claim",
+              "excerpt",
+              "source_url",
+              "source_title",
+              "publication_date",
+              "event_date",
+              "performance",
+              "specifications",
+              "methodology",
+              "benchmark",
+              "fps",
+              "power",
+              "relative_performance",
+              "test_methodology"
+            ],
+            "commerce_signals": [],
+            "commerce_verified": false,
+            "price_type": "UNKNOWN_PRICE",
+            "topic_relevance": {
+              "score": 0.0,
+              "relevant": false,
+              "reasons": []
+            },
+            "blocked_or_garbage": false,
+            "source_profile": {
+              "domain": "techpowerup.com",
+              "source_type": "BENCHMARK",
+              "authority_score": 0.45,
+              "extraction_successes": 0,
+              "extraction_failures": 0,
+              "freshness_successes": 0,
+              "relevance_hits": 0,
+              "duplicate_observations": 0,
+              "conflict_observations": 0,
+              "verification_successes": 0,
+              "rate_limit_failures": 0,
+              "last_evaluated_at": "",
+              "extraction_success_rate": 0.5,
+              "verification_rate": 0.0,
+              "ranking_bonus": -0.062
+            },
+            "source_quality_with_profile": 0.638,
+            "vertical_plan": {
+              "vertical": "PRODUCTS",
+              "source_priorities": [
+                "manufacturer",
+                "official_specs",
+                "independent_review",
+                "retailer"
+              ],
+              "freshness_requirement": "HIGH_CHANGE",
+              "query_suffixes": [
+                "official specifications",
+                "independent review",
+                "current price/value"
+              ],
+              "extraction_requirements": [
+                "model/variant",
+                "specification",
+                "price type"
+              ],
+              "verification_rules": [
+                "do not use reviews as manufacturer facts"
+              ]
+            }
+          },
+          "planned_entity": "AMD Ryzen 7 5700X",
+          "planned_role": "OFFICIAL_PRODUCT",
+          "query": "AMD Ryzen 7 5700X official specifications"
+        },
+        {
+          "search_result": {
+            "title": "AMD Ryzen 7 5700X - Benchmarks, Specifications, User Reviews ...AMD Ryzen 7 5700X Specs | TechSpotAMD Ryzen 7 5700X - Benchmark, Test and SpecsAMD Ryzen 7 5700X: Detailed Specifications and Benchmark ...AMD Ryzen™ 7 5700X Drivers and Downlo",
+            "url": "https://www.cpu-monkey.com/en/cpu-amd_ryzen_7_5700x",
+            "snippet": "Aug 6, 2026 · Benchmarks, specifications, and user reviews for AMD Ryzen 7 5700X. Compare the CPU with other processors and find out how it performs in tests. The AMD Ryzen 7 5700X is a desktop 8-core, 16-thread processor featuring a 3.4 GHz base clock, built on the 7 nm Vermeer (Zen 3) architecture for the Socket AM4 platform. The processor AMD Ryzen 7 5700X is developed on the 7 nm technology node and architecture Vermeer (Zen 3). Its base clock speed is 3.40 GHz, and maximum clock speed in turbo boost - 4.20 GHz. AMD Ryzen 7 5700X contains 8 processing cores. The AMD Ryzen 7 5700X processor, released in 2022, remains a popular choice in 2025 due to its balance of price and performance. Built on the Zen 3 architecture (codename Vermeer), it utilizes TSMC's 7nm FinFET process technology, ",
+            "source": "ddgs",
+            "source_domain": "www.cpu-monkey.com",
+            "rank": 2,
+            "relevance": 0.5,
+            "provider": "ddgs",
+            "source_profile_bonus": -0.062,
+            "vertical": "PRODUCTS",
+            "evidence_type": "BENCHMARK",
+            "source_role": "BENCHMARK",
+            "price_type": "UNKNOWN_PRICE",
+            "commerce_verified": false,
+            "topic_relevance": {
+              "score": 0.75,
+              "relevant": true,
+              "reasons": [
+                "matched entity term: yzen",
+                "matched entity term: 5700",
+                "matched entity term: ore"
+              ]
+            }
+          },
+          "page": {
+            "url": "https://www.cpu-monkey.com/en/cpu-amd_ryzen_7_5700x",
+            "title": "",
+            "content": "The\n[AMD Ryzen 7 5700X](/en/cpu-amd_ryzen_7_5700x) is an 8-core processor from AMD that is intended to serve the mid-range price segment. It is fast enough to run all current games smoothly (an appropriate graphics card is also required). The processor can process a total of 16 threads at the same time, so the processor is also suitable for calculations in the video or CAD area.\nThe base clock frequency of the\nAMD Ryzen 7 5700X is 3.4 GHz, the\nAMD Ryzen 7 5700X can clock a single CPU core at up to 4.6 GHz, with the utilization of all CPU cores in turbo mode sufficiently good cooling, 4.2 GHz is still possible.\nThe processor can be freely overclocked via the AMD Ryzen Master software or usually also via the mainboards bios. The same applies to the main memory, which is supported up to the DDR4-3200 standard, but significantly higher clock frequencies are also possible here via overclocking.\nA maximum of 128 GB of RAM can be connected in up to 4 memory banks and two memory channels. PCIe 4.0 is supported with 20 lines, so, for example, an external graphics card and an M.2 SSD can be connected to the system at full speed at the same time. The maximum memory bandwidth is 51.2 GB/s when using two memory bars with DDR4-3200 speed.\nAs one of the last processors presented, the\nAMD Ryzen 7 5700X still fits into the old AMD AM4 socket and is well suited for equipping an older system with a modern processor at a reasonable price. The level 2 cache is 4 MB, the level 3 cache is 32 MB.\nThe processor is manufactured in a 7 nm manufacturing process at TSMC in Taiwan. However, the chip design comes from AMD. The processor does not have an internal graphics unit (iGPU); a dedicated graphics card must be used here.\n- Robust Zen 3 Architecture (Vermeer)\n- Solid performance with 8 cores and 16 threads\n- Generous 32 MB Level 3 Cache\n- Support for PCIe 4.0",
+            "retrieved_at": "2026-08-19T20:29:27.534365+00:00",
+            "source_metadata": {
+              "provider": "trafilatura",
+              "extraction_backend": "trafilatura",
+              "author": "",
+              "published_at": "",
+              "sitename": "",
+              "links": [],
+              "images": [],
+              "adapter_attempts": [
+                {
+                  "provider": "trafilatura",
+                  "success": true
+                }
+              ]
+            },
+            "fetch_error": null
+          },
+          "quality": {
+            "url": "https://www.cpu-monkey.com/en/cpu-amd_ryzen_7_5700x",
+            "title": "",
+            "domain": "www.cpu-monkey.com",
+            "score": 0.5,
+            "authority": "unclear",
+            "source_type": "secondary/unclear",
+            "relevance_score": 0.6,
+            "recency_score": null,
+            "corroboration_score": 0.0,
+            "spam_flags": [],
+            "rationale": [],
+            "uncertainty": [
+              "domain authority could not be established from URL metadata",
+              "primary-source status is not explicit"
+            ],
+            "evidence_type": "GENERAL_WEB",
+            "source_role": "GENERAL_WEB",
+            "published_date": "",
+            "event_date": "",
+            "updated_date": ""
+          },
+          "evidence": {
+            "evidence_type": "GENERAL_WEB",
+            "source_role": "GENERAL_WEB",
+            "source_quality": 0.45,
+            "allowed_fields": [
+              "claim",
+              "excerpt",
+              "source_url",
+              "source_title",
+              "publication_date",
+              "event_date",
+              "performance",
+              "specifications",
+              "methodology"
+            ],
+            "commerce_signals": [],
+            "commerce_verified": false,
+            "price_type": "UNKNOWN_PRICE",
+            "topic_relevance": {
+              "score": 0.75,
+              "relevant": true,
+              "reasons": [
+                "matched entity term: yzen",
+                "matched entity term: 5700",
+                "matched entity term: ore"
+              ]
+            },
+            "blocked_or_garbage": false,
+            "source_profile": {
+              "domain": "cpu-monkey.com",
+              "source_type": "BENCHMARK",
+              "authority_score": 0.45,
+              "extraction_successes": 0,
+              "extraction_failures": 0,
+              "freshness_successes": 0,
+              "relevance_hits": 0,
+              "duplicate_observations": 0,
+              "conflict_observations": 0,
+              "verification_successes": 0,
+              "rate_limit_failures": 0,
+              "last_evaluated_at": "",
+              "extraction_success_rate": 0.5,
+              "verification_rate": 0.0,
+              "ranking_bonus": -0.062
+            },
+            "source_quality_with_profile": 0.388,
+            "vertical_plan": {
+              "vertical": "PRODUCTS",
+              "source_priorities": [
+                "manufacturer",
+                "official_specs",
+                "independent_review",
+                "retailer"
+              ],
+              "freshness_requirement": "HIGH_CHANGE",
+              "query_suffixes": [
+                "official specifications",
+                "independent review",
+                "current price/value"
+              ],
+              "extraction_requirements": [
+                "model/variant",
+                "specification",
+                "price type"
+              ],
+              "verification_rules": [
+                "do not use reviews as manufacturer facts"
+              ]
+            }
+          },
+          "planned_entity": "AMD Ryzen 7 5700X",
+          "planned_role": "OFFICIAL_PRODUCT",
+          "query": "AMD Ryzen 7 5700X official specifications"
+        },
+        {
+          "search_result": {
+            "title": "Intel® Core™ i5 processor 14400",
+            "url": "https://www.intel.com/content/www/us/en/products/sku/236788/intel-core-i5-processor-14400-20m-cache-up-to-4-70-ghz/specifications.html",
+            "snippet": "Intel® Core™ i5 processor 14400 (20M Cache, up to 4.70 GHz) quick reference with specifications, features, and technologies.",
+            "source": "ddgs",
+            "source_domain": "www.intel.com",
+            "rank": 1,
+            "relevance": 1.0,
+            "provider": "ddgs",
+            "source_profile_bonus": -0.062,
+            "vertical": "PRODUCTS",
+            "evidence_type": "OFFICIAL_PRODUCT",
+            "source_role": "OFFICIAL_PRODUCT",
+            "price_type": "UNKNOWN_PRICE",
+            "commerce_verified": false,
+            "topic_relevance": {
+              "score": 0.75,
+              "relevant": true,
+              "reasons": [
+                "matched entity term: ntel",
+                "matched entity term: ore",
+                "matched entity term: 14400"
+              ]
+            }
+          },
+          "page": {
+            "url": "https://www.intel.com/content/www/us/en/products/sku/236788/intel-core-i5-processor-14400-20m-cache-up-to-4-70-ghz/specifications.html",
+            "title": "Specifications",
+            "content": "Intel® Core™ i5 processor 14400\n20M Cache, up to 4.70 GHz\nIntel® Core™ i5 processor 14400\n20M Cache, up to 4.70 GHz\nAdd To Compare\nDiscover newer Intel Processors and experience Improved performance\n0\nRetailers\n×\nSorry we are not able to load the pricing info at this moment.\nSpecifications\nOrdering & Compliance\nCompatible Products\nDownloads\nSupport\nCompare Intel® Products\nDownload Specifications\nEssentials\nDownload Specifications\nProduct Collection\nIntel® Core™ i5 processors (14th gen)\nCode Name\nProducts formerly Raptor Lake\nVertical Segment\nDesktop\nProcessor Number\ni5-14400\nLithography\nIntel 7\nRecommended Customer Price\n$221.00-$231.00\nCPU Specifications\nTotal Cores\n10\n# of Performance-cores\n6\n# of Efficient-cores\n4\nTotal Threads\n16\nMax Turbo Frequency\n4.7 GHz\nPerformance-core Max Turbo Frequency\n4.7 GHz\nEfficient-core Max Turbo Frequency\n3.5 GHz\nPerformance-core Base Frequency\n2.5 GHz\nEfficient-core Base Frequency\n1.8 GHz\nCache\n20 MB Intel® Smart Cache\nTotal L2 Cache\n9.5 MB\nProcessor Base Power\n65 W\nMaximum Turbo Power\n148 W\nSupplemental Information\nMarketing Status\nLaunched\nLaunch Date\nQ1'24\nEmbedded Options Available\nYes\nUse Conditions\nPC/Client/Tablet\nDatasheet\nView now\nMemory Specifications\nMax Memory Size (dependent on memory type)\n192 GB\nMemory Types\nUp to DDR5 4800 MT/s\nUp to DDR4 3200 MT/s\nMax # of Memory Channels\n2\nMax Memory Bandwidth\n76.8 GB/s\nGPU Specifications\nGPU Name\n‡\nIntel® UHD Graphics 730\nGraphics Max Dynamic Frequency\n1.55 GHz\nGraphics Output\neDP 1.4b, DP 1.4a, HDMI 2.1\nExecution Units\n24\nMax Resolution (HDMI)\n‡\n4096 x 2160 @ 60Hz\nMax Resolution (DP)‡\n7680 x 4320 @ 60Hz\nMax Resolution (eDP - Integrated Flat Panel)‡\n5120 x 3200 @ 120Hz\nDirectX* Support\n12\nOpenGL* Support\n4.5\nOpenCL* Support\n3.0\nMulti-Format Codec Engines\n1\nIntel® Quick Sync Video\nYes\nIntel® Clear Video HD Technology\nYes\n# of Displays Supported\n‡\n4\nDevice ID\n0x4682/0xA782\nExpansion Options\nDirect Media Interface (DMI) Revision\n4.0\nMax # of DMI Lanes\n8\nScalability\n1S Only\nPCI Express Revision\n5.0 and 4.0\nPCI Express Configurations\n‡\nUp to 1x16+4, 2x8+4\nMax # of PCI Express Lanes\n20\nPackage Specifications\nSockets Supported\nFCLGA1700\nMax CPU Configuration\n1\nThermal Solution Specification\nPCG 2020C\nT\nJUNCTION\n100°C\nPackage Size\n45.0 mm x 37.5 mm\nMax Operating Temperature\n100 °C\nAdvanced Technologies\nIntel® Gaussian & Neural Accelerator\n3.0\nIntel® Thread Director\nYes\nIntel® Deep Learning Boost (Intel® DL Boost) on CPU\nYes\nIntel® Speed Shift Technology\nYes\nIntel® Turbo Boost Technology\n‡\n2.0\nIntel® Hyper-Threading Technology\n‡\nYes\nIntel® 64\n‡\nYes\nInstruction Set\n64-bit\nInstruction Set Extensions\nIntel® SSE4.1, Intel® SSE4.2, Intel® AVX2\nIdle States\nYes\nEnhanced Intel SpeedStep® Technology\nYes\nThermal Monitoring Technologies\nYes\nIntel® Volume Management Device (VMD)\nYes\nSecurity & Reliability\nIntel® Standard Manageability (ISM)\n‡\nYes\nIntel® Secure Key\nYes\nIntel® Control-Flow Enforcement Technology\nYes\nIntel® AES New Instructions\nYes\nIntel® OS Guard\nYes\nExecute Disable Bit\n‡\nYes\nIntel® Boot Guard\nYes\nMode-based Execute Control (MBEC)\nYes\nIntel® Virtualization Technology (VT-x)\n‡\nYes\nIntel® Virtualization Technology for Directed I/O (VT-d)\n‡\nYes\nIntel® VT-x with Extended Page Tables (EPT)\n‡\nYes\nAll information provided is subject to change at any time, without notice. Intel may make changes to manufacturing life cycle, specifications, and product descriptions at any time, without notice. The information herein is provided \"as-is\" and Intel does not make any representations or warranties whatsoever regarding accuracy of the information, nor on the product features, availability, functionality, or compatibility of the products listed. Please contact system vendor for more information on specific products or systems.\nIntel classifications are for general, educational and planning purposes only and consist of Export Control Classification Numbers (ECCN) and Harmonized Tariff Schedule (HTS) numbers. Any use made of Intel classifications are without recourse to Intel and shall not be construed as a representation or warranty regarding the proper ECCN or HTS. Your company as an importer and/or exporter is responsible for determining the correct classification of your transaction.\nRefer to Datasheet for formal definitions of product properties and features.\n‡\nThis feature may not be available on all computing systems. Please check with the system vendor to determine if your system delivers this feature, or reference the system specifications (motherboard, processor, chipset, power supply, HDD, graphics controller, memory, BIOS, drivers, virtual machine monitor-VMM, platform software, and/or operating system) for feature compatibility. Functionality, performance, and other benefits of this feature may vary depending on system configuration.\nIntel processor numbers are not a measure of performance. Processor numbers differentiate features within each processor family, not across different processor families. See\nhttp://www.intel.com/content/www/us/en/processors/processor-numbers.html\nfor details.\nRecommended Customer Price (RCP) is pricing guidance only for Intel products, and is subject to change without notice. Listing of RCP does not constitute a formal pricing offer from Intel. Price at the point of sale is subject to a broad array of factors, including but not limited to local tariffs and taxes. Availability of promotions varies. Customers can contact their preferred retailer(s) or distributor(s) for information on availability and price.\n“Announced” SKUs are not yet available. Please refer to the Launch Date for market availability.\nIntel® Arc™ graphics only available on select V-Series Intel® Core™ Ultra processor-powered systems with qualifying system thermal design or H-series Intel® Core™ Ultra processor-powered systems with at least 16GB of system memory in a dual-channel configuration. OEM enablement required. Other Intel® Core™ Ultra processor-powered system configurations feature Intel® Graphics. Check with OEM or retailer for system configuration details.\nIntel® Iris® Xe Graphics only: to use the Intel® Iris® Xe brand, the system must be populated with 128-bit (dual channel) memory. Otherwise, use the Intel® UHD brand.\nMax Turbo Frequency refers to the maximum single-core processor frequency that can be achieved with Intel® Turbo Boost Technology. See\nhttps://www.intel.com/content/www/us/en/gaming/resources/turbo-boost.html\nfor more information and applicability of this technology.\nSee\nhttp://www.intel.com/content/www/us/en/architecture-and-technology/hyper-threading/hyper-threading-technology.html?wapkw=hyper+threading\nfor more information including details on which processors support Intel® HT Technology.\nProcessors that support 64-bit computing on Intel® architecture require an Intel 64 architecture-enabled BIOS.\nSome products can support AES New Instructions with a Processor Configuration update, in particular, i7-2630QM/i7-2635QM, i7-2670QM/i7-2675QM, i5-2430M/i5-2435M, i5-2410M/i5-2415M.  Please contact OEM for the BIOS that includes the latest Processor configuration update.\nCompare Products\nGet Help",
+            "retrieved_at": "2026-08-19T20:29:32.225993+00:00",
+            "source_metadata": {
+              "source_domain": "www.intel.com",
+              "fetch_timestamp": "2026-08-19T20:29:32.225993+00:00",
+              "sections": [
+                {
+                  "title": "Essentials",
+                  "content": "Specifications\nOrdering & Compliance\nCompatible Products\nDownloads\nSupport\nCompare Intel® Products\nDownload Specifications\nEssentials\nDownload Specifications\nProduct Collection\nIntel® Core™ i5 processors (14th gen)\nCode Name\nProducts formerly Raptor Lake\nVertical Segment\nDesktop\nProcessor Number\ni5-14400\nLithography\nIntel 7\nRecommended Customer Price\n$221.00-$231.00\nCPU Specifications\nTotal Cores\n10\n# of Performance-cores\n6\n# of Efficient-cores\n4\nTotal Threads\n16\nMax Turbo Frequency\n4.7 GHz\nPerformance-core Max Turbo Frequency\n4.7 GHz\nEfficient-core Max Turbo Frequency\n3.5 GHz\nPerformance-core Base Frequency\n2.5 GHz\nEfficient-core Base Frequency\n1.8 GHz\nCache\n20 MB Intel® Smart Cache\nTotal L2 Cache\n9.5 MB\nProcessor Base Power\n65 W\nMaximum Turbo Power\n148 W\nSupplemental Information\nMarketing Status\nLaunched\nLaunch Date\nQ1'24\nEmbedded Options Available\nYes\nUse Conditions\nPC/Client/Tablet\nDatasheet\nView now\nMemory Specifications\nMax Memory Size (dependent on memory type)\n192 GB\nMemory Types\nUp to DDR5 4800 MT/s\nUp to DDR4 3200 MT/s\nMax # of Memory Channels\n2\nMax Memory Bandwidth\n76.8 GB/s\nGPU Specifications\nGPU Name\n‡\nIntel® UHD Graphics 730\nGraphics Max Dynamic Frequency\n1.55 GHz\nGraphics Output\neDP 1.4b, DP 1.4a, HDMI 2.1\nExecution Units\n24\nMax Resolution (HDMI)\n‡\n4096 x 2160 @ 60Hz\nMax Resolution (DP)‡\n7680 x 4320 @ 60Hz\nMax Resolution (eDP - Integrated Flat Panel)‡\n5120 x 3200 @ 120Hz\nDirectX* Support\n12\nOpenGL* Support\n4.5\nOpenCL* Support\n3.0\nMulti-Format Codec Engines\n1\nIntel® Quick Sync Video\nYes\nIntel® Clear Video HD Technology\nYes\n# of Displays Supported\n‡\n4\nDevice ID\n0x4682/0xA782\nExpansion Options\nDirect Media Interface (DMI) Revision\n4.0\nMax # of DMI Lanes\n8\nScalability\n1S Only\nPCI Express Revision\n5.0 and 4.0\nPCI Express Configurations\n‡\nUp to 1x16+4, 2x8+4\nMax # of PCI Express Lanes\n20\nPackage Specifications\nSockets Supported\nFCLGA1700\nMax CPU Configuration\n1\nThermal Solution Specification\nPCG 2020C\nT\nJUNCTION\n100°C\nPackage Size\n45.0 mm x 37.5 mm\nMax Operating Temperature\n100 °C\nAdvanced Technologies\nIntel® Gaussian & Neural Accelerator\n3.0\nIntel® Thread Director\nYes\nIntel® Deep Learning Boost (Intel® DL Boost) on CPU\nYes\nIntel® Speed Shift Technology\nYes\nIntel® Turbo Boost Technology\n‡\n2.0\nIntel® Hyper-Threading Technology\n‡\nYes\nIntel® 64\n‡\nYes\nInstruction Set\n64-bit\nInstruction Set Extensions\nIntel® SSE4.1, Intel® SSE4.2, Intel® AVX2\nIdle States\nYes\nEnhanced Intel SpeedStep® Technology\nYes\nThermal Monitoring Technologies\nYes\nIntel® Volume Management Device (VMD)\nYes\nSecurity & Reliability\nIntel® Standard Manageability (ISM)\n‡\nYes\nIntel® Secure Key\nYes\nIntel® Control-Flow Enforcement Technology\nYes\nIntel® AES New Instructions\nYes\nIntel® OS Guard\nYes\nExecute Disable Bit\n‡\nYes\nIntel® Boot Guard\nYes\nMode-based Execute Control (MBEC)\nYes\nIntel® Virtualization Technology (VT-x)\n‡\nYes\nIntel® Virtualization Technology for Directed I/O (VT-d)\n‡\nYes\nIntel® VT-x with Extended Page Tables (EPT)\n‡\nYes"
+                },
+                {
+                  "title": "Essentials",
+                  "content": "Compare Intel® Products\nDownload Specifications\nEssentials\nDownload Specifications\nProduct Collection\nIntel® Core™ i5 processors (14th gen)\nCode Name\nProducts formerly Raptor Lake\nVertical Segment\nDesktop\nProcessor Number\ni5-14400\nLithography\nIntel 7\nRecommended Customer Price\n$221.00-$231.00\nCPU Specifications\nTotal Cores\n10\n# of Performance-cores\n6\n# of Efficient-cores\n4\nTotal Threads\n16\nMax Turbo Frequency\n4.7 GHz\nPerformance-core Max Turbo Frequency\n4.7 GHz\nEfficient-core Max Turbo Frequency\n3.5 GHz\nPerformance-core Base Frequency\n2.5 GHz\nEfficient-core Base Frequency\n1.8 GHz\nCache\n20 MB Intel® Smart Cache\nTotal L2 Cache\n9.5 MB\nProcessor Base Power\n65 W\nMaximum Turbo Power\n148 W\nSupplemental Information\nMarketing Status\nLaunched\nLaunch Date\nQ1'24\nEmbedded Options Available\nYes\nUse Conditions\nPC/Client/Tablet\nDatasheet\nView now\nMemory Specifications\nMax Memory Size (dependent on memory type)\n192 GB\nMemory Types\nUp to DDR5 4800 MT/s\nUp to DDR4 3200 MT/s\nMax # of Memory Channels\n2\nMax Memory Bandwidth\n76.8 GB/s\nGPU Specifications\nGPU Name\n‡\nIntel® UHD Graphics 730\nGraphics Max Dynamic Frequency\n1.55 GHz\nGraphics Output\neDP 1.4b, DP 1.4a, HDMI 2.1\nExecution Units\n24\nMax Resolution (HDMI)\n‡\n4096 x 2160 @ 60Hz\nMax Resolution (DP)‡\n7680 x 4320 @ 60Hz\nMax Resolution (eDP - Integrated Flat Panel)‡\n5120 x 3200 @ 120Hz\nDirectX* Support\n12\nOpenGL* Support\n4.5\nOpenCL* Support\n3.0\nMulti-Format Codec Engines\n1\nIntel® Quick Sync Video\nYes\nIntel® Clear Video HD Technology\nYes\n# of Displays Supported\n‡\n4\nDevice ID\n0x4682/0xA782\nExpansion Options\nDirect Media Interface (DMI) Revision\n4.0\nMax # of DMI Lanes\n8\nScalability\n1S Only\nPCI Express Revision\n5.0 and 4.0\nPCI Express Configurations\n‡\nUp to 1x16+4, 2x8+4\nMax # of PCI Express Lanes\n20\nPackage Specifications\nSockets Supported\nFCLGA1700\nMax CPU Configuration\n1\nThermal Solution Specification\nPCG 2020C\nT\nJUNCTION\n100°C\nPackage Size\n45.0 mm x 37.5 mm\nMax Operating Temperature\n100 °C\nAdvanced Technologies\nIntel® Gaussian & Neural Accelerator\n3.0\nIntel® Thread Director\nYes\nIntel® Deep Learning Boost (Intel® DL Boost) on CPU\nYes\nIntel® Speed Shift Technology\nYes\nIntel® Turbo Boost Technology\n‡\n2.0\nIntel® Hyper-Threading Technology\n‡\nYes\nIntel® 64\n‡\nYes\nInstruction Set\n64-bit\nInstruction Set Extensions\nIntel® SSE4.1, Intel® SSE4.2, Intel® AVX2\nIdle States\nYes\nEnhanced Intel SpeedStep® Technology\nYes\nThermal Monitoring Technologies\nYes\nIntel® Volume Management Device (VMD)\nYes\nSecurity & Reliability\nIntel® Standard Manageability (ISM)\n‡\nYes\nIntel® Secure Key\nYes\nIntel® Control-Flow Enforcement Technology\nYes\nIntel® AES New Instructions\nYes\nIntel® OS Guard\nYes\nExecute Disable Bit\n‡\nYes\nIntel® Boot Guard\nYes\nMode-based Execute Control (MBEC)\nYes\nIntel® Virtualization Technology (VT-x)\n‡\nYes\nIntel® Virtualization Technology for Directed I/O (VT-d)\n‡\nYes\nIntel® VT-x with Extended Page Tables (EPT)\n‡\nYes"
+                },
+                {
+                  "title": "",
+                  "content": "All information provided is subject to change at any time, without notice. Intel may make changes to manufacturing life cycle, specifications, and product descriptions at any time, without notice. The information herein is provided \"as-is\" and Intel does not make any representations or warranties whatsoever regarding accuracy of the information, nor on the product features, availability, functionality, or compatibility of the products listed. Please contact system vendor for more information on specific products or systems.\nIntel classifications are for general, educational and planning purposes only and consist of Export Control Classification Numbers (ECCN) and Harmonized Tariff Schedule (HTS) numbers. Any use made of Intel classifications are without recourse to Intel and shall not be construed as a representation or warranty regarding the proper ECCN or HTS. Your company as an importer and/or exporter is responsible for determining the correct classification of your transaction.\nRefer to Datasheet for formal definitions of product properties and features.\n‡\nThis feature may not be available on all computing systems. Please check with the system vendor to determine if your system delivers this feature, or reference the system specifications (motherboard, processor, chipset, power supply, HDD, graphics controller, memory, BIOS, drivers, virtual machine monitor-VMM, platform software, and/or operating system) for feature compatibility. Functionality, performance, and other benefits of this feature may vary depending on system configuration.\nIntel processor numbers are not a measure of performance. Processor numbers differentiate features within each processor family, not across different processor families. See\nhttp://www.intel.com/content/www/us/en/processors/processor-numbers.html\nfor details.\nRecommended Customer Price (RCP) is pricing guidance only for Intel products, and is subject to change without notice. Listing of RCP does not constitute a formal pricing offer from Intel. Price at the point of sale is subject to a broad array of factors, including but not limited to local tariffs and taxes. Availability of promotions varies. Customers can contact their preferred retailer(s) or distributor(s) for information on availability and price.\n“Announced” SKUs are not yet available. Please refer to the Launch Date for market availability.\nIntel® Arc™ graphics only available on select V-Series Intel® Core™ Ultra processor-powered systems with qualifying system thermal design or H-series Intel® Core™ Ultra processor-powered systems with at least 16GB of system memory in a dual-channel configuration. OEM enablement required. Other Intel® Core™ Ultra processor-powered system configurations feature Intel® Graphics. Check with OEM or retailer for system configuration details.\nIntel® Iris® Xe Graphics only: to use the Intel® Iris® Xe brand, the system must be populated with 128-bit (dual channel) memory. Otherwise, use the Intel® UHD brand.\nMax Turbo Frequency refers to the maximum single-core processor frequency that can be achieved with Intel® Turbo Boost Technology. See\nhttps://www.intel.com/content/www/us/en/gaming/resources/turbo-boost.html\nfor more information and applicability of this technology.\nSee\nhttp://www.intel.com/content/www/us/en/architecture-and-technology/hyper-threading/hyper-threading-technology.html?wapkw=hyper+threading\nfor more information including details on which processors support Intel® HT Technology.\nProcessors that support 64-bit computing on Intel® architecture require an Intel 64 architecture-enabled BIOS.\nSome products can support AES New Instructions with a Processor Configuration update, in particular, i7-2630QM/i7-2635QM, i7-2670QM/i7-2675QM, i5-2430M/i5-2435M, i5-2410M/i5-2415M.  Please contact OEM for the BIOS that includes the latest Processor configuration update."
+                }
+              ],
+              "code_blocks": [],
+              "links": [
+                {
+                  "url": "#primary-content",
+                  "text": "Skip To Main Content"
+                },
+                {
+                  "url": "https://www.intel.co.id/content/www/id/id/products/sku/236788/intel-core-i5-processor-14400-20m-cache-up-to-4-70-ghz/specifications.html",
+                  "text": "Bahasa Indonesia"
+                },
+                {
+                  "url": "https://www.intel.de/content/www/de/de/products/sku/236788/intel-core-i5-processor-14400-20m-cache-up-to-4-70-ghz/specifications.html",
+                  "text": "Deutsch"
+                },
+                {
+                  "url": "https://www.intel.com/content/www/us/en/products/sku/236788/intel-core-i5-processor-14400-20m-cache-up-to-4-70-ghz/specifications.html",
+                  "text": "English"
+                },
+                {
+                  "url": "https://www.intel.la/content/www/xl/es/products/sku/236788/intel-core-i5-processor-14400-20m-cache-up-to-4-70-ghz/specifications.html",
+                  "text": "Español"
+                },
+                {
+                  "url": "https://www.intel.fr/content/www/fr/fr/products/sku/236788/intel-core-i5-processor-14400-20m-cache-up-to-4-70-ghz/specifications.html",
+                  "text": "Français"
+                },
+                {
+                  "url": "https://www.intel.com.br/content/www/br/pt/products/sku/236788/intel-core-i5-processor-14400-20m-cache-up-to-4-70-ghz/specifications.html",
+                  "text": "Português"
+                },
+                {
+                  "url": "https://www.intel.vn/content/www/vn/vi/products/sku/236788/intel-core-i5-processor-14400-20m-cache-up-to-4-70-ghz/specifications.html",
+                  "text": "Tiếng Việt"
+                },
+                {
+                  "url": "https://www.thailand.intel.com/content/www/th/th/products/sku/236788/intel-core-i5-processor-14400-20m-cache-up-to-4-70-ghz/specifications.html",
+                  "text": "ไทย"
+                },
+                {
+                  "url": "https://www.intel.co.kr/content/www/kr/ko/products/sku/236788/intel-core-i5-processor-14400-20m-cache-up-to-4-70-ghz/specifications.html",
+                  "text": "한국어"
+                },
+                {
+                  "url": "https://www.intel.co.jp/content/www/jp/ja/products/sku/236788/intel-core-i5-processor-14400-20m-cache-up-to-4-70-ghz/specifications.html",
+                  "text": "日本語"
+                },
+                {
+                  "url": "https://www.intel.cn/content/www/cn/zh/products/sku/236788/intel-core-i5-processor-14400-20m-cache-up-to-4-70-ghz/specifications.html",
+                  "text": "简体中文"
+                },
+                {
+                  "url": "https://www.intel.com.tw/content/www/tw/zh/products/sku/236788/intel-core-i5-processor-14400-20m-cache-up-to-4-70-ghz/specifications.html",
+                  "text": "繁體中文"
+                },
+                {
+                  "url": "javascript:void();",
+                  "text": "Sign In"
+                },
+                {
+                  "url": "https://www.intel.com/content/www/us/en/products/overview.html?wapkw=quicklink:products",
+                  "text": "Product Information"
+                },
+                {
+                  "url": "https://www.intel.com/content/www/us/en/support.html?wapkw=quicklink:support",
+                  "text": "Support"
+                },
+                {
+                  "url": "https://downloadcenter.intel.com?wapkw=quicklink:download-center",
+                  "text": "Drivers & Software"
+                },
+                {
+                  "url": "javascript:void();",
+                  "text": "Sign In"
+                },
+                {
+                  "url": "javascript:void();",
+                  "text": "Sign in"
+                },
+                {
+                  "url": "https://www.intel.com/content/www/us/en/ark.html",
+                  "text": "Product Specifications"
+                },
+                {
+                  "url": "https://www.intel.com/content/www/us/en/ark/products/series/236175/intel-core-i5-processors-14th-gen.html",
+                  "text": "Intel® Core™ i5 processors (14th gen)"
+                },
+                {
+                  "url": "https://support.apple.com/downloads/safari",
+                  "text": "Safari"
+                },
+                {
+                  "url": "https://support.google.com/chrome/answer/95346?hl=en",
+                  "text": "Chrome"
+                },
+                {
+                  "url": "https://www.microsoft.com/en-us/edge",
+                  "text": "Edge"
+                },
+                {
+                  "url": "https://www.mozilla.org/en-US/firefox/new/",
+                  "text": "Firefox"
+                },
+                {
+                  "url": "https://www.intel.com/content/www/us/en/products/sku/236788/intel-core-i5-processor-14400-20m-cache-up-to-4-70-ghz/specifications.html",
+                  "text": "Specifications"
+                },
+                {
+                  "url": "https://www.intel.com/content/www/us/en/products/sku/236788/intel-core-i5-processor-14400-20m-cache-up-to-4-70-ghz/ordering.html",
+                  "text": "Ordering & Compliance"
+                },
+                {
+                  "url": "https://www.intel.com/content/www/us/en/products/sku/236788/intel-core-i5-processor-14400-20m-cache-up-to-4-70-ghz/compatible.html",
+                  "text": "Compatible Products"
+                },
+                {
+                  "url": "https://www.intel.com/content/www/us/en/products/sku/236788/intel-core-i5-processor-14400-20m-cache-up-to-4-70-ghz/downloads.html",
+                  "text": "Downloads"
+                },
+                {
+                  "url": "https://www.intel.com/content/www/us/en/products/sku/236788/intel-core-i5-processor-14400-20m-cache-up-to-4-70-ghz/support.html",
+                  "text": "Support"
+                },
+                {
+                  "url": "javascript:void(0)",
+                  "text": "Download Specifications"
+                },
+                {
+                  "url": "javascript:void(0)",
+                  "text": "Download Specifications"
+                },
+                {
+                  "url": "https://www.intel.com/content/www/us/en/ark/products/series/236175/intel-core-i5-processors-14th-gen.html",
+                  "text": "Intel® Core™ i5 processors (14th gen)"
+                },
+                {
+                  "url": "https://www.intel.com/content/www/us/en/ark/products/codename/215599/raptor-lake.html",
+                  "text": "Products formerly Raptor Lake"
+                },
+                {
+                  "url": "https://www.intel.com/content/www/us/en/collections/content-type/datasheets-and-specification-updates.html?f:@stm_10385_en=[Processors;Intel®+Core™+Processors;Intel®+Core™+i5+processors+(14th+gen)]",
+                  "text": "View now"
+                },
+                {
+                  "url": "http://www.intel.com/content/www/us/en/processors/processor-numbers.html",
+                  "text": "http://www.intel.com/content/www/us/en/processors/processor-numbers.html"
+                },
+                {
+                  "url": "https://www.intel.com/content/www/us/en/gaming/resources/turbo-boost.html",
+                  "text": "https://www.intel.com/content/www/us/en/gaming/resources/turbo-boost.html"
+                },
+                {
+                  "url": "http://www.intel.com/content/www/us/en/architecture-and-technology/hyper-threading/hyper-threading-technology.html?wapkw=hyper+threading",
+                  "text": "http://www.intel.com/content/www/us/en/architecture-and-technology/hyper-threading/hyper-threading-technology.html?wapkw=hyper+threading"
+                },
+                {
+                  "url": "https://www.intel.com/compare/",
+                  "text": "Compare Products"
+                },
+                {
+                  "url": "https://www.intel.com/content/www/us/en/company-overview/company-overview.html",
+                  "text": "Company Overview"
+                },
+                {
+                  "url": "https://www.intel.com/content/www/us/en/support/contact-us.html",
+                  "text": "Contact Intel"
+                },
+                {
+                  "url": "https://newsroom.intel.com/",
+                  "text": "Newsroom"
+                },
+                {
+                  "url": "https://www.intc.com/",
+                  "text": "Investors"
+                },
+                {
+                  "url": "https://www.intel.com/content/www/us/en/jobs/life-at-intel.html",
+                  "text": "Careers"
+                },
+                {
+                  "url": "https://www.intel.com/content/www/us/en/corporate-responsibility/corporate-responsibility.html",
+                  "text": "Corporate Responsibility"
+                },
+                {
+                  "url": "https://www.intel.com/content/www/us/en/inclusion/inclusion-at-intel.html",
+                  "text": "Inclusion"
+                },
+                {
+                  "url": "https://www.intel.com/content/www/us/en/company-overview/public-policy.html",
+                  "text": "Public Policy"
+                },
+                {
+                  "url": "https://www.intel.com/content/www/us/en/legal/terms-of-use.html",
+                  "text": "Terms of Use"
+                },
+                {
+                  "url": "https://www.intel.com/content/www/us/en/legal/trademarks.html",
+                  "text": "*Trademarks"
+                },
+                {
+                  "url": "https://www.intel.com/content/www/us/en/privacy/intel-cookie-notice.html",
+                  "text": "Cookies"
+                }
+              ],
+              "fallback_after_adapter": true
+            },
+            "fetch_error": null
+          },
+          "quality": {
+            "url": "https://www.intel.com/content/www/us/en/products/sku/236788/intel-core-i5-processor-14400-20m-cache-up-to-4-70-ghz/specifications.html",
+            "title": "Specifications",
+            "domain": "www.intel.com",
+            "score": 0.55,
+            "authority": "unclear",
+            "source_type": "primary",
+            "relevance_score": 0.8,
+            "recency_score": null,
+            "corroboration_score": 0.0,
+            "spam_flags": [],
+            "rationale": [
+              "URL path suggests a primary reference, standard, release, or dataset"
+            ],
+            "uncertainty": [
+              "domain authority could not be established from URL metadata"
+            ],
+            "evidence_type": "GENERAL_WEB",
+            "source_role": "GENERAL_WEB",
+            "published_date": "",
+            "event_date": "",
+            "updated_date": ""
+          },
+          "evidence": {
+            "evidence_type": "OFFICIAL_PRODUCT",
+            "source_role": "OFFICIAL_PRODUCT",
+            "source_quality": 0.9,
+            "allowed_fields": [
+              "claim",
+              "excerpt",
+              "source_url",
+              "source_title",
+              "publication_date",
+              "event_date",
+              "performance",
+              "specifications",
+              "methodology"
+            ],
+            "commerce_signals": [
+              "current_price",
+              "availability",
+              "product_schema"
+            ],
+            "commerce_verified": false,
+            "price_type": "REFERENCE_PRICE",
+            "topic_relevance": {
+              "score": 0.75,
+              "relevant": true,
+              "reasons": [
+                "matched entity term: ntel",
+                "matched entity term: ore",
+                "matched entity term: 14400"
+              ]
+            },
+            "blocked_or_garbage": false,
+            "source_profile": {
+              "domain": "intel.com",
+              "source_type": "OFFICIAL_PRODUCT",
+              "authority_score": 0.45,
+              "extraction_successes": 0,
+              "extraction_failures": 0,
+              "freshness_successes": 0,
+              "relevance_hits": 0,
+              "duplicate_observations": 0,
+              "conflict_observations": 0,
+              "verification_successes": 0,
+              "rate_limit_failures": 0,
+              "last_evaluated_at": "",
+              "extraction_success_rate": 0.5,
+              "verification_rate": 0.0,
+              "ranking_bonus": -0.062
+            },
+            "source_quality_with_profile": 0.838,
+            "vertical_plan": {
+              "vertical": "PRODUCTS",
+              "source_priorities": [
+                "manufacturer",
+                "official_specs",
+                "independent_review",
+                "retailer"
+              ],
+              "freshness_requirement": "HIGH_CHANGE",
+              "query_suffixes": [
+                "official specifications",
+                "independent review",
+                "current price/value"
+              ],
+              "extraction_requirements": [
+                "model/variant",
+                "specification",
+                "price type"
+              ],
+              "verification_rules": [
+                "do not use reviews as manufacturer facts"
+              ]
+            }
+          },
+          "planned_entity": "Intel Core i5-14400",
+          "planned_role": "OFFICIAL_PRODUCT",
+          "query": "Intel Core i5-14400 official specifications"
+        },
+        {
+          "search_result": {
+            "title": "Intel® Core™ i5 processor 14400F",
+            "url": "https://www.intel.com/content/www/us/en/products/sku/236777/intel-core-i5-processor-14400f-20m-cache-up-to-4-70-ghz/specifications.html",
+            "snippet": "Intel® Core™ i5 processor 14400F (20M Cache, up to 4.70 GHz) quick reference with specifications, features, and technologies.",
+            "source": "ddgs",
+            "source_domain": "www.intel.com",
+            "rank": 2,
+            "relevance": 0.5,
+            "provider": "ddgs",
+            "source_profile_bonus": -0.062,
+            "vertical": "PRODUCTS",
+            "evidence_type": "OFFICIAL_PRODUCT",
+            "source_role": "OFFICIAL_PRODUCT",
+            "price_type": "UNKNOWN_PRICE",
+            "commerce_verified": false,
+            "topic_relevance": {
+              "score": 0.75,
+              "relevant": true,
+              "reasons": [
+                "matched entity term: ntel",
+                "matched entity term: ore",
+                "matched entity term: 14400"
+              ]
+            }
+          },
+          "page": {
+            "url": "https://www.intel.com/content/www/us/en/products/sku/236777/intel-core-i5-processor-14400f-20m-cache-up-to-4-70-ghz/specifications.html",
+            "title": "Specifications",
+            "content": "Intel® Core™ i5 processor 14400F\n20M Cache, up to 4.70 GHz\nIntel® Core™ i5 processor 14400F\n20M Cache, up to 4.70 GHz\nAdd To Compare\nDiscover newer Intel Processors and experience Improved performance\n0\nRetailers\n×\nSorry we are not able to load the pricing info at this moment.\nSpecifications\nOrdering & Compliance\nCompatible Products\nDownloads\nSupport\nCompare Intel® Products\nDownload Specifications\nEssentials\nDownload Specifications\nProduct Collection\nIntel® Core™ i5 processors (14th gen)\nCode Name\nProducts formerly Raptor Lake\nVertical Segment\nDesktop\nProcessor Number\ni5-14400F\nLithography\nIntel 7\nRecommended Customer Price\n$196.00-$206.00\nCPU Specifications\nTotal Cores\n10\n# of Performance-cores\n6\n# of Efficient-cores\n4\nTotal Threads\n16\nMax Turbo Frequency\n4.7 GHz\nPerformance-core Max Turbo Frequency\n4.7 GHz\nEfficient-core Max Turbo Frequency\n3.5 GHz\nPerformance-core Base Frequency\n2.5 GHz\nEfficient-core Base Frequency\n1.8 GHz\nCache\n20 MB Intel® Smart Cache\nTotal L2 Cache\n9.5 MB\nProcessor Base Power\n65 W\nMaximum Turbo Power\n148 W\nSupplemental Information\nMarketing Status\nLaunched\nLaunch Date\nQ1'24\nEmbedded Options Available\nNo\nUse Conditions\nPC/Client/Tablet\nDatasheet\nView now\nMemory Specifications\nMax Memory Size (dependent on memory type)\n192 GB\nMemory Types\nUp to DDR5 4800 MT/s\nUp to DDR4 3200 MT/s\nMax # of Memory Channels\n2\nMax Memory Bandwidth\n76.8 GB/s\nExpansion Options\nDirect Media Interface (DMI) Revision\n4.0\nMax # of DMI Lanes\n8\nScalability\n1S Only\nPCI Express Revision\n5.0 and 4.0\nPCI Express Configurations\n‡\nUp to 1x16+4, 2x8+4\nMax # of PCI Express Lanes\n20\nPackage Specifications\nSockets Supported\nFCLGA1700\nMax CPU Configuration\n1\nThermal Solution Specification\nPCG 2020C\nT\nJUNCTION\n100°C\nPackage Size\n45.0 mm x 37.5 mm\nMax Operating Temperature\n100 °C\nAdvanced Technologies\nIntel® Gaussian & Neural Accelerator\n3.0\nIntel® Thread Director\nYes\nIntel® Deep Learning Boost (Intel® DL Boost) on CPU\nYes\nIntel® Speed Shift Technology\nYes\nIntel® Turbo Boost Technology\n‡\n2.0\nIntel® Hyper-Threading Technology\n‡\nYes\nIntel® 64\n‡\nYes\nInstruction Set\n64-bit\nInstruction Set Extensions\nIntel® SSE4.1, Intel® SSE4.2, Intel® AVX2\nIdle States\nYes\nEnhanced Intel SpeedStep® Technology\nYes\nThermal Monitoring Technologies\nYes\nIntel® Volume Management Device (VMD)\nYes\nSecurity & Reliability\nIntel® Standard Manageability (ISM)\n‡\nYes\nIntel® Secure Key\nYes\nIntel® Control-Flow Enforcement Technology\nYes\nIntel® AES New Instructions\nYes\nIntel® OS Guard\nYes\nExecute Disable Bit\n‡\nYes\nIntel® Boot Guard\nYes\nMode-based Execute Control (MBEC)\nYes\nIntel® Virtualization Technology (VT-x)\n‡\nYes\nIntel® Virtualization Technology for Directed I/O (VT-d)\n‡\nYes\nIntel® VT-x with Extended Page Tables (EPT)\n‡\nYes\nAll information provided is subject to change at any time, without notice. Intel may make changes to manufacturing life cycle, specifications, and product descriptions at any time, without notice. The information herein is provided \"as-is\" and Intel does not make any representations or warranties whatsoever regarding accuracy of the information, nor on the product features, availability, functionality, or compatibility of the products listed. Please contact system vendor for more information on specific products or systems.\nIntel classifications are for general, educational and planning purposes only and consist of Export Control Classification Numbers (ECCN) and Harmonized Tariff Schedule (HTS) numbers. Any use made of Intel classifications are without recourse to Intel and shall not be construed as a representation or warranty regarding the proper ECCN or HTS. Your company as an importer and/or exporter is responsible for determining the correct classification of your transaction.\nRefer to Datasheet for formal definitions of product properties and features.\n‡\nThis feature may not be available on all computing systems. Please check with the system vendor to determine if your system delivers this feature, or reference the system specifications (motherboard, processor, chipset, power supply, HDD, graphics controller, memory, BIOS, drivers, virtual machine monitor-VMM, platform software, and/or operating system) for feature compatibility. Functionality, performance, and other benefits of this feature may vary depending on system configuration.\nIntel processor numbers are not a measure of performance. Processor numbers differentiate features within each processor family, not across different processor families. See\nhttp://www.intel.com/content/www/us/en/processors/processor-numbers.html\nfor details.\nRecommended Customer Price (RCP) is pricing guidance only for Intel products, and is subject to change without notice. Listing of RCP does not constitute a formal pricing offer from Intel. Price at the point of sale is subject to a broad array of factors, including but not limited to local tariffs and taxes. Availability of promotions varies. Customers can contact their preferred retailer(s) or distributor(s) for information on availability and price.\n“Announced” SKUs are not yet available. Please refer to the Launch Date for market availability.\nMax Turbo Frequency refers to the maximum single-core processor frequency that can be achieved with Intel® Turbo Boost Technology. See\nhttps://www.intel.com/content/www/us/en/gaming/resources/turbo-boost.html\nfor more information and applicability of this technology.\nSee\nhttp://www.intel.com/content/www/us/en/architecture-and-technology/hyper-threading/hyper-threading-technology.html?wapkw=hyper+threading\nfor more information including details on which processors support Intel® HT Technology.\nProcessors that support 64-bit computing on Intel® architecture require an Intel 64 architecture-enabled BIOS.\nSome products can support AES New Instructions with a Processor Configuration update, in particular, i7-2630QM/i7-2635QM, i7-2670QM/i7-2675QM, i5-2430M/i5-2435M, i5-2410M/i5-2415M.  Please contact OEM for the BIOS that includes the latest Processor configuration update.\nCompare Products\nGet Help",
+            "retrieved_at": "2026-08-19T20:29:32.926976+00:00",
+            "source_metadata": {
+              "source_domain": "www.intel.com",
+              "fetch_timestamp": "2026-08-19T20:29:32.926976+00:00",
+              "sections": [
+                {
+                  "title": "Essentials",
+                  "content": "Specifications\nOrdering & Compliance\nCompatible Products\nDownloads\nSupport\nCompare Intel® Products\nDownload Specifications\nEssentials\nDownload Specifications\nProduct Collection\nIntel® Core™ i5 processors (14th gen)\nCode Name\nProducts formerly Raptor Lake\nVertical Segment\nDesktop\nProcessor Number\ni5-14400F\nLithography\nIntel 7\nRecommended Customer Price\n$196.00-$206.00\nCPU Specifications\nTotal Cores\n10\n# of Performance-cores\n6\n# of Efficient-cores\n4\nTotal Threads\n16\nMax Turbo Frequency\n4.7 GHz\nPerformance-core Max Turbo Frequency\n4.7 GHz\nEfficient-core Max Turbo Frequency\n3.5 GHz\nPerformance-core Base Frequency\n2.5 GHz\nEfficient-core Base Frequency\n1.8 GHz\nCache\n20 MB Intel® Smart Cache\nTotal L2 Cache\n9.5 MB\nProcessor Base Power\n65 W\nMaximum Turbo Power\n148 W\nSupplemental Information\nMarketing Status\nLaunched\nLaunch Date\nQ1'24\nEmbedded Options Available\nNo\nUse Conditions\nPC/Client/Tablet\nDatasheet\nView now\nMemory Specifications\nMax Memory Size (dependent on memory type)\n192 GB\nMemory Types\nUp to DDR5 4800 MT/s\nUp to DDR4 3200 MT/s\nMax # of Memory Channels\n2\nMax Memory Bandwidth\n76.8 GB/s\nExpansion Options\nDirect Media Interface (DMI) Revision\n4.0\nMax # of DMI Lanes\n8\nScalability\n1S Only\nPCI Express Revision\n5.0 and 4.0\nPCI Express Configurations\n‡\nUp to 1x16+4, 2x8+4\nMax # of PCI Express Lanes\n20\nPackage Specifications\nSockets Supported\nFCLGA1700\nMax CPU Configuration\n1\nThermal Solution Specification\nPCG 2020C\nT\nJUNCTION\n100°C\nPackage Size\n45.0 mm x 37.5 mm\nMax Operating Temperature\n100 °C\nAdvanced Technologies\nIntel® Gaussian & Neural Accelerator\n3.0\nIntel® Thread Director\nYes\nIntel® Deep Learning Boost (Intel® DL Boost) on CPU\nYes\nIntel® Speed Shift Technology\nYes\nIntel® Turbo Boost Technology\n‡\n2.0\nIntel® Hyper-Threading Technology\n‡\nYes\nIntel® 64\n‡\nYes\nInstruction Set\n64-bit\nInstruction Set Extensions\nIntel® SSE4.1, Intel® SSE4.2, Intel® AVX2\nIdle States\nYes\nEnhanced Intel SpeedStep® Technology\nYes\nThermal Monitoring Technologies\nYes\nIntel® Volume Management Device (VMD)\nYes\nSecurity & Reliability\nIntel® Standard Manageability (ISM)\n‡\nYes\nIntel® Secure Key\nYes\nIntel® Control-Flow Enforcement Technology\nYes\nIntel® AES New Instructions\nYes\nIntel® OS Guard\nYes\nExecute Disable Bit\n‡\nYes\nIntel® Boot Guard\nYes\nMode-based Execute Control (MBEC)\nYes\nIntel® Virtualization Technology (VT-x)\n‡\nYes\nIntel® Virtualization Technology for Directed I/O (VT-d)\n‡\nYes\nIntel® VT-x with Extended Page Tables (EPT)\n‡\nYes"
+                },
+                {
+                  "title": "Essentials",
+                  "content": "Compare Intel® Products\nDownload Specifications\nEssentials\nDownload Specifications\nProduct Collection\nIntel® Core™ i5 processors (14th gen)\nCode Name\nProducts formerly Raptor Lake\nVertical Segment\nDesktop\nProcessor Number\ni5-14400F\nLithography\nIntel 7\nRecommended Customer Price\n$196.00-$206.00\nCPU Specifications\nTotal Cores\n10\n# of Performance-cores\n6\n# of Efficient-cores\n4\nTotal Threads\n16\nMax Turbo Frequency\n4.7 GHz\nPerformance-core Max Turbo Frequency\n4.7 GHz\nEfficient-core Max Turbo Frequency\n3.5 GHz\nPerformance-core Base Frequency\n2.5 GHz\nEfficient-core Base Frequency\n1.8 GHz\nCache\n20 MB Intel® Smart Cache\nTotal L2 Cache\n9.5 MB\nProcessor Base Power\n65 W\nMaximum Turbo Power\n148 W\nSupplemental Information\nMarketing Status\nLaunched\nLaunch Date\nQ1'24\nEmbedded Options Available\nNo\nUse Conditions\nPC/Client/Tablet\nDatasheet\nView now\nMemory Specifications\nMax Memory Size (dependent on memory type)\n192 GB\nMemory Types\nUp to DDR5 4800 MT/s\nUp to DDR4 3200 MT/s\nMax # of Memory Channels\n2\nMax Memory Bandwidth\n76.8 GB/s\nExpansion Options\nDirect Media Interface (DMI) Revision\n4.0\nMax # of DMI Lanes\n8\nScalability\n1S Only\nPCI Express Revision\n5.0 and 4.0\nPCI Express Configurations\n‡\nUp to 1x16+4, 2x8+4\nMax # of PCI Express Lanes\n20\nPackage Specifications\nSockets Supported\nFCLGA1700\nMax CPU Configuration\n1\nThermal Solution Specification\nPCG 2020C\nT\nJUNCTION\n100°C\nPackage Size\n45.0 mm x 37.5 mm\nMax Operating Temperature\n100 °C\nAdvanced Technologies\nIntel® Gaussian & Neural Accelerator\n3.0\nIntel® Thread Director\nYes\nIntel® Deep Learning Boost (Intel® DL Boost) on CPU\nYes\nIntel® Speed Shift Technology\nYes\nIntel® Turbo Boost Technology\n‡\n2.0\nIntel® Hyper-Threading Technology\n‡\nYes\nIntel® 64\n‡\nYes\nInstruction Set\n64-bit\nInstruction Set Extensions\nIntel® SSE4.1, Intel® SSE4.2, Intel® AVX2\nIdle States\nYes\nEnhanced Intel SpeedStep® Technology\nYes\nThermal Monitoring Technologies\nYes\nIntel® Volume Management Device (VMD)\nYes\nSecurity & Reliability\nIntel® Standard Manageability (ISM)\n‡\nYes\nIntel® Secure Key\nYes\nIntel® Control-Flow Enforcement Technology\nYes\nIntel® AES New Instructions\nYes\nIntel® OS Guard\nYes\nExecute Disable Bit\n‡\nYes\nIntel® Boot Guard\nYes\nMode-based Execute Control (MBEC)\nYes\nIntel® Virtualization Technology (VT-x)\n‡\nYes\nIntel® Virtualization Technology for Directed I/O (VT-d)\n‡\nYes\nIntel® VT-x with Extended Page Tables (EPT)\n‡\nYes"
+                },
+                {
+                  "title": "",
+                  "content": "All information provided is subject to change at any time, without notice. Intel may make changes to manufacturing life cycle, specifications, and product descriptions at any time, without notice. The information herein is provided \"as-is\" and Intel does not make any representations or warranties whatsoever regarding accuracy of the information, nor on the product features, availability, functionality, or compatibility of the products listed. Please contact system vendor for more information on specific products or systems.\nIntel classifications are for general, educational and planning purposes only and consist of Export Control Classification Numbers (ECCN) and Harmonized Tariff Schedule (HTS) numbers. Any use made of Intel classifications are without recourse to Intel and shall not be construed as a representation or warranty regarding the proper ECCN or HTS. Your company as an importer and/or exporter is responsible for determining the correct classification of your transaction.\nRefer to Datasheet for formal definitions of product properties and features.\n‡\nThis feature may not be available on all computing systems. Please check with the system vendor to determine if your system delivers this feature, or reference the system specifications (motherboard, processor, chipset, power supply, HDD, graphics controller, memory, BIOS, drivers, virtual machine monitor-VMM, platform software, and/or operating system) for feature compatibility. Functionality, performance, and other benefits of this feature may vary depending on system configuration.\nIntel processor numbers are not a measure of performance. Processor numbers differentiate features within each processor family, not across different processor families. See\nhttp://www.intel.com/content/www/us/en/processors/processor-numbers.html\nfor details.\nRecommended Customer Price (RCP) is pricing guidance only for Intel products, and is subject to change without notice. Listing of RCP does not constitute a formal pricing offer from Intel. Price at the point of sale is subject to a broad array of factors, including but not limited to local tariffs and taxes. Availability of promotions varies. Customers can contact their preferred retailer(s) or distributor(s) for information on availability and price.\n“Announced” SKUs are not yet available. Please refer to the Launch Date for market availability.\nMax Turbo Frequency refers to the maximum single-core processor frequency that can be achieved with Intel® Turbo Boost Technology. See\nhttps://www.intel.com/content/www/us/en/gaming/resources/turbo-boost.html\nfor more information and applicability of this technology.\nSee\nhttp://www.intel.com/content/www/us/en/architecture-and-technology/hyper-threading/hyper-threading-technology.html?wapkw=hyper+threading\nfor more information including details on which processors support Intel® HT Technology.\nProcessors that support 64-bit computing on Intel® architecture require an Intel 64 architecture-enabled BIOS.\nSome products can support AES New Instructions with a Processor Configuration update, in particular, i7-2630QM/i7-2635QM, i7-2670QM/i7-2675QM, i5-2430M/i5-2435M, i5-2410M/i5-2415M.  Please contact OEM for the BIOS that includes the latest Processor configuration update."
+                }
+              ],
+              "code_blocks": [],
+              "links": [
+                {
+                  "url": "#primary-content",
+                  "text": "Skip To Main Content"
+                },
+                {
+                  "url": "https://www.intel.co.id/content/www/id/id/products/sku/236777/intel-core-i5-processor-14400f-20m-cache-up-to-4-70-ghz/specifications.html",
+                  "text": "Bahasa Indonesia"
+                },
+                {
+                  "url": "https://www.intel.de/content/www/de/de/products/sku/236777/intel-core-i5-processor-14400f-20m-cache-up-to-4-70-ghz/specifications.html",
+                  "text": "Deutsch"
+                },
+                {
+                  "url": "https://www.intel.com/content/www/us/en/products/sku/236777/intel-core-i5-processor-14400f-20m-cache-up-to-4-70-ghz/specifications.html",
+                  "text": "English"
+                },
+                {
+                  "url": "https://www.intel.la/content/www/xl/es/products/sku/236777/intel-core-i5-processor-14400f-20m-cache-up-to-4-70-ghz/specifications.html",
+                  "text": "Español"
+                },
+                {
+                  "url": "https://www.intel.fr/content/www/fr/fr/products/sku/236777/intel-core-i5-processor-14400f-20m-cache-up-to-4-70-ghz/specifications.html",
+                  "text": "Français"
+                },
+                {
+                  "url": "https://www.intel.com.br/content/www/br/pt/products/sku/236777/intel-core-i5-processor-14400f-20m-cache-up-to-4-70-ghz/specifications.html",
+                  "text": "Português"
+                },
+                {
+                  "url": "https://www.intel.vn/content/www/vn/vi/products/sku/236777/intel-core-i5-processor-14400f-20m-cache-up-to-4-70-ghz/specifications.html",
+                  "text": "Tiếng Việt"
+                },
+                {
+                  "url": "https://www.thailand.intel.com/content/www/th/th/products/sku/236777/intel-core-i5-processor-14400f-20m-cache-up-to-4-70-ghz/specifications.html",
+                  "text": "ไทย"
+                },
+                {
+                  "url": "https://www.intel.co.kr/content/www/kr/ko/products/sku/236777/intel-core-i5-processor-14400f-20m-cache-up-to-4-70-ghz/specifications.html",
+                  "text": "한국어"
+                },
+                {
+                  "url": "https://www.intel.co.jp/content/www/jp/ja/products/sku/236777/intel-core-i5-processor-14400f-20m-cache-up-to-4-70-ghz/specifications.html",
+                  "text": "日本語"
+                },
+                {
+                  "url": "https://www.intel.cn/content/www/cn/zh/products/sku/236777/intel-core-i5-processor-14400f-20m-cache-up-to-4-70-ghz/specifications.html",
+                  "text": "简体中文"
+                },
+                {
+                  "url": "https://www.intel.com.tw/content/www/tw/zh/products/sku/236777/intel-core-i5-processor-14400f-20m-cache-up-to-4-70-ghz/specifications.html",
+                  "text": "繁體中文"
+                },
+                {
+                  "url": "javascript:void();",
+                  "text": "Sign In"
+                },
+                {
+                  "url": "https://www.intel.com/content/www/us/en/products/overview.html?wapkw=quicklink:products",
+                  "text": "Product Information"
+                },
+                {
+                  "url": "https://www.intel.com/content/www/us/en/support.html?wapkw=quicklink:support",
+                  "text": "Support"
+                },
+                {
+                  "url": "https://downloadcenter.intel.com?wapkw=quicklink:download-center",
+                  "text": "Drivers & Software"
+                },
+                {
+                  "url": "javascript:void();",
+                  "text": "Sign In"
+                },
+                {
+                  "url": "javascript:void();",
+                  "text": "Sign in"
+                },
+                {
+                  "url": "https://www.intel.com/content/www/us/en/ark.html",
+                  "text": "Product Specifications"
+                },
+                {
+                  "url": "https://www.intel.com/content/www/us/en/ark/products/series/236175/intel-core-i5-processors-14th-gen.html",
+                  "text": "Intel® Core™ i5 processors (14th gen)"
+                },
+                {
+                  "url": "https://support.apple.com/downloads/safari",
+                  "text": "Safari"
+                },
+                {
+                  "url": "https://support.google.com/chrome/answer/95346?hl=en",
+                  "text": "Chrome"
+                },
+                {
+                  "url": "https://www.microsoft.com/en-us/edge",
+                  "text": "Edge"
+                },
+                {
+                  "url": "https://www.mozilla.org/en-US/firefox/new/",
+                  "text": "Firefox"
+                },
+                {
+                  "url": "https://www.intel.com/content/www/us/en/products/sku/236777/intel-core-i5-processor-14400f-20m-cache-up-to-4-70-ghz/specifications.html",
+                  "text": "Specifications"
+                },
+                {
+                  "url": "https://www.intel.com/content/www/us/en/products/sku/236777/intel-core-i5-processor-14400f-20m-cache-up-to-4-70-ghz/ordering.html",
+                  "text": "Ordering & Compliance"
+                },
+                {
+                  "url": "https://www.intel.com/content/www/us/en/products/sku/236777/intel-core-i5-processor-14400f-20m-cache-up-to-4-70-ghz/compatible.html",
+                  "text": "Compatible Products"
+                },
+                {
+                  "url": "https://www.intel.com/content/www/us/en/products/sku/236777/intel-core-i5-processor-14400f-20m-cache-up-to-4-70-ghz/downloads.html",
+                  "text": "Downloads"
+                },
+                {
+                  "url": "https://www.intel.com/content/www/us/en/products/sku/236777/intel-core-i5-processor-14400f-20m-cache-up-to-4-70-ghz/support.html",
+                  "text": "Support"
+                },
+                {
+                  "url": "javascript:void(0)",
+                  "text": "Download Specifications"
+                },
+                {
+                  "url": "javascript:void(0)",
+                  "text": "Download Specifications"
+                },
+                {
+                  "url": "https://www.intel.com/content/www/us/en/ark/products/series/236175/intel-core-i5-processors-14th-gen.html",
+                  "text": "Intel® Core™ i5 processors (14th gen)"
+                },
+                {
+                  "url": "https://www.intel.com/content/www/us/en/ark/products/codename/215599/raptor-lake.html",
+                  "text": "Products formerly Raptor Lake"
+                },
+                {
+                  "url": "https://www.intel.com/content/www/us/en/collections/content-type/datasheets-and-specification-updates.html?f:@stm_10385_en=[Processors;Intel®+Core™+Processors;Intel®+Core™+i5+processors+(14th+gen)]",
+                  "text": "View now"
+                },
+                {
+                  "url": "http://www.intel.com/content/www/us/en/processors/processor-numbers.html",
+                  "text": "http://www.intel.com/content/www/us/en/processors/processor-numbers.html"
+                },
+                {
+                  "url": "https://www.intel.com/content/www/us/en/gaming/resources/turbo-boost.html",
+                  "text": "https://www.intel.com/content/www/us/en/gaming/resources/turbo-boost.html"
+                },
+                {
+                  "url": "http://www.intel.com/content/www/us/en/architecture-and-technology/hyper-threading/hyper-threading-technology.html?wapkw=hyper+threading",
+                  "text": "http://www.intel.com/content/www/us/en/architecture-and-technology/hyper-threading/hyper-threading-technology.html?wapkw=hyper+threading"
+                },
+                {
+                  "url": "https://www.intel.com/compare/",
+                  "text": "Compare Products"
+                },
+                {
+                  "url": "https://www.intel.com/content/www/us/en/company-overview/company-overview.html",
+                  "text": "Company Overview"
+                },
+                {
+                  "url": "https://www.intel.com/content/www/us/en/support/contact-us.html",
+                  "text": "Contact Intel"
+                },
+                {
+                  "url": "https://newsroom.intel.com/",
+                  "text": "Newsroom"
+                },
+                {
+                  "url": "https://www.intc.com/",
+                  "text": "Investors"
+                },
+                {
+                  "url": "https://www.intel.com/content/www/us/en/jobs/life-at-intel.html",
+                  "text": "Careers"
+                },
+                {
+                  "url": "https://www.intel.com/content/www/us/en/corporate-responsibility/corporate-responsibility.html",
+                  "text": "Corporate Responsibility"
+                },
+                {
+                  "url": "https://www.intel.com/content/www/us/en/inclusion/inclusion-at-intel.html",
+                  "text": "Inclusion"
+                },
+                {
+                  "url": "https://www.intel.com/content/www/us/en/company-overview/public-policy.html",
+                  "text": "Public Policy"
+                },
+                {
+                  "url": "https://www.intel.com/content/www/us/en/legal/terms-of-use.html",
+                  "text": "Terms of Use"
+                },
+                {
+                  "url": "https://www.intel.com/content/www/us/en/legal/trademarks.html",
+                  "text": "*Trademarks"
+                },
+                {
+                  "url": "https://www.intel.com/content/www/us/en/privacy/intel-cookie-notice.html",
+                  "text": "Cookies"
+                }
+              ],
+              "fallback_after_adapter": true
+            },
+            "fetch_error": null
+          },
+          "quality": {
+            "url": "https://www.intel.com/content/www/us/en/products/sku/236777/intel-core-i5-processor-14400f-20m-cache-up-to-4-70-ghz/specifications.html",
+            "title": "Specifications",
+            "domain": "www.intel.com",
+            "score": 0.55,
+            "authority": "unclear",
+            "source_type": "primary",
+            "relevance_score": 0.8,
+            "recency_score": null,
+            "corroboration_score": 0.0,
+            "spam_flags": [],
+            "rationale": [
+              "URL path suggests a primary reference, standard, release, or dataset"
+            ],
+            "uncertainty": [
+              "domain authority could not be established from URL metadata"
+            ],
+            "evidence_type": "GENERAL_WEB",
+            "source_role": "GENERAL_WEB",
+            "published_date": "",
+            "event_date": "",
+            "updated_date": ""
+          },
+          "evidence": {
+            "evidence_type": "OFFICIAL_PRODUCT",
+            "source_role": "OFFICIAL_PRODUCT",
+            "source_quality": 0.9,
+            "allowed_fields": [
+              "claim",
+              "excerpt",
+              "source_url",
+              "source_title",
+              "publication_date",
+              "event_date",
+              "performance",
+              "specifications",
+              "methodology"
+            ],
+            "commerce_signals": [
+              "current_price",
+              "availability",
+              "product_schema"
+            ],
+            "commerce_verified": false,
+            "price_type": "REFERENCE_PRICE",
+            "topic_relevance": {
+              "score": 0.75,
+              "relevant": true,
+              "reasons": [
+                "matched entity term: ntel",
+                "matched entity term: ore",
+                "matched entity term: 14400"
+              ]
+            },
+            "blocked_or_garbage": false,
+            "source_profile": {
+              "domain": "intel.com",
+              "source_type": "OFFICIAL_PRODUCT",
+              "authority_score": 0.45,
+              "extraction_successes": 0,
+              "extraction_failures": 0,
+              "freshness_successes": 0,
+              "relevance_hits": 0,
+              "duplicate_observations": 0,
+              "conflict_observations": 0,
+              "verification_successes": 0,
+              "rate_limit_failures": 0,
+              "last_evaluated_at": "",
+              "extraction_success_rate": 0.5,
+              "verification_rate": 0.0,
+              "ranking_bonus": -0.062
+            },
+            "source_quality_with_profile": 0.838,
+            "vertical_plan": {
+              "vertical": "PRODUCTS",
+              "source_priorities": [
+                "manufacturer",
+                "official_specs",
+                "independent_review",
+                "retailer"
+              ],
+              "freshness_requirement": "HIGH_CHANGE",
+              "query_suffixes": [
+                "official specifications",
+                "independent review",
+                "current price/value"
+              ],
+              "extraction_requirements": [
+                "model/variant",
+                "specification",
+                "price type"
+              ],
+              "verification_rules": [
+                "do not use reviews as manufacturer facts"
+              ]
+            }
+          },
+          "planned_entity": "Intel Core i5-14400",
+          "planned_role": "OFFICIAL_PRODUCT",
+          "query": "Intel Core i5-14400 official specifications"
+        },
+        {
+          "search_result": {
+            "title": "Intel Core i5 14400: benchmarks and specs | NR - NanoReview",
+            "url": "https://nanoreview.net/en/cpu/intel-core-i5-14400",
+            "snippet": "Performance tests in benchmarks and full specifications of Intel Core i5 14400 with 10 cores, 2500 MHz.",
+            "source": "ddgs",
+            "source_domain": "nanoreview.net",
+            "rank": 1,
+            "relevance": 1.0,
+            "provider": "ddgs",
+            "source_profile_bonus": -0.062,
+            "vertical": "PRODUCTS",
+            "evidence_type": "BENCHMARK",
+            "source_role": "BENCHMARK",
+            "price_type": "UNKNOWN_PRICE",
+            "commerce_verified": false,
+            "topic_relevance": {
+              "score": 0.75,
+              "relevant": true,
+              "reasons": [
+                "matched entity term: ntel",
+                "matched entity term: ore",
+                "matched entity term: 14400"
+              ]
+            }
+          },
+          "page": {
+            "url": "https://nanoreview.net/en/cpu/intel-core-i5-14400",
+            "title": "",
+            "content": "Intel Core i5 14400\n![Intel Core i5 14400](/common/images/cpu/intel-core-i5.jpeg)\n- Cores: 10\n- L3 cache: 20MB (shared)\n- TDP: 65 W (max. boost up to 148 W)\n- Transistor size: 10 nm\nCore i5 14400 - desktop processor produced by Intel for socket LGA-1700 that has 10 cores and 16 threads. The base clock frequency of the CPU is 2500 MHz, but due to Turbo Boost technology, it can perform up to 4700 MHz. The size of the L3 cache is 20 MB. Please note that this chip has integrated graphics Intel UHD Graphics 730.\nReview\nCompare Intel Core i5 14400 with other CPUs\nTest in Benchmarks\nPerformance test of Intel Core i5 14400 in benchmarksCinebench\n[Cinebench Scores](https://nanoreview.net/en/cpu-list/cinebench-scores)- 189th place\nGeekBench v6\n| File compression | 1006.1 MB/sec |\n| Clang compilation | 85.5 Klines/sec |\n| HTML 5 Browser | 292.8 pages/sec |\n| PDF Renderer | 359.2 Mpixels/sec |\n| Text processing | 237.1 pages/sec |\n| Background blur | 54 images/sec |\n| Photo processing | 103.9 images/sec |\n| Ray tracing | 20.1 Mpixels/sec |\nPassMark\n| Integer math | 81.9 GOps/sec |\n| Floating point math | 61.5 GOps/sec |\n| Find prime numbers | 82M Primes/sec |\n| Random string sorting | 32.3M Strings/sec |\n| Data encryption | 16.7 GBytes/sec |\n| Data compression | 314.7 MBytes/sec |\n| Physics | 1416 Frames/sec |\n| Extended instructions | 19.8B Matrices/sec |\nBlender\nPerformance Per Watt\n| Cinebench 2024 / Watt | 13.3 PPW |\n| Geekbench 6 Multi / Watt | 172 PPW |\n| Passmark CPU Mark / Watt | 386.5 PPW |\n| Blender / Watt | 3 PPW |\nThese are rough calculations, as most CPUs surpass PL1 TDP wattage even in multicore workloads.\nSpecifications\nCore i5 14400 technical specificationsGeneral\n| Vendor | Intel |\n| Released | January 9, 2024 |\n| Type | Desktop |\n| Instruction Set | x86-64 |\n| Codename | Raptor Lake Refresh |\n| Model number | i5-14400 |\n| Integrated GPU | UHD Graphics 730 |\n| Successor | -\n|\n[Intel CPU rating](https://nanoreview.net/en/cpu-list/intel-chips-rating)- 111th place\nCPU\n| P-Cores | 6 |\n| P-Threads | 12 |\n| Base Frequency (P) | 2.5 GHz |\n| Turbo Boost Frequency (P) | 4.7 GHz |\n| E-Cores | 4 |\n| E-Threads | 4 |\n| Base Frequency (E) | 1.8 GHz |\n| Turbo Boost Frequency (E) | 3.5 GHz |\n| Total Cores | 10 |\n| Total Threads | 16 |\n| Bus Frequency | 100 MHz |\n| Multiplier | 25x |\n| L1 Cache | 80K (per core) |\n| L2 Cache | 2MB (per core) |\n| L3 Cache | 20MB (shared) |\n| Unlocked Multiplier | No |\nPackage\n| Fabrication Process | 10 nm |\n| TDP (PL1) | 65 W |\n| Max. Boost TDP (PL2) | 148 W |\n| Socket | LGA-1700 |\n| Peak Temperature | 100°C |\n[Desktop CPU ranking](https://nanoreview.net/en/cpu-list/desktop-chips-rating)- 89th place\niGPU\n| Integrated Graphics |\n|\nSee also:\n[Intel UHD Graphics 730](https://nanoreview.net/en/gpu/intel-uhd-graphics-730)– integrated graphics of Intel Core i5 14400Memory Support\n| Memory Types | - DDR5-4800 - DDR4-3200 |\n| Max. Memory Size | 192 GB |\n| Memory Channels | 2 |\n| Max. Memory Bandwidth | 76.8 GB/s |\n| ECC Support | No |\nMisc\n| Official Site |\n|\n- Compute: ABM, ADX, BMI1, BMI2, CLMUL, F16C, SHA\n- Performance: EIST, TBT 2.0, TSX\n- Virtualization: VT-d, VT-x\n- Security: RDRAND, TXT, XD bit",
+            "retrieved_at": "2026-08-19T20:29:41.280855+00:00",
+            "source_metadata": {
+              "provider": "trafilatura",
+              "extraction_backend": "trafilatura",
+              "author": "",
+              "published_at": "",
+              "sitename": "",
+              "links": [],
+              "images": [],
+              "adapter_attempts": [
+                {
+                  "provider": "trafilatura",
+                  "success": true
+                }
+              ]
+            },
+            "fetch_error": null
+          },
+          "quality": {
+            "url": "https://nanoreview.net/en/cpu/intel-core-i5-14400",
+            "title": "",
+            "domain": "nanoreview.net",
+            "score": 0.558,
+            "authority": "unclear",
+            "source_type": "secondary/unclear",
+            "relevance_score": 0.833,
+            "recency_score": null,
+            "corroboration_score": 0.0,
+            "spam_flags": [],
+            "rationale": [],
+            "uncertainty": [
+              "domain authority could not be established from URL metadata",
+              "primary-source status is not explicit"
+            ],
+            "evidence_type": "GENERAL_WEB",
+            "source_role": "GENERAL_WEB",
+            "published_date": "",
+            "event_date": "",
+            "updated_date": ""
+          },
+          "evidence": {
+            "evidence_type": "BENCHMARK",
+            "source_role": "BENCHMARK",
+            "source_quality": 0.7,
+            "allowed_fields": [
+              "claim",
+              "excerpt",
+              "source_url",
+              "source_title",
+              "publication_date",
+              "event_date",
+              "performance",
+              "specifications",
+              "methodology",
+              "benchmark",
+              "fps",
+              "power",
+              "relative_performance",
+              "test_methodology"
+            ],
+            "commerce_signals": [],
+            "commerce_verified": false,
+            "price_type": "UNKNOWN_PRICE",
+            "topic_relevance": {
+              "score": 0.75,
+              "relevant": true,
+              "reasons": [
+                "matched entity term: ntel",
+                "matched entity term: ore",
+                "matched entity term: 14400"
+              ]
+            },
+            "blocked_or_garbage": false,
+            "source_profile": {
+              "domain": "nanoreview.net",
+              "source_type": "BENCHMARK",
+              "authority_score": 0.45,
+              "extraction_successes": 0,
+              "extraction_failures": 0,
+              "freshness_successes": 0,
+              "relevance_hits": 0,
+              "duplicate_observations": 0,
+              "conflict_observations": 0,
+              "verification_successes": 0,
+              "rate_limit_failures": 0,
+              "last_evaluated_at": "",
+              "extraction_success_rate": 0.5,
+              "verification_rate": 0.0,
+              "ranking_bonus": -0.062
+            },
+            "source_quality_with_profile": 0.638,
+            "vertical_plan": {
+              "vertical": "PRODUCTS",
+              "source_priorities": [
+                "manufacturer",
+                "official_specs",
+                "independent_review",
+                "retailer"
+              ],
+              "freshness_requirement": "HIGH_CHANGE",
+              "query_suffixes": [
+                "official specifications",
+                "independent review",
+                "current price/value"
+              ],
+              "extraction_requirements": [
+                "model/variant",
+                "specification",
+                "price type"
+              ],
+              "verification_rules": [
+                "do not use reviews as manufacturer facts"
+              ]
+            }
+          },
+          "planned_entity": "Intel Core i5-14400",
+          "planned_role": "BENCHMARK",
+          "query": "Intel Core i5-14400 independent benchmarks review"
+        }
+      ],
+      "uncertainty": [
+        "Trafilatura page read failed: HTTPError; Failed to fetch URL: https://cpu-benchmark.org/cpu/amd-ryzen-7-5700x; Browser page contained insufficient readable public content",
+        "DDGS search failed: DDGSException",
+        "No usable public page results remained after filtering search homepages",
+        "DDGS search failed: TimeoutException",
+        "AMD Ryzen 7 5700X: gaming performance",
+        "AMD Ryzen 7 5700X: productivity performance",
+        "AMD Ryzen 7 5700X: price/value",
+        "Intel Core i5-14400: gaming performance",
+        "Intel Core i5-14400: productivity performance",
+        "Intel Core i5-14400: price/value"
+      ],
+      "partial": true,
+      "answer_plan": "comparison_matrix"
+    }
+  }
+]

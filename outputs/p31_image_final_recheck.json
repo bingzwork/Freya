@@ -1,0 +1,22 @@
+[
+  {
+    "name": "valid_image",
+    "prompt": "find me 3 photos of River Lynn",
+    "status": 200,
+    "elapsed_seconds": 16.88,
+    "answer": "The public image providers did not return enough verifiable image candidates within Freya's local time budget.",
+    "response_type": "image_results",
+    "image_count": 0,
+    "metrics": {}
+  },
+  {
+    "name": "no_result_image",
+    "prompt": "Find reliable public images of a nonexistent entity with no public record.",
+    "status": 200,
+    "elapsed_seconds": 0.03,
+    "answer": "I could not verify any public images for that subject, and I will not substitute unrelated images.",
+    "response_type": "image_results",
+    "image_count": 0,
+    "metrics": {}
+  }
+]

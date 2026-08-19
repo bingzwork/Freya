@@ -215,12 +215,11 @@ class ComparisonIntelligenceEngine:
 
     @staticmethod
     def entity_matches_text(entity: ResolvedEntity, text: str) -> bool:
-        haystack = str(text or "").lower()
-        raw_tokens = [token for token in re.findall(r"[a-z0-9]+", entity.raw_text.lower()) if len(token) >= 2]
+        haystack = " ".join(re.findall(r"[a-z0-9]+", str(text or "").lower()))
         model_tokens = [token for token in re.findall(r"[a-z0-9]+", entity.model.lower()) if len(token) >= 2]
         if entity.family and entity.family.lower() in haystack and model_tokens and any(token in haystack for token in model_tokens):
             return True
-        return any(alias.lower() in haystack for alias in entity.aliases if len(alias) >= 4)
+        return any(" ".join(re.findall(r"[a-z0-9]+", alias.lower())) in haystack for alias in entity.aliases if len(alias) >= 4)
 
     def extract_claims(self, facts: Sequence[Dict[str, Any]], entities: Sequence[ResolvedEntity], category: str) -> List[TypedClaim]:
         claims: List[TypedClaim] = []
@@ -229,6 +228,8 @@ class ComparisonIntelligenceEngine:
                 continue
             claim_text = str(fact.get("claim") or fact.get("evidence") or "").strip()
             if not self._valid_source_text(claim_text):
+                continue
+            if re.search(r"(?:automated bot check|captcha|cookie policy|sign in|register|skip to main)", claim_text, re.I):
                 continue
             role = str(fact.get("source_role") or fact.get("evidence_type") or EvidenceType.GENERAL_WEB.value)
             source_url = str(fact.get("source_url") or "")
@@ -405,10 +406,16 @@ class ComparisonIntelligenceEngine:
 
     @staticmethod
     def _match_entities(text: str, entities: Sequence[ResolvedEntity]) -> List[Any]:
+        raw_text = str(text or "").lower()
+        normalized_text = " ".join(re.findall(r"[a-z0-9]+", raw_text))
         matched = []
         for entity in entities:
-            aliases = [alias.lower() for alias in entity.aliases if len(alias) >= 3]
-            if any(alias in text for alias in aliases):
+            aliases = [" ".join(re.findall(r"[a-z0-9]+", alias.lower())) for alias in entity.aliases if len(alias) >= 3]
+            model_tokens = [token for token in re.findall(r"[a-z0-9]+", entity.model.lower()) if len(token) >= 2]
+            family = str(entity.family or "").lower()
+            alias_hit = any(alias and alias in normalized_text for alias in aliases)
+            token_hit = bool(family and family in normalized_text and model_tokens and any(token in normalized_text for token in model_tokens))
+            if alias_hit or token_hit:
                 matched.append(entity)
         if len(matched) >= 2:
             return ["shared"]
@@ -429,7 +436,7 @@ class ComparisonIntelligenceEngine:
             "vram": r"\b\d+(?:\.\d+)?\s*(?:gb|tb|mb)\b",
             "memory": r"\b\d+(?:\.\d+)?\s*(?:gb|tb|mb|bit|bits|gb/s)\b",
             "power": r"\b\d+(?:\.\d+)?\s*(?:w|watts?)\b",
-            "performance": r"\b\d+(?:\.\d+)?\s*(?:fps|%|x)\b|\b(?:faster|slower|倍)\b",
+            "performance": r"\b\d+(?:\.\d+)?\s*(?:fps|%)\b|\b(?:factor|by)\s+\d+(?:\.\d+)?\s*x\b|\b\d+\.\d+\s*x\b|\b(?:faster|slower|倍)\b",
             "clock": r"\b\d+(?:\.\d+)?\s*(?:ghz|mhz)\b",
             "cores/threads": r"\b\d+\s*(?:cores?|threads?)\b",
             "price/value": r"(?:[$€£₱]\s*\d[\d,]*(?:\.\d+)?|\b\d[\d,]*(?:\.\d+)?\s*(?:usd|eur|gbp|php)\b)",

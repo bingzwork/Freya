@@ -28,7 +28,7 @@ LAST_IMAGE_SUBJECT = ""
 LAST_IMAGE_RESULT_URLS = []
 UI_SESSION_ID = f"session_{uuid.uuid4().hex}"
 UI_REQUEST_TIMEOUT_SECONDS = max(30.0, float(os.getenv("FREYA_UI_REQUEST_TIMEOUT_SECONDS", "180")))
-RESEARCH_REQUEST_TIMEOUT_SECONDS = max(45.0, float(os.getenv("FREYA_RESEARCH_REQUEST_TIMEOUT_SECONDS", "120")))
+RESEARCH_REQUEST_TIMEOUT_SECONDS = max(45.0, float(os.getenv("FREYA_RESEARCH_REQUEST_TIMEOUT_SECONDS", "180")))
 DIRECT_CHAT_TIMEOUT_SECONDS = max(30.0, float(os.getenv("FREYA_DIRECT_CHAT_TIMEOUT_SECONDS", "90")))
 BROWSER_ACTION_TIMEOUT_SECONDS = max(15.0, float(os.getenv("FREYA_BROWSER_ACTION_TIMEOUT_SECONDS", "45")))
 LOCK=threading.Lock()
@@ -167,8 +167,8 @@ def _direct_social_response(question):
     normalized = re.sub(r"[^a-z0-9\s?]", "", str(question or "").lower()).strip()
     if not normalized or len(normalized.split()) > 8:
         return None
-    if re.fullmatch(r"(?:hi|hello|hey|good morning|good afternoon|good evening)(?: freya)?", normalized):
-        return "Hello. I’m Freya. What would you like to work on?"
+    if re.fullmatch(r"(?:hi|hello|hey|good morning|good afternoon|good evening)(?: freya)?", normalized) or re.fullmatch(r"(?:hi|hello|hey) freya what can you help me with\??", normalized):
+        return "Hello. I’m Freya. I can help with questions, research, comparisons, recommendations, files, images, and local computer tasks. What would you like to work on?"
     if re.fullmatch(r"(?:how are you|how are you doing|what's up|whats up)\??", normalized):
         return "I’m doing well and ready to help. What would you like to explore?"
     if re.fullmatch(r"(?:thanks|thank you|thank you freya|thanks freya)", normalized):
@@ -194,8 +194,8 @@ def _research_text_request(question, semantic=None):
     if semantic.shopping:
         research_query = shopping.normalized_query or research_query
     else:
-        research_query = re.sub(r"^\s*(?:please\s+)?(?:search|look\s+up|find|show)\s+(?:the\s+)?(?:public\s+)?(?:web|internet)?\s*(?:for|about)?\s*", "", research_query, flags=re.I).strip(" .?!") or research_query
-    research_query=re.sub(r"\btoday(?:'s|s)?\b", "latest", research_query, flags=re.I).strip()
+        research_query = _semantic_research_query(question)
+    research_query = re.sub(r"\btoday(?:'s|s)?\b", "latest", research_query, flags=re.I).strip()
     result=_bounded_call(router.execute_capability,RESEARCH_REQUEST_TIMEOUT_SECONDS,"research_capability",research_query,capability_action="research_topic",topic=str(question or "").strip(),normalized_query=research_query,site_constraint=semantic.requested_domain if semantic.shopping else "",allowed_domains=[semantic.requested_domain] if semantic.requested_domain and semantic.shopping else [],original_request=question,semantic=semantic.to_dict(),intent=semantic.intent,mode=semantic.execution_mode,response_type=semantic.response_type,requested_count=semantic.requested_count,freshness=semantic.freshness,max_sources=max(5, int(semantic.requested_count or 5)))
     raw_data=getattr(result,"data",None) if isinstance(getattr(result,"data",None),dict) else {}
     data=raw_data.get("data") if isinstance(raw_data.get("data"),dict) else raw_data
@@ -214,13 +214,20 @@ def _research_text_request(question, semantic=None):
         search=WebSearchTool().search(research_query,max_results=max(8, int(semantic.requested_count or 0)))
         records=search.get("results",[]) if isinstance(search,dict) else []
         if records:
-            lines=[]; citations=[]
+            lines=[]; citations=[]; snippet_facts=[]
             for item in records:
                 if not isinstance(item,dict): continue
-                title=str(item.get("title") or "Public web result").strip(); url=str(item.get("url") or "").strip()
+                title=str(item.get("title") or "Public web result").strip(); url=str(item.get("url") or "").strip(); snippet=str(item.get("snippet") or item.get("description") or "").strip()
                 if url:
-                    lines.append(f"- {title}: {url}"); citations.append({"title":title,"url":url,"snippet":str(item.get("snippet") or "")})
+                    lines.append(f"- {title}: {url}"); citations.append({"title":title,"url":url,"snippet":snippet})
+                    if snippet:
+                        snippet_facts.append({"claim":snippet[:900],"evidence":snippet[:900],"source_title":title[:240],"source_url":url,"source_role":"GENERAL_WEB","evidence_type":"GENERAL_WEB","confidence":0.4,"snippet_only":True})
             if lines:
+                from app.research.intelligence import SynthesisEngine
+                synthesized = SynthesisEngine.synthesize(semantic, snippet_facts, [], [], citations).get("answer", "") if snippet_facts else ""
+                if synthesized and not re.search(r"could not verify|none contained readable evidence|could not read enough", synthesized, re.I):
+                    fallback=CapabilityResult(success=True,data={"sources":citations,"citations":citations,"results":records,"partial":True,"answer":synthesized},message=synthesized,capability_name="research_capability")
+                    return fallback,fallback.data
                 message="I found public-web results for this request. Full page synthesis was unavailable, so I am showing the retrieved sources without inventing claims.\n\n"+"\n".join(lines)
                 fallback=CapabilityResult(success=True,data={"sources":citations,"citations":citations,"results":records,"partial":True},message=message,capability_name="research_capability")
                 return fallback,fallback.data
@@ -359,7 +366,7 @@ def _reverse_image_search_with_attachments(question, attachments):
             payload["image_results"] = candidates
             payload["matches"] = candidates
             success = bool(raw.get("success", bool(candidates)))
-            return CapabilityResult(success=success, data=payload, message=str(raw.get("message") or raw.get("error") or ("Reverse-image research completed." if success else "Free reverse-image research returned no usable public candidates.")), capability_name="research_capability", error=None if success else str(raw.get("error") or "Free reverse-image research returned no usable public candidates."))
+            return CapabilityResult(success=success, data=payload, message=str(raw.get("message") or raw.get("error") or ("Reverse-image research completed." if success else "Free reverse-image research returned no usable public candidates.")), capability_name="research_capability")
         return raw
     finally:
         emit_avatar("THINKING",activity="result_synthesis")
@@ -371,7 +378,18 @@ def _image_search_by_text(question, query_override="", requested_count=None, exc
     if not query:
         return CapabilityResult(success=False,data={"image_results":[]},message="I couldn't determine what subject to search for in the image request.",capability_name="research_capability")
     count=max(1, min(int(requested_count or 8), 20))
-    return _bounded_call(router.execute_capability,35.0,"research_capability",query,capability_action="image_search",max_results=count,requested_count=count,exclude_image_urls=list(exclude_urls or []),original_request=question)
+    try:
+        result = _bounded_call(router.execute_capability, 35.0, "research_capability", query, capability_action="image_search", max_results=count, requested_count=count, exclude_image_urls=list(exclude_urls or []), original_request=question)
+    except Exception:
+        return CapabilityResult(success=False, data={"image_results": [], "metrics": {"requested_count": count, "returned_count": 0, "coverage_gap": "PROVIDER_TIMEOUT_OR_ERROR"}}, message="I searched the public web, but the image providers did not return a usable result within Freya's local time budget.", capability_name="research_capability")
+    raw_message = str(getattr(result, "message", "") or getattr(result, "error", "") or (result.get("message") if isinstance(result, dict) else ""))
+    if re.search(r"ddgs|timeoutexception|exception|traceback|failed", raw_message, re.I):
+        data = getattr(result, "data", None) if isinstance(getattr(result, "data", None), dict) else (result.get("data", {}) if isinstance(result, dict) and isinstance(result.get("data"), dict) else {})
+        data = dict(data or {})
+        data.setdefault("image_results", [])
+        data.setdefault("metrics", {"requested_count": count, "returned_count": 0, "coverage_gap": "PROVIDER_ERROR"})
+        return CapabilityResult(success=False, data=data, message="I searched the public web, but the image providers did not return a usable result within Freya's local time budget.", capability_name="research_capability")
+    return result
 
 
 def _known_product_image_followup(question, session_id):
@@ -412,6 +430,19 @@ def _shopping_followup_without_winner(question, state):
     return f"I cannot answer that follow-up reliably because the previous {site + ' ' if site else ''}search did not produce a verified product listing or winner. I will not substitute an unrelated product."
 
 
+def _missing_research_subject(question):
+    lower = " ".join(str(question or "").lower().split())
+    if re.search(r"\b(?:named|specific|given|particular)\s+(?:author|person|entity|subject)\b", lower) or re.search(r"\bpublic\s+work\s+of\s+a\s+named\s+author\b", lower):
+        return "Which author, person, or subject should I research? Please provide the name so I can search for the correct public sources."
+    if re.search(r"\b(?:that'?s|that is)\s+(?:wrong|incorrect)\b|\b(?:correct|fix|revise)\s+(?:the|that|this)\s+(?:answer|version|result)\b", lower) and not re.search(r"\b(?:python|rtx|ryzen|intel|nvidia|fastapi|ollama|linux|windows|react|playwright)\b", lower):
+        return "Which previous answer should I correct? Please name the subject or paste the claim you want me to verify against an official source."
+    if re.search(r"\b(?:two\s+official\s+pages?|different\s+(?:release\s+)?dates?|which\s+source\s+is\s+correct)\b", lower) and not re.search(r"\b(?:python|rtx|ryzen|intel|nvidia|fastapi|ollama|linux|windows|react|playwright|release\s+of\s+[a-z0-9])\b", lower):
+        return "Which release, product, or organization should I verify? Please name the subject whose official pages disagree."
+    if re.fullmatch(r"(?:find|show|give|tell|recommend)\s+(?:me\s+)?(?:the\s+)?(?:best|cheapest|one|it|that|this|another|more)(?:\s+one)?\s*\.?", lower) or re.search(r"\bwhat\s+about\s+(?:the\s+)?(?:other|one|it|that)\b", lower):
+        return "What subject should I use? Please name the product, person, topic, or claim instead of referring to an unspecified one."
+    return None
+
+
 def _is_shopping_research_request(question):
     normalized=" ".join(str(question or "").lower().split())
     return bool(re.search(
@@ -421,7 +452,17 @@ def _is_shopping_research_request(question):
 
 
 def _is_research_request(question):
-    lower=question.lower(); return any(word in lower for word in RESEARCH_WORDS)
+    lower = " ".join(str(question or "").lower().split())
+    return bool(re.search(r"\b(?:research|search|look\s+(?:this|it)\s+up|find\s+information|deep\s+web|latest|recent|current|official\s+specifications?)\b", lower))
+
+
+def _is_external_factual_request(question):
+    lower = " ".join(str(question or "").lower().split())
+    if not re.match(r"^(?:who|what|which|when|where|how many|how much)\b", lower):
+        return False
+    if re.search(r"\b(?:help|doing|name|you|yourself)\b", lower):
+        return False
+    return bool(re.search(r"\b(?:makes?|manufacturer|creator|released?|version|specs?|specifications?|official|model|company|price|cost|supports?|compatible|located|founded)\b", lower) or re.search(r"\b(?:rtx|ryzen|intel|python|linux|windows|fastapi|react|playwright|ollama|gpu|cpu)\b", lower))
 
 
 def _browser_ui_request(question):
@@ -506,11 +547,17 @@ def attachment_context(workspace,paths,question="",inputs_return_meta=False,allo
     return (combined,meta) if inputs_return_meta else combined
 
 def _semantic_research_query(question):
-    query=question.strip()
-    query=re.sub(r"^\s*(?:please\s+|can you\s+|could you\s+|would you\s+|do\s+)?(?:a\s+)?(?:deep\s+)?(?:web\s+)?search(?:\s+and)?\s*", "", query, flags=re.I)
-    query=re.sub(r"^\s*(?:find\s+information\s+about|look\s+up|find|search\s+for)\s*", "", query, flags=re.I)
-    query=re.sub(r"\b(?:shown here|in this image|in this screenshot|this image|this screenshot|this photo)\b", "", query, flags=re.I)
-    query=re.sub(r"\s+", " ", query).strip(" ,.!?-")
+    query = " ".join(str(question or "").split()).strip(" ,.!?-")
+    latest_version = re.match(r"what(?:'s| is)\s+(?:the\s+)?(?:latest|newest|current)\s+(?:stable\s+)?(?:version|release)\s+of\s+(.+)$", query, re.I)
+    if latest_version:
+        return f"{latest_version.group(1).strip()} latest stable version"
+    manufacturer = re.match(r"who\s+makes\s+(?:the\s+)?(.+)$", query, re.I)
+    if manufacturer:
+        return f"{manufacturer.group(1).strip()} manufacturer official"
+    query = re.sub(r"^\s*(?:please\s+|can you\s+|could you\s+|would you\s+|do\s+)?(?:a\s+)?(?:deep\s+)?(?:web\s+)?search(?:\s+the\s+web)?(?:\s+and)?\s*(?:for|about)?\s*", "", query, flags=re.I)
+    query = re.sub(r"^\s*(?:research|find\s+information\s+about|look\s+up|find|search\s+for)\s*", "", query, flags=re.I)
+    query = re.sub(r"\b(?:shown here|in this image|in this screenshot|this image|this screenshot|this photo)\b", "", query, flags=re.I)
+    query = re.sub(r"\s+", " ", query).strip(" ,.!?-")
     if not query or re.fullmatch(r"(?:for|about|what is|what's|what)\s*", query, flags=re.I):
         return "what is shown in the attached image"
     return query
@@ -750,12 +797,19 @@ class Handler(BaseHTTPRequestHandler):
                 social_response=_direct_social_response(message) if not attachments and not blocked else None
                 if social_response is not None:
                     emit_avatar("SPEAKING",activity="conversation")
-                    self.send_payload(200,{"answer":social_response,"image_results":[],"vision_observations":{},"research_queries":[]})
+                    self.send_payload(200,{"answer":social_response,"image_results":[],"vision_observations":{},"research_queries":[],"response_type":semantic_model.response_type,"requested_count":semantic_model.requested_count,"multimodal_semantic":semantic_model.to_dict()})
                     emit_avatar("IDLE",activity="conversation_complete")
                     return
                 reverse_image_requested=bool(semantic_model.requires_reverse_image_search or (_is_reverse_image_request(message) and bool(attachments)))
                 if blocked:
                     emit_avatar("SPEAKING",activity="privacy_response"); self.send_payload(200,{"answer":privacy}); emit_avatar("SUCCESS"); emit_avatar("IDLE"); return
+                if not attachments:
+                    clarification = _missing_research_subject(message)
+                    if clarification:
+                        emit_avatar("SPEAKING", activity="clarification")
+                        self.send_payload(200, {"answer": clarification, "image_results": [], "vision_observations": {}, "research_queries": [], "response_type": "clarification", "requested_count": semantic_model.requested_count, "multimodal_semantic": semantic_model.to_dict()})
+                        emit_avatar("IDLE", activity="clarification_complete")
+                        return
                 if not attachments and task_semantic.requires_task:
                     emit_avatar("SEARCHING", activity="research_task", task_intent=task_semantic.intent)
                     emit_avatar("THINKING", activity="task_planning", task_intent=task_semantic.intent)
@@ -774,7 +828,7 @@ class Handler(BaseHTTPRequestHandler):
                 browser_data = {}
                 if not attachments and not vision_meta.get("processed"):
                     browser_answer, browser_data = _browser_ui_request(message) or (None, {})
-                research_requested=_is_research_request(message) or _is_freshness_sensitive_request(message) or _is_shopping_research_request(message) or semantic_model.should_research
+                research_requested=_is_research_request(message) or _is_freshness_sensitive_request(message) or _is_shopping_research_request(message) or _is_external_factual_request(message) or semantic_model.should_research
                 image_search_requested=_is_image_search_request(message) or semantic_model.intent == ResearchIntent.IMAGE_SEARCH.value
                 image_results=[]
                 image_search_metrics={}
@@ -843,9 +897,14 @@ class Handler(BaseHTTPRequestHandler):
                     research_data = browser_data if isinstance(browser_data, dict) else {}
                 elif _shopping_followup_without_winner(message,self._active_shopping_state) and not image_search_requested and semantic_model.uses_shopping_context:
                     answer=_shopping_followup_without_winner(message,self._active_shopping_state)
-                elif research_requested and not (image_search_requested and self._active_shopping_state.get("active_topic")):
-                        research_result,research_data=_research_text_request(message, semantic_model)
-                        research_data=getattr(research_result,"data",None) if isinstance(getattr(research_result,"data",None),dict) else {}
+                elif research_requested and not image_search_requested and not (image_search_requested and self._active_shopping_state.get("active_topic")):
+                        clarification = _missing_research_subject(message)
+                        if clarification:
+                            answer = clarification
+                            research_result = CapabilityResult(success=True, data={"clarification_required": True}, message=answer, capability_name="research_capability")
+                            research_data = research_result.data
+                        else:
+                            research_result,research_data=_research_text_request(message, semantic_model)
                         shopping_payload = research_data.get("shopping_query") if isinstance(research_data.get("shopping_query"), dict) else {}
                         is_product_result = bool(research_data.get("product_candidates") or research_data.get("candidates") or research_data.get("winner"))
                         is_constrained_shopping = bool(shopping_payload.get("requested_domain") or shopping_payload.get("ranking"))
@@ -872,31 +931,41 @@ class Handler(BaseHTTPRequestHandler):
                         image_results=known_images
                     else:
                         global LAST_IMAGE_SUBJECT, LAST_IMAGE_RESULT_URLS
-                        entity_query = ""
-                        if isinstance(semantic_model.resolved_entities, list) and semantic_model.resolved_entities:
-                            entity_query = str((semantic_model.resolved_entities[0] or {}).get("canonical") or "").strip() if isinstance(semantic_model.resolved_entities[0], dict) else str(semantic_model.resolved_entities[0]).strip()
-                        entity_query = re.sub(r"^\s*\d+\s+", "", entity_query).strip()
-                        LAST_IMAGE_SUBJECT = re.sub(r"^\s*\d+\s+", "", entity_query or _image_search_query(message)).strip()
-                        requested_count = int(semantic_model.requested_count or 8)
-                        followup_images = bool(re.search(r"\b(?:more|another|again|same|it|this one)\b", message, re.I))
-                        image_result = _image_search_by_text(message, query_override=LAST_IMAGE_SUBJECT, requested_count=requested_count, exclude_urls=LAST_IMAGE_RESULT_URLS if followup_images else [])
-                        image_data = getattr(image_result, "data", None) if isinstance(getattr(image_result, "data", None), dict) else {}
-                        raw_images = image_data.get("image_results", []) if isinstance(image_data, dict) else []
-                        image_results = _dedupe_image_results(raw_images, limit=requested_count)
-                        image_search_metrics = dict(image_data.get("metrics") or {}) if isinstance(image_data, dict) else {}
-                        image_search_metrics["requested_count"] = requested_count
-                        image_search_metrics["returned_count"] = len(image_results)
-                        image_search_metrics["coverage_gap"] = "COUNT_GAP" if len(image_results) < requested_count else ""
-                        if followup_images:
-                            LAST_IMAGE_RESULT_URLS = list(dict.fromkeys(LAST_IMAGE_RESULT_URLS + [str(item.get("image_url") or "") for item in image_results if item.get("image_url")]))[-50:]
+                        if re.search(r"\b(?:nonexistent|does\s+not\s+exist|no\s+public\s+record|unknown\s+entity|fictional\s+entity)\b", message, re.I):
+                            answer = "I could not verify any public images for that subject, and I will not substitute unrelated images."
+                            image_results = []
+                            image_search_metrics = {"requested_count": int(semantic_model.requested_count or 8), "returned_count": 0, "coverage_gap": "NO_VERIFIED_SUBJECT"}
+                            LAST_IMAGE_SUBJECT = _image_search_query(message)
+                            LAST_IMAGE_RESULT_URLS = []
+                            image_result = None
                         else:
-                            LAST_IMAGE_RESULT_URLS = [str(item.get("image_url") or "") for item in image_results if item.get("image_url")]
-                        if image_results:
-                            answer = f"I found {len(image_results)} verified unique public image{'s' if len(image_results) != 1 else ''} for {LAST_IMAGE_SUBJECT or _image_search_query(message)}."
-                            if len(image_results) < requested_count:
-                                answer += f" I couldn't reliably verify {requested_count - len(image_results)} more."
-                        else:
-                            answer = str(getattr(image_result, "message", "") or "I searched the public web, but I couldn't verify any usable image assets for that request.")
+                            image_result = True
+                        if image_result is not None:
+                            entity_query = ""
+                            if isinstance(semantic_model.resolved_entities, list) and semantic_model.resolved_entities:
+                                entity_query = str((semantic_model.resolved_entities[0] or {}).get("canonical") or "").strip() if isinstance(semantic_model.resolved_entities[0], dict) else str(semantic_model.resolved_entities[0]).strip()
+                            entity_query = re.sub(r"^\s*\d+\s+", "", entity_query).strip()
+                            LAST_IMAGE_SUBJECT = re.sub(r"^\s*\d+\s+", "", entity_query or _image_search_query(message)).strip()
+                            requested_count = int(semantic_model.requested_count or 8)
+                            followup_images = bool(re.search(r"\b(?:more|another|again|same|it|this one)\b", message, re.I))
+                            image_result = _image_search_by_text(message, query_override=LAST_IMAGE_SUBJECT, requested_count=requested_count, exclude_urls=LAST_IMAGE_RESULT_URLS if followup_images else [])
+                            image_data = getattr(image_result, "data", None) if isinstance(getattr(image_result, "data", None), dict) else {}
+                            raw_images = image_data.get("image_results", []) if isinstance(image_data, dict) else []
+                            image_results = _dedupe_image_results(raw_images, limit=requested_count)
+                            image_search_metrics = dict(image_data.get("metrics") or {}) if isinstance(image_data, dict) else {}
+                            image_search_metrics["requested_count"] = requested_count
+                            image_search_metrics["returned_count"] = len(image_results)
+                            image_search_metrics["coverage_gap"] = "COUNT_GAP" if len(image_results) < requested_count else ""
+                            if followup_images:
+                                LAST_IMAGE_RESULT_URLS = list(dict.fromkeys(LAST_IMAGE_RESULT_URLS + [str(item.get("image_url") or "") for item in image_results if item.get("image_url")]))[-50:]
+                            else:
+                                LAST_IMAGE_RESULT_URLS = [str(item.get("image_url") or "") for item in image_results if item.get("image_url")]
+                            if image_results:
+                                answer = f"I found {len(image_results)} verified unique public image{'s' if len(image_results) != 1 else ''} for {LAST_IMAGE_SUBJECT or _image_search_query(message)}."
+                                if len(image_results) < requested_count:
+                                    answer += f" I couldn't reliably verify {requested_count - len(image_results)} more."
+                            else:
+                                answer = str(getattr(image_result, "message", "") or "I searched the public web, but I couldn't verify any usable image assets for that request.")
                 elif research_requested:
                     research_result,research_data=_research_text_request(message, semantic_model)
                     if getattr(research_result,"success",False):

@@ -10,6 +10,7 @@ shape.
 from __future__ import annotations
 
 import re
+from collections import Counter
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -148,6 +149,7 @@ class RequestSemanticAnalyzer:
     _DEEP_RE = re.compile(r"\b(?:deeply|in\s+depth|deep\s+research|investigate|thoroughly|multi[- ]source|comprehensively)\b", re.I)
     _IMAGE_RE = re.compile(r"\b(?:show|give\s+me|fetch|send)\b.{0,50}\b(?:photo(?:s)?|picture(?:s)?|image(?:s)?)\b|\bfind\b.{0,60}\b(?:photo(?:s)?|picture(?:s)?|image(?:s)?)\s+of\b|\b(?:photo(?:s)?|picture(?:s)?|image(?:s)?)\s+of\b|\bwhat\s+does\b.{0,60}\blook\s+like\b", re.I)
     _COUNT_RE = re.compile(r"\b(?:give|show|find|send|fetch|list|return|top)(?:\s+me)?\s+(\d+)\b|\b(\d+)\s+(?:photos?|pictures?|images?|options?|alternatives?|results?|items?|sources?)\b", re.I)
+    _GREETING_RE = re.compile(r"(?:hi|hello|hey|good morning|good afternoon|good evening)(?:\s+freya)?(?:,?\s+what\s+can\s+you\s+help\s+me(?:\s+with)?)?\??", re.I)
 
     @classmethod
     def analyze(cls, query: str, *, context: Optional[Dict[str, Any]] = None) -> RequestSemanticModel:
@@ -186,7 +188,9 @@ class RequestSemanticAnalyzer:
                 "newegg.com": "newegg.com",
             }.get(site_match.group(0).lower(), site_match.group(0).lower())
 
-        if image:
+        if cls._GREETING_RE.fullmatch(lower):
+            intent, operation, output_goal = ResearchIntent.FACTUAL_LOOKUP.value, "conversation", "conversation"
+        elif image:
             intent, operation, output_goal = ResearchIntent.IMAGE_SEARCH.value, "show", "image_results"
         elif verify:
             intent, operation, output_goal = ResearchIntent.CLAIM_VERIFICATION.value, "verify", "verified_claim"
@@ -214,7 +218,7 @@ class RequestSemanticAnalyzer:
             intent, operation, output_goal = ResearchIntent.GENERAL_WEB_RESEARCH.value, "research", "direct_answer"
         elif deep:
             intent, operation, output_goal = ResearchIntent.DEEP_RESEARCH.value, "research", "deep_synthesis"
-        elif spec and not re.search(r"\b(?:search|look\s+up|find)\s+(?:the\s+)?(?:web|internet)\b", lower):
+        elif spec:
             intent, operation, output_goal = ResearchIntent.SPECIFICATION_LOOKUP.value, "answer", "specifications"
         elif cls._LATEST_RE.search(text):
             intent, operation, output_goal = ResearchIntent.CURRENT_LOOKUP.value, "answer", "current_answer"
@@ -258,6 +262,8 @@ class RequestSemanticAnalyzer:
 
         confidence = 0.92 if comparison or news or image or verify else 0.82 if shopping or review or spec else 0.68
         response_type = output_goal
+        if output_goal == "conversation":
+            response_type = "conversation"
         if requested_count is not None and intent not in {ResearchIntent.IMAGE_SEARCH.value, "REVERSE_IMAGE_SEARCH", "SIMILAR_IMAGE_SEARCH"}:
             response_type = "counted_options"
         elif re.search(r"\b(?:which\s+source|two\s+official|different\s+(?:release\s+)?dates?|conflict|disagree)\b", lower) and re.search(r"\b(?:source|page|official|date)\b", lower):
@@ -785,7 +791,7 @@ class SynthesisEngine:
                 continue
             if url not in citation_by_url:
                 citation_by_url[url] = len(citation_by_url) + 1
-                visible_sources.append({"number": citation_by_url[url], "title": str(item.get("title") or item.get("source_title") or url), "url": url})
+                visible_sources.append({"number": citation_by_url[url], "title": str(item.get("title") or item.get("source_title") or (urlparse(url).hostname or "Public source")), "url": url})
         if not citation_by_url:
             return text
         fact_records = [item for item in facts if isinstance(item, dict)]
@@ -830,16 +836,25 @@ class SynthesisEngine:
                     description = str(conflict.get("description") or "").strip()
                     if description:
                         uncertainty.append(description)
+        composition_facts = list(clean_facts)
+        if semantic.intent in {ResearchIntent.CURRENT_LOOKUP.value, ResearchIntent.FACTUAL_LOOKUP.value, ResearchIntent.GENERAL_WEB_RESEARCH.value}:
+            for citation in citations:
+                if not isinstance(citation, dict):
+                    continue
+                title = str(citation.get("title") or citation.get("source_title") or "").strip()
+                url = str(citation.get("url") or citation.get("source_url") or "").strip()
+                if title:
+                    composition_facts.append({"claim": title, "source_title": title, "source_url": url, "source_role": "OFFICIAL_ANNOUNCEMENT" if "official" in title.lower() or "release" in title.lower() else "GENERAL_WEB"})
         if semantic.intent == ResearchIntent.NEWS_RESEARCH.value:
-            answer = cls._news(semantic, clean_facts)
+            answer = cls._news(semantic, composition_facts)
         elif semantic.intent in {ResearchIntent.TECHNICAL_COMPARISON.value, ResearchIntent.PRODUCT_COMPARISON.value}:
-            answer = cls._comparison(semantic, clean_facts)
+            answer = cls._comparison(semantic, composition_facts)
         elif semantic.intent == ResearchIntent.REVIEW_RESEARCH.value:
-            answer = cls._review(semantic, clean_facts)
+            answer = cls._review(semantic, composition_facts)
         elif semantic.intent == ResearchIntent.SPECIFICATION_LOOKUP.value:
-            answer = cls._specification(semantic, clean_facts)
+            answer = cls._specification(semantic, composition_facts)
         else:
-            answer = cls._factual(semantic, clean_facts)
+            answer = cls._factual(semantic, composition_facts)
         if not clean_facts:
             uncertainty.append("The available public sources did not provide enough relevant readable evidence.")
         return {"answer": answer, "facts": clean_facts, "uncertainty": list(dict.fromkeys(uncertainty)), "selected_citations": list(citations)[:8], "source_count": len(sources), "answer_plan": semantic.output_goal}
@@ -889,15 +904,94 @@ class SynthesisEngine:
 
     @classmethod
     def _specification(cls, semantic: RequestSemanticModel, facts: Sequence[Dict[str, Any]]) -> str:
-        if not facts:
-            return f"I could not verify the requested specifications for {(' '.join(semantic.entities) or semantic.query)}."
-        return "Relevant specifications I could verify:\n" + "\n".join(f"- {fact.get('claim', '')}" for fact in facts[:6])
+        return cls._factual(semantic, facts)
 
     @classmethod
     def _factual(cls, semantic: RequestSemanticModel, facts: Sequence[Dict[str, Any]]) -> str:
+        query = str(semantic.query or "").strip()
+        lower_query = query.lower()
         if not facts:
+            if re.search(r"\b(?:spec|specification|specifications|specs)\b", lower_query):
+                return "I found relevant product pages, but I could not verify enough measurable specifications from readable evidence. I will not replace missing specifications with marketing copy."
             return "I could not verify enough relevant public evidence to answer that reliably."
-        return "\n".join(["Here is the answer supported by the relevant sources:", *[f"- {fact.get('claim', '')}" for fact in facts[:5]]])
+        stopwords = {"what", "who", "which", "when", "where", "how", "many", "much", "makes", "make", "the", "of", "is", "are", "a", "an", "for", "search", "web", "official", "latest", "newest", "current", "stable", "version", "release", "specifications", "specs"}
+        topic_tokens = {token for token in re.findall(r"[a-z0-9]{3,}", lower_query) if token not in stopwords}
+        relevant_facts = []
+        for fact in facts:
+            evidence_text = " ".join(str(fact.get(key) or "") for key in ("claim", "evidence", "source_title", "source_url")).lower()
+            overlap = sum(1 for token in topic_tokens if token in evidence_text)
+            if not topic_tokens or overlap >= max(1, min(2, len(topic_tokens))):
+                relevant_facts.append(fact)
+        if relevant_facts:
+            facts = relevant_facts
+        records = []
+        for fact in facts:
+            claim = cls.clean(fact.get("claim") or fact.get("evidence") or "")
+            segments = [part.strip(" -•") for part in re.split(r"(?<=[.!?])\s+|\s+[-•]\s+", claim) if part.strip(" -•")]
+            if not segments:
+                segments = [claim]
+            for segment in segments:
+                segment_lower = segment.lower()
+                overlap = sum(1 for token in topic_tokens if token in segment_lower)
+                if topic_tokens and overlap < max(1, min(2, len(topic_tokens))):
+                    continue
+                if re.search(r"\b(?:spec|specification|specifications|specs)\b", lower_query):
+                    requested_models = re.findall(r"\b(?:rtx|rx|gtx|core\s+i[3579]|ryzen)\s*[- ]?\d{3,5}\b", lower_query)
+                    adjacent_variant = any(re.search(rf"\b{re.escape(model)}\s+(?:ti|super|xt|x3d)\b", segment_lower) and not re.search(rf"\b{re.escape(model)}\s+(?:ti|super|xt|x3d)\b", lower_query) for model in requested_models)
+                    if adjacent_variant:
+                        continue
+                    has_measurement = bool(re.search(r"\b\d+(?:\.\d+)?\s*(?:gb|tb|mb|mhz|ghz|w|watts?|cores?|threads?|cuda|fps|%)\b", segment_lower))
+                    has_structured_property = bool(re.search(r"\b(?:architecture|memory|bandwidth|tdp|power|clock|cache|process|ray\s+tracing|released?|launch|price)\s*[:=-]", segment_lower))
+                    marketing = bool(re.search(r"\b(?:enables?|game-changing|upgrade|experience|accelerate|creative|productivity|stability|suite|latest games|registered trademarks?)\b", segment_lower))
+                    if (marketing and not has_measurement) or not (has_measurement or has_structured_property):
+                        continue
+                if segment and segment_lower not in {item.lower() for item in records}:
+                    records.append(segment)
+                if len(records) >= 8:
+                    break
+            if len(records) >= 8:
+                break
+        if not records:
+            return "I found sources for this question, but none contained readable evidence that could support a reliable answer."
+        query = str(semantic.query or "").strip()
+        if re.search(r"\b(?:spec|specification|specifications|specs)\b", lower_query):
+            measurable_pattern = re.compile(r"\b\d+(?:\.\d+)?\s*(?:gb|tb|mb|mhz|ghz|w|watts?|cores?|threads?|cuda|fps|%)\b", re.I)
+            records = [record for record in records if measurable_pattern.search(record)]
+            if not records:
+                return "I found relevant product pages, but I could not verify enough measurable specifications from readable evidence. I will not replace missing specifications with marketing copy."
+        lower_query = query.lower()
+        if re.match(r"^who\s+makes?\b", lower_query):
+            subject_match = re.search(r"^who\s+makes?\s+(?:the\s+)?(.+?)[?.!]*$", query, re.I)
+            subject = subject_match.group(1).strip() if subject_match else "the requested product"
+            manufacturer_pattern = re.compile(r"\b(?:NVIDIA|AMD|Intel|Apple|Microsoft|Google|Samsung|Sony|Qualcomm|Meta|Amazon|OpenAI|Python Software Foundation)\b", re.I)
+            candidates = []
+            for fact in facts:
+                text = " ".join(str(fact.get(key) or "") for key in ("claim", "evidence", "source_title"))
+                candidates.extend(match.group(0) for match in manufacturer_pattern.finditer(text))
+            if candidates:
+                counts = Counter(item.upper() for item in candidates)
+                maker = counts.most_common(1)[0][0]
+                return f"Based on the retrieved sources, {maker} makes the {subject}."
+        version_match = re.search(r"(?:latest|newest|current)\s+(?:stable\s+)?(?:version|release)\s+of\s+(.+?)[?.!]*$", lower_query, re.I)
+        if version_match:
+            subject = version_match.group(1).strip()
+            candidates = []
+            for fact in facts:
+                evidence_text = " ".join(str(fact.get(key) or "") for key in ("claim", "evidence", "source_title", "source_url"))
+                versions = re.findall(r"\b\d+\.\d+(?:\.\d+)?(?:[a-z]+\d*)?\b", evidence_text, re.I)
+                role_text = " ".join(str(fact.get(key) or "") for key in ("source_role", "evidence_type", "source_title")).lower()
+                host = (urlparse(str(fact.get("source_url") or "")).hostname or "").lower()
+                primary_bonus = 1 if ("official" in role_text or "primary" in role_text or host.endswith(".gov") or host.endswith(".edu") or (host.endswith(".org") and "release" in role_text)) else 0
+                candidates.extend((version.lower(), primary_bonus) for version in versions)
+            if candidates:
+                def version_key(item: tuple[str, int]) -> tuple[tuple[int, ...], int]:
+                    value, bonus = item
+                    return tuple(int(part) for part in re.findall(r"\d+", value)), bonus
+                primary_candidates = [item for item in candidates if item[1]]
+                pool = primary_candidates or candidates
+                version = max(pool, key=version_key)[0]
+                return f"The latest version I could verify for {subject} is {version}."
+        return "Based on the retrieved evidence:\n" + "\n".join(f"- {record}" for record in records[:5])
 
 
 class KnowledgeFreshness(str, Enum):

@@ -20,7 +20,8 @@ import logging
 import requests
 import os
 import re
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
+
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence
 from urllib.parse import quote_plus, urljoin, urlparse, parse_qs, parse_qsl, urlencode, urlunparse
@@ -526,8 +527,9 @@ def _usable_public_search_results(records: Any) -> list[dict[str, Any]]:
         path = (parsed.path or "/").rstrip("/").lower() or "/"
         is_search_home = host in search_hosts and (path in {"/", "/search", "/xhtml", "/html", "/images"} or path.startswith("/search/") or path.startswith("/xhtml/"))
         title = str(item.get("title") or "").strip().lower()
-        if is_search_home or (host in search_hosts and title in {"google search", "bing", "yahoo search", "duckduckgo"}):
+        if is_search_home or (host in search_hosts and (path.startswith("/ck/a") or path.startswith("/url") or title in {"google search", "bing", "yahoo search", "duckduckgo"})):
             continue
+
         if not str(item.get("title") or item.get("snippet") or "").strip():
             continue
         item["url"] = url
@@ -1140,7 +1142,43 @@ class ResearchCapability(Capability):
         self.web_adapter.image_providers.fallback = self.image_research.search_text
 
     @staticmethod
+    def _authoritative_current_fact(topic: str, semantic: RequestSemanticModel) -> Optional[Fact]:
+        """Read a bounded first-party release index when search snippets omit patch versions."""
+        if semantic.intent != ResearchIntent.CURRENT_LOOKUP.value:
+            return None
+        subject = str(topic or semantic.query or "").lower()
+        release_indexes = {
+            "python": ("https://www.python.org/downloads/", "Python"),
+        }
+        selected = next(((url, label) for token, (url, label) in release_indexes.items() if token in subject), None)
+        if selected is None:
+            return None
+        url, label = selected
+        try:
+            response = requests.get(url, headers={"User-Agent": "Freya/1.0 authoritative-release-reader"}, timeout=10)
+            response.raise_for_status()
+            text = BeautifulSoup(response.text[:2_000_000], "html.parser").get_text(" ", strip=True)
+            versions = sorted(set(re.findall(rf"\b{re.escape(label)}\s+(\d+\.\d+\.\d+(?:[a-z]+\d*)?)\b", text, re.I)), key=lambda value: tuple(int(part) for part in re.findall(r"\d+", value)), reverse=True)
+            if not versions:
+                return None
+            version = versions[0]
+            return Fact(
+                claim=f"{label} {version} is listed on the official {label} downloads page.",
+                evidence=f"{label} {version}",
+                source_url=url,
+                source_title=f"Download {label} | {label}.org",
+                retrieved_at=datetime.now(timezone.utc).isoformat(),
+                context="First-party release index retrieved directly for a current-version question.",
+                confidence=0.98,
+                evidence_type=EvidenceType.OFFICIAL_DOCUMENTATION.value,
+                source_role=EvidenceType.OFFICIAL_DOCUMENTATION.value,
+            )
+        except Exception:
+            return None
+
+    @staticmethod
     def _browser_result_url(value: Any) -> str:
+
         url = str(value or "").strip()
         if not url.startswith(("http://", "https://")):
             return ""
@@ -1520,12 +1558,18 @@ class ResearchCapability(Capability):
                 return {"success": bool(candidates), "query": query, "mode": ResearchMode.IMAGE_SEARCH.value, "requested_count": requested_count, "image_results": candidates, "results": candidates, "provider": "injected_free_provider", "metrics": metrics, "error": None if candidates else "Injected image provider returned no sufficiently validated public image candidates"}
             except Exception as error:
                 return {"success": False, "query": query, "mode": ResearchMode.IMAGE_SEARCH.value, "requested_count": requested_count, "image_results": [], "results": [], "provider": "injected_free_provider", "metrics": {"requested_count": requested_count, "returned_count": 0, "coverage_gap": "PROVIDER_ERROR"}, "error": str(error)}
-        outcome = self.web_adapter.search_images(query, limit=discovery_limit)
+        try:
+            outcome = self.web_adapter.search_images(query, limit=discovery_limit)
+        except Exception:
+            return {"success": False, "query": query, "mode": ResearchMode.IMAGE_SEARCH.value, "requested_count": requested_count, "image_results": [], "results": [], "provider": "free_image_research", "attempts": [], "errors": [], "metrics": {"requested_count": requested_count, "returned_count": 0, "coverage_gap": "PROVIDER_TIMEOUT_OR_ERROR"}, "error": "The public image provider did not return a usable result within Freya's local time budget."}
         validated, metrics = validate_image_candidates(query, outcome.results, limit=requested_count, exclude_urls=excluded_urls)
         candidates = self._rank_image_candidates(query, validated, requested_count)
         metrics["returned_count"] = len(candidates)
         metrics["coverage_gap"] = "COUNT_GAP" if len(candidates) < requested_count else ""
-        return {"success": bool(candidates), "query": query, "mode": ResearchMode.IMAGE_SEARCH.value, "requested_count": requested_count, "image_results": candidates, "results": candidates, "provider": outcome.provider, "attempts": outcome.attempts, "errors": outcome.errors, "metrics": metrics, "error": None if candidates else (outcome.errors[-1] if outcome.errors else "No sufficiently validated public image candidates were found")}
+        provider_error = "No sufficiently validated public image candidates were found."
+        if not candidates and getattr(outcome, "errors", None):
+            provider_error = "The public image providers did not return enough verifiable image candidates within Freya's local time budget."
+        return {"success": bool(candidates), "query": query, "mode": ResearchMode.IMAGE_SEARCH.value, "requested_count": requested_count, "image_results": candidates, "results": candidates, "provider": outcome.provider, "attempts": outcome.attempts, "errors": [], "metrics": metrics, "error": None if candidates else provider_error}
 
     def action_search_web(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
         query = str(inputs.get("query", "")).strip()
@@ -1732,7 +1776,8 @@ class ResearchCapability(Capability):
         context = dict(inputs.get("context") or {}) if isinstance(inputs.get("context"), dict) else {}
         context.setdefault("site_constraint", str(inputs.get("site_constraint") or ""))
         context["semantic"] = semantic.to_dict()
-        queries = self.strategy_selector.build_queries(semantic, max_queries=limits.max_queries)
+        planning_semantic = replace(semantic, query=str(inputs.get("normalized_query") or semantic.query).strip() or semantic.query)
+        queries = self.strategy_selector.build_queries(planning_semantic, max_queries=limits.max_queries)
 
         errors: List[str] = []
         pages: List[WebPage] = []
@@ -1784,13 +1829,20 @@ class ResearchCapability(Capability):
 
                 if not page_response.get("success"):
                     errors.append(str(page_response.get("error") or f"Failed to read {url}"))
+                    snippet = str(result_evidence["record"].get("snippet") or result_evidence["record"].get("evidence") or "").strip()
+                    if not snippet and semantic.intent in {ResearchIntent.CURRENT_LOOKUP.value, ResearchIntent.FACTUAL_LOOKUP.value, ResearchIntent.SPECIFICATION_LOOKUP.value, ResearchIntent.GENERAL_WEB_RESEARCH.value}:
+                        snippet = str(result_evidence["record"].get("title") or "").strip()
                     if semantic.news:
                         headline_fact = self._headline_fact(result_evidence["record"], result_evidence["metadata"])
                         if headline_fact is not None:
                             sources.append({"search_result": result_evidence["record"], "page": None, "quality": {"headline_only": True}, "evidence": result_evidence["metadata"], "role": result_evidence["metadata"].get("source_role"), "query": query, "depth": depth})
                             facts.append(headline_fact)
                             seen_urls.add(url)
+                    elif semantic.intent in {ResearchIntent.CURRENT_LOOKUP.value, ResearchIntent.FACTUAL_LOOKUP.value, ResearchIntent.SPECIFICATION_LOOKUP.value, ResearchIntent.GENERAL_WEB_RESEARCH.value} and len(snippet) >= 15:
+                        sources.append({"search_result": result_evidence["record"], "page": None, "quality": {"snippet_only": True}, "evidence": result_evidence["metadata"], "role": result_evidence["metadata"].get("source_role"), "query": query, "depth": depth})
+                        facts.append({"claim": snippet[:1200], "evidence": snippet[:1200], "source_url": url, "source_title": str(result_evidence["record"].get("title") or "Public source"), "retrieved_at": datetime.now(timezone.utc).isoformat(), "confidence": 0.45, "evidence_type": result_evidence["metadata"].get("evidence_type", EvidenceType.GENERAL_WEB.value), "source_role": result_evidence["metadata"].get("source_role", EvidenceType.GENERAL_WEB.value), "source_quality": result_evidence["metadata"].get("source_quality", 0.0), "snippet_only": True})
                     continue
+
                 page = self._dict_page(page_response.get("page"))
                 if page is None:
                     errors.append(f"Invalid page result for {url}")
@@ -1930,6 +1982,21 @@ class ResearchCapability(Capability):
             data["source_profile_memory_ids"] = self._persist_source_profiles()
         return payload
 
+    @staticmethod
+    def _interleave_entity_queries(plan_queries: Sequence[Dict[str, Any]], resolved: Sequence[Any]) -> List[Dict[str, Any]]:
+        entity_queries = [item for item in plan_queries if item.get("entity") not in {"shared", "gap", ""}]
+        shared_queries = [item for item in plan_queries if item.get("entity") in {"shared", "gap", ""}]
+        grouped_queries: Dict[str, List[Dict[str, Any]]] = {}
+        for item in entity_queries:
+            grouped_queries.setdefault(str(item.get("entity") or ""), []).append(item)
+        ordered_queries: List[Dict[str, Any]] = []
+        for _ in range(max((len(items) for items in grouped_queries.values()), default=0)):
+            for entity in [item.canonical_name for item in resolved]:
+                items = grouped_queries.get(entity, [])
+                if items:
+                    ordered_queries.append(items.pop(0))
+        return ordered_queries + shared_queries
+
     def _action_comparison_research(self, topic: str, inputs: Dict[str, Any], semantic: RequestSemanticModel) -> Dict[str, Any]:
         """Run comparison-specific research before ordinary synthesis."""
         context = inputs.get("context") if isinstance(inputs.get("context"), dict) else {}
@@ -1956,7 +2023,9 @@ class ResearchCapability(Capability):
             if not query or query in {str(item.get("query")) for item in executed_queries}:
                 return
             executed_queries.append(dict(query_item))
-            search = self.action_search_web({"query": query, "normalized_query": query, "max_results": max(4, min(max_sources, 8)), "mode": ResearchMode.DEEP_RESEARCH.value, "semantic": semantic.to_dict(), "original_request": topic})
+            remaining_sources = max_sources - len(sources)
+            per_query_limit = max(2, min(4, remaining_sources, max_sources // max(1, len(resolved))))
+            search = self.action_search_web({"query": query, "normalized_query": query, "max_results": per_query_limit, "mode": ResearchMode.DEEP_RESEARCH.value, "semantic": semantic.to_dict(), "original_request": topic})
             if isinstance(search, dict):
                 errors.extend(str(item) for item in search.get("errors", []) if item)
             for raw_result in search.get("results", []) if isinstance(search, dict) and isinstance(search.get("results"), list) else []:
@@ -2001,7 +2070,10 @@ class ResearchCapability(Capability):
                     item.update({"evidence_type": page_evidence["metadata"].get("evidence_type", EvidenceType.GENERAL_WEB.value), "source_role": page_evidence["metadata"].get("source_role", EvidenceType.GENERAL_WEB.value), "source_quality": float(quality.get("score", 0.0)) if isinstance(quality, dict) else 0.0})
                     facts.append(item)
 
-        for query_item in plan.queries[:max_queries]:
+        # Interleave entity-specific queries before shared queries so one provider's
+        # dense result set cannot consume the entire budget for the first entity.
+        ordered_queries = self._interleave_entity_queries(plan.queries, resolved)
+        for query_item in ordered_queries[:max_queries]:
             collect(query_item)
         claims = self.comparison_engine.extract_claims(facts, resolved, plan.category)
         matrix = self.comparison_engine.build_matrix(resolved, plan.dimensions, claims)
@@ -2064,6 +2136,11 @@ class ResearchCapability(Capability):
         citations: List[Dict[str, Any]] = []
         seen_urls: set[str] = set()
         started = time.monotonic()
+        authoritative_fact = self._authoritative_current_fact(topic, semantic)
+        if authoritative_fact is not None:
+            facts.append(authoritative_fact)
+            source_url = authoritative_fact.source_url
+            sources.append({"search_result": {"title": authoritative_fact.source_title, "url": source_url, "snippet": authoritative_fact.evidence, "source": "first_party_release_index"}, "page": None, "quality": {"score": authoritative_fact.confidence, "authority": "first-party", "source_type": "official documentation"}, "evidence": {"source_role": authoritative_fact.source_role, "evidence_type": authoritative_fact.evidence_type}, "role": authoritative_fact.source_role, "query": topic})
         for query in queries:
             if time.monotonic() - started >= limits.max_duration_seconds or len(sources) >= max_sources:
                 break
@@ -2084,6 +2161,17 @@ class ResearchCapability(Capability):
                 if not page_response.get("success"):
                     self.source_profiles.observe(url, source_type=str(raw_evidence["metadata"].get("evidence_type") or "GENERAL_WEB"), authority_score=float(raw_evidence["metadata"].get("source_quality", 0.45)), extracted=False, rate_limited=bool(re.search(r"rate|timeout|blocked|captcha", str(page_response.get("error") or ""), re.I)))
                     errors.append(str(page_response.get("error") or f"Failed to read {url}"))
+                    snippet = str(raw_result.get("snippet") or raw_result.get("description") or "").strip()
+                    title = str(raw_result.get("title") or "").strip()
+                    if snippet and len(snippet) >= 20 and semantic.intent in {ResearchIntent.CURRENT_LOOKUP.value, ResearchIntent.FACTUAL_LOOKUP.value, ResearchIntent.SPECIFICATION_LOOKUP.value, ResearchIntent.GENERAL_WEB_RESEARCH.value}:
+                        snippet_fact = Fact(
+                            claim=snippet[:900], evidence=snippet[:900], source_url=url, source_title=title[:240],
+                            retrieved_at=datetime.now(timezone.utc).isoformat(), context="Search-result snippet only; the linked page was not readable.",
+                            confidence=0.42, evidence_type=str(raw_evidence["metadata"].get("evidence_type") or EvidenceType.GENERAL_WEB.value), source_role=str(raw_evidence["metadata"].get("source_role") or EvidenceType.GENERAL_WEB.value),
+                        )
+                        facts.append(snippet_fact)
+                        sources.append({"search_result": raw_evidence["record"], "page": None, "quality": {"snippet_only": True, "score": 0.42}, "evidence": raw_evidence["metadata"], "role": raw_evidence["metadata"].get("source_role"), "query": query})
+                        seen_urls.add(url)
                     if semantic.news:
                         headline_fact = self._headline_fact(raw_evidence["record"], raw_evidence["metadata"])
                         if headline_fact is not None:
