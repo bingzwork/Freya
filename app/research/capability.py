@@ -12,6 +12,7 @@ import asyncio
 import base64
 from html import unescape
 import concurrent.futures
+import time
 
 import ipaddress
 import json
@@ -30,6 +31,13 @@ from app.orchestrator.capability_registry import Capability, CapabilityCategory,
 from app.software_engineering_knowledge.external_import import InternetResearchImporter
 from app.research.osint import WebSearchCapability, OSINTCapability
 from app.free_image_research_providers import FreeImageResearchChain
+from app.research.web_adapter import (
+    AdapterOutcome,
+    DeepResearchCoordinator,
+    ResearchLimits,
+    ResearchMode,
+    WebResearchAdapter,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -450,8 +458,10 @@ def _query_relevant_public_search_results(records: Any, query: str) -> list[dict
     for item in usable:
         haystack = " ".join(str(item.get(field) or "") for field in ("title", "snippet", "url", "source_domain")).lower()
         overlap = sum(1 for term in terms if term in haystack)
-        minimum_overlap = 2 if len(terms) >= 2 else 1
+        maintained_provider = str(item.get("provider") or item.get("source") or "").lower() in {"ddgs", "internet_research_importer"}
+        minimum_overlap = 1 if maintained_provider else (2 if len(terms) >= 2 else 1)
         if overlap >= minimum_overlap:
+
             relevant.append(item)
     return relevant
 
@@ -488,10 +498,12 @@ def _usable_public_search_results(records: Any) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 class WebSearchTool:
-    """Structured public-web search with a primary importer and bounded fallback."""
+    """Structured public-web search with maintained-provider and browser fallbacks."""
 
-    def __init__(self, importer: Optional[InternetResearchImporter] = None):
+    def __init__(self, importer: Optional[InternetResearchImporter] = None, adapter: Optional[WebResearchAdapter] = None):
+        self._prefer_adapter = importer is None
         self.importer = importer or InternetResearchImporter()
+        self.adapter = adapter or WebResearchAdapter()
 
     @staticmethod
     def _duckduckgo_fallback(query: str, max_results: int) -> Dict[str, Any]:
@@ -559,6 +571,24 @@ class WebSearchTool:
             return {"success": False, "query": query, "results": [], "errors": ["query is required"]}
         normalized = query.strip()
         primary_error = ""
+        adapter_outcome: Optional[AdapterOutcome] = None
+        if self._prefer_adapter:
+            try:
+                adapter_outcome = await asyncio.to_thread(self.adapter.search, normalized, max_results=max_results)
+                if adapter_outcome.success:
+                    return {
+                        "success": True,
+                        "query": normalized,
+                        "results": _usable_public_search_results(adapter_outcome.results)[:max_results],
+                        "errors": list(adapter_outcome.errors),
+                        "provider": adapter_outcome.provider,
+                        "attempts": list(adapter_outcome.attempts),
+                    }
+                primary_error = "; ".join(adapter_outcome.errors) or "Maintained web-search provider returned no usable public results"
+            except Exception as error:
+                primary_error = f"Maintained web-search adapter failed: {type(error).__name__}"
+
+        logger.debug("Maintained web search unavailable; trying legacy importer fallback: %s", primary_error)
         try:
             results = await asyncio.wait_for(
                 self.importer.search(normalized, max_results=max_results),
@@ -566,14 +596,15 @@ class WebSearchTool:
             )
             usable = _usable_public_search_results(results)
             if usable:
-                return {"success": True, "query": normalized, "results": usable[:max_results], "errors": [], "provider": "internet_research_importer"}
+                return {"success": True, "query": normalized, "results": usable[:max_results], "errors": [primary_error] if primary_error else [], "provider": "internet_research_importer", "attempts": ([{"provider": self.adapter.search_providers.primary.name, "success": False}] if adapter_outcome is not None else []) + [{"provider": "internet_research_importer", "success": True}]}
 
-            primary_error = "Primary web-search provider returned no usable public page results"
+            primary_error = "; ".join(filter(None, [primary_error, "Legacy importer returned no usable public page results"]))
         except Exception as error:
-            primary_error = str(error)
-        logger.debug("Primary web search unavailable; trying DuckDuckGo fallback: %s", primary_error)
+            primary_error = "; ".join(filter(None, [primary_error, str(error)]))
+        logger.debug("Legacy web search unavailable; trying bounded HTML fallbacks: %s", primary_error)
         try:
             fallback = await asyncio.to_thread(self._duckduckgo_fallback, normalized, max_results)
+
             fallback.setdefault("errors", [])
             declared_fallback_success = bool(fallback.get("success"))
             fallback["results"] = _usable_public_search_results(fallback.get("results", []))[:max_results]
@@ -597,15 +628,44 @@ class WebSearchTool:
 
 
 class WebPageReader:
-    """Fetch and parse readable page content via the existing importer stack."""
+    """Fetch readable content through a maintained extractor with compatibility fallbacks."""
 
-    def __init__(self, importer: Optional[InternetResearchImporter] = None):
+    def __init__(self, importer: Optional[InternetResearchImporter] = None, adapter: Optional[WebResearchAdapter] = None):
+        self._prefer_adapter = importer is None
         self.importer = importer or InternetResearchImporter()
+        self.adapter = adapter or WebResearchAdapter()
+
+    @staticmethod
+    def _page_from_adapter_outcome(outcome: AdapterOutcome, requested_url: str) -> Optional[WebPage]:
+        if not outcome.success or not outcome.results:
+            return None
+        raw = outcome.results[0] if isinstance(outcome.results[0], dict) else {}
+        content = str(raw.get("content") or "").strip()
+        if len(content) < 80:
+            return None
+        return WebPage(
+            url=str(raw.get("url") or requested_url),
+            title=str(raw.get("title") or ""),
+            content=content,
+            retrieved_at=datetime.now(timezone.utc).isoformat(),
+            source_metadata=dict(raw.get("source_metadata") or {}) | {"provider": outcome.provider, "adapter_attempts": list(outcome.attempts)},
+        )
 
     async def read_async(self, url: str) -> Dict[str, Any]:
         allowed, reason = validate_public_url(url)
         if not allowed:
             return {"success": False, "url": url, "page": None, "error": reason}
+        adapter_error = ""
+        if self._prefer_adapter:
+            try:
+                adapter_outcome = await asyncio.to_thread(self.adapter.read_page, url.strip())
+                page = self._page_from_adapter_outcome(adapter_outcome, url)
+                if page is not None:
+                    return {"success": True, "url": page.url, "page": page, "error": None, "provider": adapter_outcome.provider, "attempts": list(adapter_outcome.attempts)}
+                adapter_error = "; ".join(adapter_outcome.errors)
+            except Exception as error:
+                adapter_error = f"Maintained page-reader adapter failed: {type(error).__name__}"
+
         try:
             result = await asyncio.wait_for(
                 self.importer.import_from_url(url.strip()),
@@ -613,9 +673,9 @@ class WebPageReader:
             )
             if not result.success or not result.items:
                 errors = getattr(result, "errors", None) or [f"No readable content extracted from {url}"]
-                return {"success": False, "url": url, "page": None, "error": "; ".join(map(str, errors))}
+                return {"success": False, "url": url, "page": None, "error": "; ".join(filter(None, [adapter_error, "; ".join(map(str, errors))]))}
             item = result.items[0]
-            metadata = dict(getattr(item, "source_metadata", {}) or {})
+            metadata = dict(getattr(item, "source_metadata", {}) or {}) | {"fallback_after_adapter": bool(adapter_error)}
             page = WebPage(
                 url=str(getattr(item, "source_uri", None) or url),
                 title=str(getattr(item, "title", None) or ""),
@@ -624,11 +684,11 @@ class WebPageReader:
                 source_metadata=metadata,
             )
             if not page.content.strip():
-                return {"success": False, "url": url, "page": None, "error": "Page contained no readable content"}
-            return {"success": True, "url": page.url, "page": page, "error": None}
+                return {"success": False, "url": url, "page": None, "error": "; ".join(filter(None, [adapter_error, "Page contained no readable content"]))}
+            return {"success": True, "url": page.url, "page": page, "error": None, "provider": "internet_research_importer", "attempts": [{"provider": "internet_research_importer", "success": True}]}
         except Exception as error:
             logger.warning("Page read failed for %s: %s", url, error)
-            return {"success": False, "url": url, "page": None, "error": str(error)}
+            return {"success": False, "url": url, "page": None, "error": "; ".join(filter(None, [adapter_error, str(error)]))}
 
     def read(self, url: str) -> Dict[str, Any]:
         return _run_coroutine(self.read_async(url))
@@ -940,9 +1000,12 @@ class ResearchCapability(Capability):
         self._event_bus = None
         self._tool_manager = None
         self._learning_pipeline = None
-        self.search_tool = WebSearchTool()
-        self.page_reader = WebPageReader()
+        self.web_adapter = WebResearchAdapter()
+        self.search_tool = WebSearchTool(adapter=self.web_adapter)
+        self.page_reader = WebPageReader(adapter=self.web_adapter)
         self.image_research = FreeImageResearchChain(self.search_tool)
+        self.web_adapter.image_providers.fallback = self.image_research.search_text
+
         # Optional test/integration seam; production uses the free chain above.
         self.image_search_provider = None
         self.browser_capability = None
@@ -1018,6 +1081,7 @@ class ResearchCapability(Capability):
     def set_browser_capability(self, browser_capability) -> None:
         self.browser_capability = browser_capability
         self.image_research.set_browser(browser_capability)
+        self.web_adapter.image_providers.fallback = self.image_research.search_text
 
     @staticmethod
     def _browser_result_url(value: Any) -> str:
@@ -1253,29 +1317,51 @@ class ResearchCapability(Capability):
     def _dict_fact(value: Any) -> Fact:
         return value if isinstance(value, Fact) else Fact(**value)
 
+    @staticmethod
+    def _rank_image_candidates(query: str, records: Any, limit: int) -> List[Dict[str, Any]]:
+        terms = [token.lower() for token in re.findall(r"[a-z0-9][a-z0-9._-]{1,}", str(query or "").lower()) if token not in {"show", "find", "search", "photo", "photos", "picture", "pictures", "image", "images", "of", "the", "a", "an", "me", "this", "that", "one", "another"}]
+        ranked: List[tuple[float, Dict[str, Any]]] = []
+        seen: set[str] = set()
+        for record in records if isinstance(records, list) else []:
+            if not isinstance(record, dict):
+                continue
+            image_url = str(record.get("image_url") or record.get("thumbnail_url") or "").strip()
+            if not image_url.lower().startswith(("http://", "https://")) or image_url in seen:
+                continue
+            seen.add(image_url)
+            haystack = " ".join(str(record.get(key) or "") for key in ("title", "entity", "snippet", "source_domain", "source_page_url", "url")).lower()
+            matched = sum(1 for term in terms if term in haystack)
+            confidence = matched / max(1, len(terms))
+            numeric_terms = [term for term in terms if any(char.isdigit() for char in term)]
+            if numeric_terms and not all(term in haystack for term in numeric_terms):
+                continue
+            item = dict(record)
+            item.setdefault("source_page_url", item.get("url") or image_url)
+            item.setdefault("source_domain", (urlparse(str(item.get("source_page_url") or image_url)).hostname or "").lower())
+            item.setdefault("entity", query[:240])
+            item["match_confidence"] = round(max(float(item.get("match_confidence") or 0.0), confidence), 3)
+            item["relevance"] = round(max(float(item.get("relevance") or 0.0), confidence), 3)
+            if confidence >= 0.35 or not terms:
+                ranked.append((confidence, item))
+        ranked.sort(key=lambda pair: (-pair[0], str(pair[1].get("title") or "").lower()))
+        return [item for _, item in ranked[: max(1, min(4, limit))]]
+
     def action_image_search(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
         query = str(inputs.get("query") or inputs.get("topic") or "").strip()
         limit = max(1, min(int(inputs.get("max_results", inputs.get("limit", 8))), 20))
         if not query:
             return {"success": False, "error": "query is required", "image_results": [], "provider": "free_image_research"}
-        # Preserve the injectable provider seam for deterministic tests and local integrations;
-        # no paid or Bing implementation is retained here.
+        # Preserve the injectable provider seam for deterministic tests and local integrations.
         if self.image_search_provider is not None:
             try:
                 records = self.image_search_provider.search(query, limit=limit)
-                candidates = []
-                for record in records or []:
-                    if not isinstance(record, dict):
-                        continue
-                    image_url = str(record.get("image_url") or record.get("thumbnail_url") or "")
-                    if not image_url.lower().startswith(("http://", "https://")):
-                        continue
-                    candidates.append(record)
-                return {"success": bool(candidates), "query": query, "image_results": candidates[:limit], "results": candidates[:limit], "provider": "injected_free_provider", "error": None if candidates else "Injected image provider returned no usable public candidates"}
+                candidates = self._rank_image_candidates(query, records, limit)
+                return {"success": bool(candidates), "query": query, "mode": ResearchMode.IMAGE_SEARCH.value, "image_results": candidates[:limit], "results": candidates[:limit], "provider": "injected_free_provider", "error": None if candidates else "Injected image provider returned no exact-enough public candidates"}
             except Exception as error:
-                return {"success": False, "query": query, "image_results": [], "results": [], "provider": "injected_free_provider", "error": str(error)}
-        outcome = self.image_research.search_text(query, limit=limit)
-        return {"success": outcome.success, "query": query, "image_results": outcome.candidates, "results": outcome.candidates, "provider": outcome.provider, "error": outcome.error}
+                return {"success": False, "query": query, "mode": ResearchMode.IMAGE_SEARCH.value, "image_results": [], "results": [], "provider": "injected_free_provider", "error": str(error)}
+        outcome = self.web_adapter.search_images(query, limit=min(4, limit))
+        candidates = self._rank_image_candidates(query, outcome.results, limit)
+        return {"success": bool(candidates), "query": query, "mode": ResearchMode.IMAGE_SEARCH.value, "image_results": candidates, "results": candidates, "provider": outcome.provider, "attempts": outcome.attempts, "errors": outcome.errors, "error": None if candidates else (outcome.errors[-1] if outcome.errors else "No exact-enough public image candidates were verified")}
 
     def action_search_web(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
         query = str(inputs.get("query", "")).strip()
@@ -1364,11 +1450,170 @@ class ResearchCapability(Capability):
         )
         return normalized
 
+    def action_deep_research(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        topic = str(inputs.get("topic") or inputs.get("query") or "").strip()
+        if not topic:
+            return {"success": False, "error": "topic is required", "mode": ResearchMode.DEEP_RESEARCH.value}
+        limits = ResearchLimits.from_inputs(inputs, deep=True)
+        started = time.monotonic()
+        context = dict(inputs.get("context") or {}) if isinstance(inputs.get("context"), dict) else {}
+        context.setdefault("site_constraint", str(inputs.get("site_constraint") or ""))
+        queries = DeepResearchCoordinator.build_queries(topic, context=context, max_queries=limits.max_queries)
+        errors: List[str] = []
+        pages: List[WebPage] = []
+        facts: List[Fact] = []
+        sources: List[Dict[str, Any]] = []
+        seen_urls: set[str] = set()
+        seen_queries: set[str] = set()
+        provider_attempts: List[Dict[str, Any]] = []
+        follow_up_queries: List[str] = []
+
+        def exhausted() -> bool:
+            return (time.monotonic() - started) >= limits.max_duration_seconds or len(pages) >= limits.max_pages
+
+        def collect(query: str, depth: int) -> None:
+            if exhausted() or query in seen_queries:
+                return
+            seen_queries.add(query)
+            self._publish_event("research.phase", {"mode": ResearchMode.DEEP_RESEARCH.value, "phase": "SEARCHING", "query_count": len(seen_queries), "depth": depth})
+            search = self.action_search_web({
+                "query": query,
+                "normalized_query": query,
+                "site_constraint": context.get("site_constraint") or inputs.get("site_constraint") or "",
+                "allowed_domains": inputs.get("allowed_domains") or context.get("allowed_domains") or [],
+                "max_results": min(limits.max_sources, max(3, limits.max_pages)),
+                "mode": ResearchMode.DEEP_RESEARCH.value,
+            })
+            if not isinstance(search, dict):
+                errors.append("Search returned an invalid response")
+                return
+            errors.extend(str(item) for item in search.get("errors", []) if item)
+            if isinstance(search.get("attempts"), list):
+                provider_attempts.extend(search["attempts"])
+            results = search.get("results") if isinstance(search.get("results"), list) else []
+            for raw_result in results:
+                if exhausted():
+                    return
+                if not isinstance(raw_result, dict):
+                    continue
+                url = canonicalize_url(raw_result.get("url") or raw_result.get("source_url"))
+                if not url or url in seen_urls:
+                    continue
+                seen_urls.add(url)
+                self._publish_event("research.phase", {"mode": ResearchMode.DEEP_RESEARCH.value, "phase": "READING", "source_count": len(sources), "depth": depth})
+                page_response = self.action_read_page({"url": url})
+                if not page_response.get("success"):
+                    errors.append(str(page_response.get("error") or f"Failed to read {url}"))
+                    continue
+                page = self._dict_page(page_response.get("page"))
+                if page is None:
+                    errors.append(f"Invalid page result for {url}")
+                    continue
+                pages.append(page)
+                quality_raw = self._invoke("evaluate", page=page.to_dict(), query=topic)
+                quality = quality_raw if isinstance(quality_raw, dict) else _jsonable(quality_raw)
+                sources.append({"search_result": raw_result, "page": page.to_dict(), "quality": quality, "query": query, "depth": depth})
+                facts_raw = self._invoke("facts", page=page.to_dict(), query=topic, source_quality=quality, max_facts=8)
+                if isinstance(facts_raw, list):
+                    for item in facts_raw:
+                        if isinstance(item, Fact):
+                            facts.append(item)
+                        elif isinstance(item, dict):
+                            try:
+                                facts.append(self._dict_fact(item))
+                            except Exception:
+                                continue
+                if len(pages) >= limits.max_pages:
+                    return
+
+        for query in queries[: limits.max_queries]:
+            collect(query, 0)
+            if exhausted():
+                break
+
+        covered_text = " ".join(fact.claim for fact in facts[:20])
+        if not exhausted() and len(seen_queries) < limits.max_queries:
+            follow_up_queries = DeepResearchCoordinator.choose_follow_up_queries(topic, covered_text=covered_text, max_queries=min(2, limits.max_queries - len(seen_queries)))
+            for query in follow_up_queries:
+                collect(query, 1)
+                if exhausted():
+                    break
+
+        deduped_facts: List[Fact] = []
+        seen_claims: set[tuple[str, str]] = set()
+        for fact in facts:
+            key = (re.sub(r"\W+", " ", fact.claim.lower()).strip(), canonicalize_url(fact.source_url))
+            if key in seen_claims:
+                continue
+            seen_claims.add(key)
+            deduped_facts.append(fact)
+        facts = deduped_facts
+        cross_raw = self._invoke("cross_reference", facts=[fact.to_dict() for fact in facts], claims_to_check=[topic])
+        cross = cross_raw if isinstance(cross_raw, dict) else _jsonable(cross_raw)
+        citations_raw = self._invoke("citations", facts=[fact.to_dict() for fact in facts])
+        citations = citations_raw if isinstance(citations_raw, list) else []
+        conflicts = list(cross.get("conflicting_claims", [])) if isinstance(cross, dict) else []
+        uncertainty = list(cross.get("uncertainty", [])) if isinstance(cross, dict) else []
+        if errors:
+            uncertainty.append("Some providers or pages failed; this is a bounded partial result.")
+        domains = {fact.source_url and (urlparse(fact.source_url).hostname or "").lower() for fact in facts}
+        if len({domain for domain in domains if domain}) < 2:
+            uncertainty.append("Independent source diversity remained limited.")
+        confidence = float(cross.get("confidence", 0.0)) if isinstance(cross, dict) else 0.0
+        if not confidence and facts:
+            confidence = min(0.75, max(float(fact.confidence or 0.0) for fact in facts))
+        if conflicts:
+            confidence = min(confidence, 0.5)
+        if not facts:
+            stopping_reason = "no readable evidence remained"
+        elif exhausted():
+            stopping_reason = "time or page budget reached"
+        elif follow_up_queries:
+            stopping_reason = "evidence gaps were followed up within the bounded budget"
+        else:
+            stopping_reason = "core evidence covered or no high-value evidence gap detected"
+        answer = "Based on the retrieved sources: " + " ".join(fact.claim for fact in facts[:5]) if facts else "Insufficient readable evidence was retrieved to answer this question."
+        result = ResearchResult(
+            topic=topic,
+            answer=answer,
+            key_findings=[fact.to_dict() for fact in facts],
+            supporting_evidence=[fact.to_dict() for fact in facts],
+            sources=sources,
+            citations=citations,
+            conflicts=conflicts,
+            uncertainty=list(dict.fromkeys(uncertainty)),
+            confidence=round(max(0.0, min(1.0, confidence)), 3),
+            errors=list(dict.fromkeys(errors)),
+            partial=bool(errors or not pages),
+        )
+        data = result.to_dict()
+        data.update({
+            "research_mode": ResearchMode.DEEP_RESEARCH.value,
+            "queries": list(seen_queries),
+            "follow_up_queries": follow_up_queries,
+            "limits": limits.to_dict(),
+            "stopping_reason": stopping_reason,
+            "pages_visited": len(pages),
+            "source_count": len(sources),
+            "provider_attempts": provider_attempts,
+            "elapsed_seconds": round(time.monotonic() - started, 3),
+        })
+        self._publish_event("research.phase", {"mode": ResearchMode.DEEP_RESEARCH.value, "phase": "SYNTHESIZING", "source_count": len(sources), "page_count": len(pages)})
+        self._publish_event("research.completed" if facts else "research.partial_or_failed", {"topic": topic[:200], "mode": ResearchMode.DEEP_RESEARCH.value, "query_count": len(seen_queries), "source_count": len(sources), "page_count": len(pages), "fact_count": len(facts), "partial": result.partial, "stopping_reason": stopping_reason})
+        return {"success": bool(facts), "data": data, "errors": result.errors, "mode": ResearchMode.DEEP_RESEARCH.value, "message": answer}
+
     def action_research_topic(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
         topic = str(inputs.get("topic") or inputs.get("query") or "").strip()
         if not topic:
             return {"success": False, "error": "topic is required"}
+        mode = ResearchMode.coerce(inputs.get("mode"), topic)
+        if mode == ResearchMode.DEEP_RESEARCH:
+            return self.action_deep_research({**inputs, "topic": topic, "mode": mode.value})
+        if mode == ResearchMode.IMAGE_SEARCH:
+            image_data = self.action_image_search({**inputs, "query": topic, "mode": mode.value})
+            return {"success": bool(image_data.get("image_results")), "data": image_data, "mode": mode.value, "message": image_data.get("error") or f"Image search completed for {topic}."}
         max_sources = max(1, min(int(inputs.get("max_sources", 5)), 10))
+
         shopping = normalize_shopping_query(topic, region=str(inputs.get("region") or ""))
         product_query = _is_product_query(topic) or bool(shopping.requested_domain) or bool(shopping.ranking)
         search_query = shopping.normalized_query if product_query else topic

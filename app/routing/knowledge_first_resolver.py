@@ -353,14 +353,17 @@ class KnowledgeFirstResolver:
     ) -> ResolutionResult:
         """Invoke the one registered research capability through CapabilityRouter."""
         research_context = dict(context or {})
+        research_mode = self._research_mode_for(query, routing_metadata)
         research_context.update(
             {
                 "capability_action": self._research_action_for(query, routing_metadata),
+                "mode": research_mode,
                 "topic": query,
                 "claim": self._claim_from_query(query),
                 "routing_metadata": routing_metadata,
             }
         )
+
         try:
             result = self._capability_router.execute_named(
                 "research_capability",
@@ -392,7 +395,20 @@ class KnowledgeFirstResolver:
         )
 
     @staticmethod
+    def _research_mode_for(query: str, routing_metadata: Dict[str, Any]) -> str:
+        import re
+
+        value = str(query or "").lower()
+        explicit_image = re.search(r"\b(?:show|give\s+me|fetch|send)\b.{0,50}\b(?:photo(?:s)?|picture(?:s)?|image(?:s)?)\b", value) or re.search(r"\bfind\b.{0,60}\b(?:photo(?:s)?|picture(?:s)?|image(?:s)?)\s+of\b", value) or re.search(r"\b(?:photo(?:s)?|picture(?:s)?|image(?:s)?)\s+of\b", value) or re.search(r"\bwhat does .* look like\b", value)
+        if explicit_image and not re.search(r"\bphoto\s+printer\b", value):
+            return "IMAGE_SEARCH"
+        if re.search(r"\b(?:deeply|in depth|deep research|investigate|thoroughly|multi[- ]source|comprehensively)\b", value):
+            return "DEEP_RESEARCH"
+        return "FAST_SEARCH"
+
+    @staticmethod
     def _research_action_for(query: str, routing_metadata: Dict[str, Any]) -> str:
+
         query_lower = query.lower()
         if routing_metadata.get("explicit_research_request") and any(
             phrase in query_lower for phrase in ("verify", "fact check", "fact-check")

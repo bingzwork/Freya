@@ -142,7 +142,7 @@ def _vision_context(workspace, paths, question):
 def _has_supplied_identity(question):
     return bool(re.search(r"\bof\s+(?:[\"']([^\"']+)[\"']|([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3}))",question)) or bool(re.search(r"\b(?:named|called|name is)\s+[A-Za-z][A-Za-z -]{1,60}",question,re.I))
 
-IMAGE_SEARCH_RE = re.compile(r"\b(?:find|search|show|look\s+for|give\s+me|want|fetch)\b.{0,80}\b(?:photo(?:['’]?s)?|picture(?:s)?|image(?:s)?)\b|\b(?:photo(?:['’]?s)?|picture(?:s)?|image(?:s)?)\b.{0,80}\b(?:of|for)\b", re.I)
+IMAGE_SEARCH_RE = re.compile(r"\b(?:show|give\s+me|want|fetch|send)\b.{0,50}\b(?:photo(?:['’]?s)?|picture(?:s)?|image(?:s)?)\b|\bfind\b.{0,60}\b(?:photo(?:['’]?s)?|picture(?:s)?|image(?:s)?)\s+of\b|\b(?:photo(?:['’]?s)?|picture(?:s)?|image(?:s)?)\s+of\b|\bwhat\s+does\b.{0,60}\blook\s+like\b", re.I)
 FACEBOOK_FOLLOWUP_RE = re.compile(r"\b(?:facebook|fb)\b", re.I)
 
 def _is_image_search_request(question):
@@ -218,12 +218,19 @@ def _research_text_request(question):
     return result,data
 
 
-def _image_search_query(question):
-    query=" ".join(str(question or "").strip().split())
-    query=re.sub(r"^\s*(?:please\s+)?(?:find|search|show|look\s+for|give\s+me|fetch|want)\s+(?:me\s+)?", "", query, flags=re.I)
+def _image_search_query(question, resolve_followup=True):
+    original=" ".join(str(question or "").strip().split())
+    query=re.sub(r"^\s*(?:please\s+)?(?:find|search|show|look\s+for|give\s+me|fetch|want)\s+(?:me\s+)?", "", original, flags=re.I)
     query=re.sub(r"\b(?:photo(?:['’]?s)?|pictures?|images?)\b", "", query, flags=re.I)
+    query=re.sub(r"^\s*(?:a|an|the)\s+", "", query, flags=re.I)
     query=re.sub(r"^\s*(?:of|for)\s+", "", query, flags=re.I)
-    return re.sub(r"\s+", " ", query).strip(" .?!\t\r\n")
+    query=re.sub(r"\s+\bof\b\s+", " ", query, flags=re.I)
+    query=re.sub(r"\s+", " ", query).strip(" .?!\t\r\n")
+    if resolve_followup and re.search(r"\b(?:another|that one|the first one|the second one|it|this one|the same)\b", original, re.I):
+        subject=_recent_image_subject()
+        if subject:
+            return subject
+    return query
 
 def _bounded_call(function, timeout_seconds, *args, **kwargs):
     executor=ThreadPoolExecutor(max_workers=1, thread_name_prefix="freya-foreground")
@@ -299,7 +306,7 @@ def _recent_image_subject():
         for turn in reversed(history or []):
             content=str(turn.get("content") or "") if isinstance(turn,dict) else str(getattr(turn,"content",""))
             if _is_image_search_request(content):
-                subject=_image_search_query(content)
+                subject=_image_search_query(content, resolve_followup=False)
                 if subject: return subject
     except Exception:
         pass
@@ -359,7 +366,9 @@ def _known_product_image_followup(question, session_id):
     state=_get_shopping_state(session_id)
     winner=state.get("winner") if isinstance(state,dict) else None
     if not isinstance(winner,dict):
-        if state.get("active_topic"):
+        requested = _image_search_query(question, resolve_followup=False)
+        vague_followup = not requested or requested.lower() in {"another", "that one", "the first one", "the second one", "it", "this one", "the same", "cheapest one", "the cheapest one", "cheapest", "selected one", "the winner", "winner", "the printer", "the product"}
+        if state.get("active_topic") and vague_followup:
             site=state.get("site_constraint")
             return f"I do not have a verified product winner from the previous {site + ' ' if site else ''}search, so I cannot retrieve an exact product photo yet. I did not substitute a generic image.", []
         return None, []
@@ -394,7 +403,7 @@ def _shopping_followup_without_winner(question, state):
 def _is_shopping_research_request(question):
     normalized=" ".join(str(question or "").lower().split())
     return bool(re.search(
-        r"\b(?:cheapest|cheap|affordable|lowest\s+price|price\s+comparison|compare\s+prices?|shopping|product(?:s)?|listing(?:s)?|availability|available|buy|purchase|reviews?|what\s+are\s+people\s+saying)\b",
+        r"\b(?:cheapest|cheap|affordable|lowest\s+price|price\s+comparison|compare\s+prices?|shopping|product(?:s)?|listing(?:s)?|availability|available|buy|purchase|reviews?|what\s+are\s+people\s+saying|shopee|lazada|only\s+on|marketplace)\b",
         normalized,
     ))
 
@@ -788,7 +797,10 @@ class Handler(BaseHTTPRequestHandler):
                 elif research_requested and not (image_search_requested and self._active_shopping_state.get("active_topic")):
                         research_result,research_data=_research_text_request(message)
                         research_data=getattr(research_result,"data",None) if isinstance(getattr(research_result,"data",None),dict) else {}
-                        if _is_shopping_research_request(message) or research_data.get("shopping_query") or research_data.get("product_candidates"):
+                        shopping_payload = research_data.get("shopping_query") if isinstance(research_data.get("shopping_query"), dict) else {}
+                        is_product_result = bool(research_data.get("product_candidates") or research_data.get("candidates") or research_data.get("winner"))
+                        is_constrained_shopping = bool(shopping_payload.get("requested_domain") or shopping_payload.get("ranking"))
+                        if _is_shopping_research_request(message) or is_product_result or is_constrained_shopping:
                             from app.research.capability import normalize_shopping_query
                             research_data.setdefault("shopping_query", normalize_shopping_query(message).to_dict())
                             self._active_shopping_state=_shopping_state_from_research(research_data,self._active_shopping_state)
