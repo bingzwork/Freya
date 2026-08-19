@@ -362,10 +362,10 @@ def _reverse_image_search_with_attachments(question, attachments):
     finally:
         emit_avatar("THINKING",activity="result_synthesis")
 
-def _image_search_by_text(question):
+def _image_search_by_text(question, query_override=""):
     router=getattr(getattr(getattr(FREYA,"system",None),"facade",None),"_router",None)
     if router is None: raise RuntimeError("Image-search routing is unavailable because the canonical router is not initialized")
-    query=_image_search_query(question)
+    query=str(query_override or _image_search_query(question)).strip()
     if not query:
         return CapabilityResult(success=False,data={"image_results":[]},message="I couldn't determine what subject to search for in the image request.",capability_name="research_capability")
     return _bounded_call(router.execute_capability,25.0,"research_capability",query,capability_action="image_search",max_results=8,original_request=question)
@@ -487,7 +487,7 @@ def _attachment_block(path):
         return "Attached media inspection:\n"+json.dumps(header,ensure_ascii=False,indent=2)
     header["capability_route"]="document/file input"; return "Attached document:\n"+json.dumps(header,ensure_ascii=False,indent=2)+"\n\nDocument content:\n"+_document_text(path)
 
-def attachment_context(workspace,paths,question="",inputs_return_meta=False):
+def attachment_context(workspace,paths,question="",inputs_return_meta=False,allow_vision=True):
     if not isinstance(paths,list): return ("",{"processed":False}) if inputs_return_meta else ""
     root=(workspace/"data"/"ui_uploads").resolve(); blocks=[]
     for raw in paths[:8]:
@@ -498,7 +498,7 @@ def attachment_context(workspace,paths,question="",inputs_return_meta=False):
             if path.suffix.lower() in IMAGE_EXTENSIONS: continue
             blocks.append(_attachment_block(path))
         except (OSError,UnicodeError,ValueError) as exc: blocks.append(f"Attached file could not be read: {exc}")
-    visual,meta=_vision_context(workspace,paths,question) if _image_paths(workspace,paths) else ("",{"processed":False})
+    visual,meta=_vision_context(workspace,paths,question) if allow_vision and _image_paths(workspace,paths) else ("",{"processed":False})
     combined="\n\n".join(blocks)+visual
     return (combined,meta) if inputs_return_meta else combined
 
@@ -729,17 +729,17 @@ class Handler(BaseHTTPRequestHandler):
                 session_id=str(payload.get("session_id") or UI_SESSION_ID)
                 request_context=RequestContext.create(message,session_id=session_id,attachments=attachments,source="user",channel="web",metadata={"content_type":self.headers.get("Content-Type","application/json")})
                 self._active_trace_id=request_context.trace_id; self._active_chat_message=message; self._active_request_context=request_context.to_dict(); self._active_exchange_recorded=False; self._active_shopping_state=_get_shopping_state(session_id)
-                semantic_model = RequestSemanticAnalyzer.analyze(message, context={"shopping_state": self._active_shopping_state})
+                semantic_model = RequestSemanticAnalyzer.analyze(message, context={"shopping_state": self._active_shopping_state, "attachment_paths": attachments, "recent_image_entity": _recent_image_subject() if attachments or re.search(r"\b(?:another|more|again|her|him|it|this one|same)\b", message, re.I) else ""})
                 task_semantic = ResearchTaskSemanticAnalyzer.analyze(message)
                 if not message and not attachments: self.send_payload(400,{"error":"Write a message or attach a file first."}); return
-                context,vision_meta=attachment_context(self.workspace,attachments,message,inputs_return_meta=True); privacy,blocked=_privacy_response(message,context)
+                context,vision_meta=attachment_context(self.workspace,attachments,message,inputs_return_meta=True,allow_vision=bool(semantic_model.requires_vision)); privacy,blocked=_privacy_response(message,context)
                 social_response=_direct_social_response(message) if not attachments and not blocked else None
                 if social_response is not None:
                     emit_avatar("SPEAKING",activity="conversation")
                     self.send_payload(200,{"answer":social_response,"image_results":[],"vision_observations":{},"research_queries":[]})
                     emit_avatar("IDLE",activity="conversation_complete")
                     return
-                reverse_image_requested=_is_reverse_image_request(message) and bool(attachments)
+                reverse_image_requested=bool(semantic_model.requires_reverse_image_search or (_is_reverse_image_request(message) and bool(attachments)))
                 if blocked:
                     emit_avatar("SPEAKING",activity="privacy_response"); self.send_payload(200,{"answer":privacy}); emit_avatar("SUCCESS"); emit_avatar("IDLE"); return
                 if not attachments and task_semantic.requires_task:
@@ -766,7 +766,7 @@ class Handler(BaseHTTPRequestHandler):
                 research_data={}
                 if research_requested: emit_avatar("SEARCHING",activity="research")
                 emit_avatar("THINKING",activity="routing")
-                if vision_meta.get("processed") and context:
+                if vision_meta.get("processed") and context and semantic_model.requires_vision:
                     if reverse_image_requested:
                         research_result=_reverse_image_search_with_attachments(message,attachments)
                         research_data=getattr(research_result,"data",None) if isinstance(getattr(research_result,"data",None),dict) else {}
@@ -774,7 +774,7 @@ class Handler(BaseHTTPRequestHandler):
                         answer=format_capability_result(research_result) if getattr(research_result,"success",False) else str(getattr(research_result,"error",None) or getattr(research_result,"message",None) or "Free reverse-image research returned no usable public candidates.")
                     else:
                         answer=str(vision_meta.get("text") or context.split("[END VISUAL CONTEXT]")[0]).replace("[GROUNDed VISUAL CONTEXT FROM VISIONCAPABILITY]","").strip()
-                elif attachments and not reverse_image_requested:
+                elif attachments and not reverse_image_requested and not semantic_model.requires_image_search and not semantic_model.requires_image_edit and semantic_model.intent not in {ResearchIntent.TECHNICAL_COMPARISON.value, ResearchIntent.PRODUCT_COMPARISON.value, ResearchIntent.SHOPPING_PRICE_SEARCH.value, ResearchIntent.SHOPPING_DISCOVERY.value}:
                     attachment_paths=_attachment_paths(self.workspace,attachments)
                     if not attachment_paths:
                         answer="The attached file could not be read from Freya’s approved local upload area."
@@ -814,6 +814,15 @@ class Handler(BaseHTTPRequestHandler):
                                     answer=str((raw.get("error") or raw.get("message")) if isinstance(raw,dict) else (getattr(raw,"error",None) or getattr(raw,"message",None)) or "The attached file could not be processed.")
                         else:
                             answer="Attachment processing is unavailable because the canonical router is not initialized."
+                elif semantic_model.requires_image_edit:
+                    router = getattr(getattr(getattr(FREYA, "system", None), "facade", None), "_router", None)
+                    image_path = next(iter(_image_paths(self.workspace, attachments)), None)
+                    if router is None or image_path is None:
+                        answer = "I recognized an image-edit request, but no approved image-edit route is available for this attachment."
+                    else:
+                        emit_avatar("THINKING", activity="image_edit")
+                        raw_edit = _bounded_call(_execute_named_capability, 60.0, router, "image", message, capability_action="remove_background" if "background" in message.lower() else "edit", path=str(image_path), image_path=str(image_path), original_request=message)
+                        answer = format_capability_result(raw_edit) if getattr(raw_edit, "success", False) else str(getattr(raw_edit, "message", None) or getattr(raw_edit, "error", None) or (raw_edit.get("message") if isinstance(raw_edit, dict) else None) or "The image-edit request could not be completed.")
                 elif browser_answer is not None:
                     answer = browser_answer
                     research_data = browser_data if isinstance(browser_data, dict) else {}
@@ -848,13 +857,16 @@ class Handler(BaseHTTPRequestHandler):
                         image_results=known_images
                     else:
                         global LAST_IMAGE_SUBJECT
-                        LAST_IMAGE_SUBJECT = _image_search_query(message)
-                        image_result = _image_search_by_text(message)
+                        entity_query = ""
+                        if isinstance(semantic_model.resolved_entities, list) and semantic_model.resolved_entities:
+                            entity_query = str((semantic_model.resolved_entities[0] or {}).get("canonical") or "").strip() if isinstance(semantic_model.resolved_entities[0], dict) else str(semantic_model.resolved_entities[0]).strip()
+                        LAST_IMAGE_SUBJECT = entity_query or _image_search_query(message)
+                        image_result = _image_search_by_text(message, query_override=LAST_IMAGE_SUBJECT)
                         image_data = getattr(image_result, "data", None) if isinstance(getattr(image_result, "data", None), dict) else {}
                         raw_images = image_data.get("image_results", []) if isinstance(image_data, dict) else []
                         image_results = _dedupe_image_results(raw_images)
                         if image_results:
-                            answer = f"I found public image results for {_image_search_query(message)}."
+                            answer = f"I found public image results for {LAST_IMAGE_SUBJECT or _image_search_query(message)}."
                         else:
                             answer = str(getattr(image_result, "message", "") or "I searched the public web, but the available image-search providers returned no usable image results.")
                 elif research_requested:
@@ -879,7 +891,8 @@ class Handler(BaseHTTPRequestHandler):
                         composed += "\n\n[ROUTING INSTRUCTION] Preserve the complete user request when selecting or composing downstream capability queries. Never use only the first command verb as a search query. Use visual context only as grounded evidence."
                     self._active_exchange_recorded=True
                     answer=_bounded_call(FREYA.system.facade.chat, DIRECT_CHAT_TIMEOUT_SECONDS, composed, context={**request_context.to_dict(),"original_request":message,"attachment_paths":attachments,"visual_context":context,"has_images":False,"research_requested":research_requested})
-                emit_avatar("SPEAKING",activity="response"); self.send_payload(200,{"answer":answer,"image_results":image_results,"vision_observations":vision_meta.get("observations",{}) if isinstance(vision_meta,dict) else {},"research_queries":research_data.get("queries",[]) if isinstance(research_data,dict) else []}); emit_avatar("SUCCESS"); emit_avatar("IDLE")
+                emit_avatar("SPEAKING",activity="response");                 self.send_payload(200,{"answer":answer,"image_results":image_results,"vision_observations":vision_meta.get("observations",{}) if isinstance(vision_meta,dict) else {},"research_queries":research_data.get("queries",[]) if isinstance(research_data,dict) else [],"multimodal_semantic":semantic_model.to_dict()}); emit_avatar("SUCCESS"); emit_avatar("IDLE")
+
             except (BrokenPipeError,ConnectionResetError,ConnectionAbortedError): emit_avatar("IDLE")
             except Exception as error:
                 if getattr(self,"_active_trace_id",None):

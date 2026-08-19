@@ -87,6 +87,17 @@ class RequestSemanticModel:
     query: str = ""
     confidence: float = 0.0
     reasoning: List[str] = field(default_factory=list)
+    input_modalities: List[str] = field(default_factory=list)
+    requested_operation: str = "answer"
+    attachment_role: str = "UNKNOWN"
+    entity_source: str = ""
+    resolved_entities: List[Dict[str, Any]] = field(default_factory=list)
+    requires_vision: bool = False
+    requires_web_search: bool = False
+    requires_image_search: bool = False
+    requires_reverse_image_search: bool = False
+    requires_image_edit: bool = False
+    requires_shopping: bool = False
 
     @property
     def is_follow_up(self) -> bool:
@@ -227,7 +238,7 @@ class RequestSemanticAnalyzer:
             reasoning.append("named entity and complete operation make the request self-contained")
 
         confidence = 0.92 if comparison or news or image or verify else 0.82 if shopping or review or spec else 0.68
-        return RequestSemanticModel(
+        model = RequestSemanticModel(
             intent=intent,
             execution_mode=execution_mode,
             entities=entities,
@@ -246,6 +257,114 @@ class RequestSemanticAnalyzer:
             confidence=confidence,
             reasoning=reasoning,
         )
+        return cls._apply_multimodal(model, text, context)
+
+    @classmethod
+    def _apply_multimodal(cls, model: RequestSemanticModel, text: str, context: Dict[str, Any]) -> RequestSemanticModel:
+        modalities = list(context.get("input_modalities") or [])
+        if not modalities:
+            paths = context.get("attachment_paths") or context.get("attachments") or []
+            for raw in paths if isinstance(paths, list) else []:
+                suffix = str(raw).lower().rsplit(".", 1)[-1] if "." in str(raw) else ""
+                if suffix in {"jpg", "jpeg", "png", "webp", "gif", "bmp"}:
+                    modalities.append("image")
+                elif suffix in {"mp3", "wav", "m4a", "flac"}:
+                    modalities.append("audio")
+                elif suffix in {"mp4", "mov", "webm"}:
+                    modalities.append("video")
+                elif suffix:
+                    modalities.append("document")
+        modalities = list(dict.fromkeys(str(item).lower() for item in modalities if item))
+        has_image = "image" in modalities
+        lower = text.lower()
+        reverse = bool(re.search(r"\b(?:reverse\s+image|find\s+(?:where|the\s+original\s+source)|where\s+(?:did|is)\s+this\s+(?:image|picture|photo)|find\s+this\s+image)\b", lower))
+        similar = bool(re.search(r"\bfind\s+(?:similar|similars?)\b|\bsimilar\s+(?:images?|pictures?|photos?)\b", lower))
+        edit = bool(re.search(r"\b(?:remove|change|replace|blur|crop|resize|rotate|edit|enhance)\b.{0,40}\b(?:background|image|photo|picture|it|this)\b", lower))
+        ocr = bool(re.search(r"\b(?:read|extract|ocr|transcribe)\b.{0,50}\b(?:text|words|writing|sign|screenshot|image|photo|document)\b", lower))
+        describe = bool(re.search(r"\b(?:describe|what does this (?:image|photo|picture) show|what is in this)\b", lower))
+        visual_question = bool(re.search(r"\b(?:what color|what is (?:she|he|it) wearing|how many|is this|does this|where is the|what does the)\b", lower))
+        show_more = bool(re.search(r"\b(?:show|find|give|send|fetch)\b.{0,60}\b(?:more|another|other|photos?|pictures?|images?)\b", lower) or re.search(r"\b(?:photos?|pictures?|images?)\s+of\b", lower))
+        if re.search(r"\bphoto\s+printer\b", lower):
+            show_more = False
+        comparison = bool(cls._COMPARISON_RE.search(text))
+        shopping = bool(cls._SHOPPING_RE.search(text) or cls._SITE_RE.search(text))
+        current = bool(cls._LATEST_RE.search(text) or cls._NEWS_RE.search(text))
+        deep = bool(cls._DEEP_RE.search(text))
+        explicit_user_entities = cls._extract_user_provided_entities(text)
+        user_entities = list(explicit_user_entities)
+        recent_candidate = str(context.get("recent_image_entity") or "").strip()
+        recent_entity = recent_candidate if re.search(r"\b(?:another|more|again|her|him|it|this one|same)\b", lower) else ""
+        if not user_entities and recent_entity and re.search(r"\b(?:another|more|again|her|him|it|this one|same)\b", lower):
+            user_entities = [recent_entity]
+        entities = list(dict.fromkeys(list(model.entities) + user_entities))
+        if reverse:
+            model.intent = "REVERSE_IMAGE_SEARCH" if has_image else "REVERSE_IMAGE_SEARCH"
+            model.operation = "find_source"
+            model.output_goal = "image_results"
+        elif similar:
+            model.intent = "SIMILAR_IMAGE_SEARCH"
+            model.operation = "find_similar"
+            model.output_goal = "image_results"
+        elif edit:
+            model.intent = "IMAGE_EDIT"
+            model.operation = "edit"
+            model.output_goal = "edited_image"
+        elif ocr:
+            model.intent = "OCR"
+            model.operation = "extract_text"
+            model.output_goal = "extracted_text"
+        elif describe:
+            model.intent = "IMAGE_DESCRIPTION"
+            model.operation = "describe"
+            model.output_goal = "image_description"
+        elif visual_question:
+            model.intent = "VISION_QA"
+            model.operation = "answer_about"
+            model.output_goal = "visual_answer"
+        elif comparison:
+            model.intent = ResearchIntent.PRODUCT_COMPARISON.value if shopping else ResearchIntent.TECHNICAL_COMPARISON.value
+            model.operation = "compare"
+            model.output_goal = "comparison"
+        elif show_more:
+            model.intent = ResearchIntent.IMAGE_SEARCH.value
+            model.operation = "find_more_photos" if re.search(r"\bmore|another|other\b", lower) else "search_images"
+            model.output_goal = "image_results"
+        elif current:
+            model.intent = ResearchIntent.NEWS_RESEARCH.value
+            model.operation = "summarize"
+        elif deep:
+            model.intent = ResearchIntent.DEEP_RESEARCH.value
+            model.operation = "research"
+        model.requested_operation = model.operation
+        model.entities = entities[:6]
+        model.entity_source = "USER_PROVIDED" if explicit_user_entities else ("CONVERSATION_CONTEXT" if recent_entity else "")
+        model.resolved_entities = [{"raw": item, "canonical": item, "source": model.entity_source or "CONTEXT"} for item in entities]
+        model.requires_image_search = bool(show_more and not reverse and not similar)
+        model.requires_reverse_image_search = reverse
+        model.requires_image_edit = edit
+        model.requires_shopping = bool(shopping and model.intent in {ResearchIntent.SHOPPING_DISCOVERY.value, ResearchIntent.SHOPPING_PRICE_SEARCH.value, ResearchIntent.PRODUCT_COMPARISON.value})
+        model.requires_web_search = bool(current or deep or comparison or shopping or model.requires_image_search)
+        if modalities:
+            model.input_modalities = modalities
+            model.image = has_image or model.image
+            model.attachment_role = "SEARCH_SEED" if reverse or similar else "EDIT_TARGET" if edit else "DOCUMENT_SOURCE" if "document" in modalities and not has_image else "REFERENCE_CONTEXT" if (show_more or comparison or shopping or current or deep) else "PRIMARY_SUBJECT"
+            model.requires_vision = bool(has_image and (describe or visual_question or ocr or (reverse or similar) and not entities))
+            model.reasoning.append("multimodal operation resolved from explicit text before attachment tool selection")
+        return model
+
+    @staticmethod
+    def _extract_user_provided_entities(text: str) -> List[str]:
+        patterns = [
+            r"\bthis is\s+([A-Z][A-Za-z0-9.-]*(?:\s+[A-Z][A-Za-z0-9.-]*){0,5})",
+            r"\b(?:named|called|name is)\s+([A-Z][A-Za-z0-9.-]*(?:\s+[A-Z][A-Za-z0-9.-]*){0,5})",
+        ]
+        found: List[str] = []
+        for pattern in patterns:
+            for match in re.finditer(pattern, text, flags=re.I):
+                value = re.split(r"\b(?:show|find|compare|and|who|what|with)\b", match.group(1), maxsplit=1, flags=re.I)[0].strip(" .?!,;:")
+                if value and len(value) >= 2:
+                    found.append(value)
+        return list(dict.fromkeys(found))[:4]
 
     @staticmethod
     def _extract_entities(text: str) -> List[str]:
