@@ -98,6 +98,10 @@ class RequestSemanticModel:
     requires_reverse_image_search: bool = False
     requires_image_edit: bool = False
     requires_shopping: bool = False
+    knowledge_improvement_state: str = "LOCAL_UNKNOWN"
+    local_knowledge_confidence: float = 0.0
+    freshness_class: str = "MEDIUM_CHANGE"
+    research_reason: str = ""
 
     @property
     def is_follow_up(self) -> bool:
@@ -642,6 +646,244 @@ class SynthesisEngine:
         if not facts:
             return "I could not verify enough relevant public evidence to answer that reliably."
         return "\n".join(["Here is the answer supported by the relevant sources:", *[f"- {fact.get('claim', '')}" for fact in facts[:5]]])
+
+
+class KnowledgeFreshness(str, Enum):
+    STATIC = "STATIC"
+    LOW_CHANGE = "LOW_CHANGE"
+    MEDIUM_CHANGE = "MEDIUM_CHANGE"
+    HIGH_CHANGE = "HIGH_CHANGE"
+    REALTIME = "REALTIME"
+
+
+class KnowledgeImprovementState(str, Enum):
+    LOCAL_SUFFICIENT_AND_CURRENT = "LOCAL_SUFFICIENT_AND_CURRENT"
+    LOCAL_VALID_BUT_ENRICHABLE = "LOCAL_VALID_BUT_ENRICHABLE"
+    LOCAL_STALE = "LOCAL_STALE"
+    LOCAL_CONFLICTED = "LOCAL_CONFLICTED"
+    LOCAL_INCOMPLETE = "LOCAL_INCOMPLETE"
+    LOCAL_UNKNOWN = "LOCAL_UNKNOWN"
+    OFFLINE_LOCAL_ONLY = "OFFLINE_LOCAL_ONLY"
+
+
+@dataclass
+class LocalKnowledgeSnapshot:
+    query: str
+    claims: List[Dict[str, Any]] = field(default_factory=list)
+    confidence: float = 0.0
+    provenance: List[Dict[str, Any]] = field(default_factory=list)
+    learned_at: str = ""
+    verified_at: str = ""
+    freshness: str = KnowledgeFreshness.MEDIUM_CHANGE.value
+    domain: str = ""
+    source_types: List[str] = field(default_factory=list)
+    retrieval_count: int = 0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class ReconciledClaim:
+    claim: str
+    status: str
+    local_value: str = ""
+    external_value: str = ""
+    local_provenance: Dict[str, Any] = field(default_factory=dict)
+    external_provenance: Dict[str, Any] = field(default_factory=dict)
+    confidence: float = 0.0
+    chosen_interpretation: str = ""
+    reason: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+class KnowledgeImprovementAssessor:
+    """Decide whether a local baseline can materially benefit from research."""
+
+    _FRESHNESS_INTENTS = {
+        ResearchIntent.CURRENT_LOOKUP.value,
+        ResearchIntent.NEWS_RESEARCH.value,
+        ResearchIntent.SHOPPING_DISCOVERY.value,
+        ResearchIntent.SHOPPING_PRICE_SEARCH.value,
+        ResearchIntent.REVIEW_RESEARCH.value,
+        ResearchIntent.SPECIFICATION_LOOKUP.value,
+        ResearchIntent.TECHNICAL_COMPARISON.value,
+        ResearchIntent.PRODUCT_COMPARISON.value,
+    }
+    _ENRICHMENT_TERMS = re.compile(r"\b(?:best|recommend|recommended|options|examples|alternatives|technical|software|model|architecture|scientific|medical|legal|financial|political|market|available|version|release|benchmark|review|compare|explain)\b", re.I)
+
+    @classmethod
+    def freshness_for(cls, semantic: Optional[RequestSemanticModel]) -> str:
+        if semantic is None:
+            return KnowledgeFreshness.MEDIUM_CHANGE.value
+        if semantic.intent in {ResearchIntent.NEWS_RESEARCH.value} or semantic.freshness == FreshnessRequirement.LATEST.value:
+            return KnowledgeFreshness.REALTIME.value
+        if semantic.intent in cls._FRESHNESS_INTENTS or semantic.freshness == FreshnessRequirement.CURRENT_PREFERRED.value:
+            return KnowledgeFreshness.HIGH_CHANGE.value
+        if semantic.intent in {ResearchIntent.FACTUAL_LOOKUP.value, ResearchIntent.PAGE_SUMMARY.value}:
+            return KnowledgeFreshness.LOW_CHANGE.value
+        return KnowledgeFreshness.MEDIUM_CHANGE.value
+
+    @classmethod
+    def build_snapshot(cls, query: str, retrieved: Sequence[Any], semantic: Optional[RequestSemanticModel] = None) -> LocalKnowledgeSnapshot:
+        claims: List[Dict[str, Any]] = []
+        provenance: List[Dict[str, Any]] = []
+        source_types: List[str] = []
+        scores: List[float] = []
+        for item in list(retrieved or [])[:20]:
+            if isinstance(item, dict):
+                content = str(item.get("content") or item.get("text") or item.get("claim") or "").strip()
+                source = str(item.get("source_id") or item.get("source") or "local_memory")
+                score = item.get("score", 0.0)
+                metadata = dict(item.get("metadata") or {})
+            else:
+                content = str(getattr(item, "content", "") or getattr(item, "claim", "") or "").strip()
+                source = str(getattr(item, "source_id", None) or getattr(item, "source", None) or "local_memory")
+                score = getattr(item, "score", 0.0)
+                metadata = dict(getattr(item, "metadata", {}) or {})
+            if not content:
+                continue
+            try:
+                numeric_score = max(0.0, min(1.0, float(score)))
+            except (TypeError, ValueError):
+                numeric_score = 0.0
+            scores.append(numeric_score)
+            source_type = str(metadata.get("source_type") or metadata.get("category") or "LOCAL_MEMORY")
+            source_types.append(source_type)
+            claim = {"claim": content[:1200], "source": source, "score": numeric_score, "metadata": metadata}
+            claims.append(claim)
+            provenance.append({"source": source, "source_type": source_type, "score": numeric_score, "metadata": metadata})
+        return cls._snapshot_from_claims(query, claims, provenance, source_types, scores, semantic)
+
+    @classmethod
+    def _snapshot_from_claims(cls, query, claims, provenance, source_types, scores, semantic):
+        freshness = cls.freshness_for(semantic)
+        learned_dates = [str(item.get("metadata", {}).get(key) or "") for item in claims for key in ("learned_at", "created_at", "updated_at", "verified_at") if item.get("metadata", {}).get(key)]
+        verified_dates = [str(item.get("metadata", {}).get("verified_at") or "") for item in claims if item.get("metadata", {}).get("verified_at")]
+        return LocalKnowledgeSnapshot(
+            query=str(query or ""),
+            claims=claims,
+            confidence=round(sum(scores) / len(scores), 3) if scores else 0.0,
+            provenance=provenance,
+            learned_at=max(learned_dates) if learned_dates else "",
+            verified_at=max(verified_dates) if verified_dates else "",
+            freshness=freshness,
+            domain=(semantic.requested_domain if semantic else ""),
+            source_types=list(dict.fromkeys(source_types)),
+            retrieval_count=len(claims),
+        )
+
+    @classmethod
+    def assess(cls, query: str, semantic: RequestSemanticModel, snapshot: LocalKnowledgeSnapshot, *, external_available: bool = True) -> Dict[str, Any]:
+        if not external_available:
+            state = KnowledgeImprovementState.OFFLINE_LOCAL_ONLY.value if snapshot.claims else KnowledgeImprovementState.LOCAL_UNKNOWN.value
+            return {"state": state, "should_research": False, "reason": "external research is unavailable", "freshness": snapshot.freshness}
+        if not snapshot.claims:
+            return {"state": KnowledgeImprovementState.LOCAL_UNKNOWN.value, "should_research": True, "reason": "no relevant local baseline was retrieved", "freshness": snapshot.freshness}
+        if semantic.intent in cls._FRESHNESS_INTENTS or semantic.freshness in {FreshnessRequirement.CURRENT_PREFERRED.value, FreshnessRequirement.LATEST.value}:
+            state = KnowledgeImprovementState.LOCAL_STALE.value if snapshot.freshness in {KnowledgeFreshness.HIGH_CHANGE.value, KnowledgeFreshness.REALTIME.value} else KnowledgeImprovementState.LOCAL_VALID_BUT_ENRICHABLE.value
+            return {"state": state, "should_research": True, "reason": "request is freshness-sensitive or externally changing", "freshness": snapshot.freshness}
+        if cls._ENRICHMENT_TERMS.search(query) or len(snapshot.claims) < 2:
+            return {"state": KnowledgeImprovementState.LOCAL_VALID_BUT_ENRICHABLE.value, "should_research": True, "reason": "external evidence can materially improve depth, alternatives, context, or confidence", "freshness": snapshot.freshness}
+        return {"state": KnowledgeImprovementState.LOCAL_SUFFICIENT_AND_CURRENT.value, "should_research": False, "reason": "local evidence is sufficient for this stable request", "freshness": snapshot.freshness}
+
+
+class KnowledgeReconciler:
+    """Reconcile local claims with external facts without treating recency as truth."""
+
+    @staticmethod
+    def _text(value: Any) -> str:
+        return re.sub(r"\s+", " ", str(value or "")).strip()
+
+    @staticmethod
+    def _tokens(value: str) -> set[str]:
+        return {token for token in re.findall(r"[a-z0-9]+", value.lower()) if len(token) >= 3}
+
+    @classmethod
+    def _similarity(cls, left: str, right: str) -> float:
+        a, b = cls._tokens(left), cls._tokens(right)
+        return len(a & b) / max(1, len(a | b))
+
+    @classmethod
+    def _external_record(cls, item: Any) -> Dict[str, Any]:
+        raw = item.to_dict() if hasattr(item, "to_dict") else dict(item or {}) if isinstance(item, dict) else {}
+        return {"claim": cls._text(raw.get("claim") or raw.get("evidence") or raw.get("content")), "source_url": cls._text(raw.get("source_url") or raw.get("url")), "source_title": cls._text(raw.get("source_title") or raw.get("title")), "evidence_type": cls._text(raw.get("evidence_type") or raw.get("source_role") or "GENERAL_WEB"), "confidence": float(raw.get("confidence") or raw.get("source_quality") or 0.0), "published_date": cls._text(raw.get("published_date") or raw.get("event_date") or raw.get("updated_date")), "metadata": dict(raw.get("metadata") or {})}
+
+    @classmethod
+    def reconcile(cls, snapshot: LocalKnowledgeSnapshot, external: Sequence[Any], semantic: Optional[RequestSemanticModel] = None) -> Dict[str, Any]:
+        local_claims = list(snapshot.claims or [])
+        external_claims = [cls._external_record(item) for item in list(external or []) if cls._external_record(item).get("claim")]
+        used_external: set[int] = set()
+        reconciled: List[ReconciledClaim] = []
+        for local in local_claims:
+            local_text = cls._text(local.get("claim"))
+            best_index, best_score = None, 0.0
+            for index, item in enumerate(external_claims):
+                score = cls._similarity(local_text, item["claim"])
+                if score > best_score:
+                    best_index, best_score = index, score
+            provenance = {"source": local.get("source", "local_memory"), "metadata": local.get("metadata", {})}
+            if best_index is None or best_score < 0.20:
+                reconciled.append(ReconciledClaim(local_text, "LOCAL_ONLY", local_text, "", provenance, {}, float(local.get("score", 0.0)), local_text, "No sufficiently similar external claim was found."))
+                continue
+            used_external.add(best_index)
+            external_item = external_claims[best_index]
+            external_text = external_item["claim"]
+            local_numbers = re.findall(r"\b\d+(?:\.\d+)?%?\b", local_text)
+            external_numbers = re.findall(r"\b\d+(?:\.\d+)?%?\b", external_text)
+            if local_numbers and external_numbers and local_numbers != external_numbers:
+                status = "CONFLICT"
+                chosen = external_text if external_item["confidence"] > float(local.get("score", 0.0)) else local_text
+                reason = "Material numeric values differ; the higher-quality or higher-confidence evidence was preferred without erasing the disagreement."
+            elif best_score >= 0.55:
+                status, chosen, reason = "AGREE", external_text, "Local and external claims materially agree."
+            else:
+                status, chosen, reason = "PARTIAL_AGREEMENT", external_text, "The claims overlap but do not establish identical detail."
+            reconciled.append(ReconciledClaim(local_text, status, local_text, external_text, provenance, {"source_url": external_item["source_url"], "source_title": external_item["source_title"], "evidence_type": external_item["evidence_type"]}, round(max(float(local.get("score", 0.0)), external_item["confidence"], best_score), 3), chosen, reason))
+        for index, item in enumerate(external_claims):
+            if index not in used_external:
+                reconciled.append(ReconciledClaim(item["claim"], "WEB_ONLY", "", item["claim"], {}, {"source_url": item["source_url"], "source_title": item["source_title"], "evidence_type": item["evidence_type"]}, round(max(item["confidence"], 0.45), 3), item["claim"], "External evidence adds a claim absent from the local baseline."))
+        statuses = [item.status for item in reconciled]
+        if any(item == "CONFLICT" for item in statuses):
+            overall = "CONFLICTED"
+        elif external_claims and any(item in {"WEB_ONLY", "PARTIAL_AGREEMENT"} for item in statuses):
+            overall = "PARTIAL_AGREEMENT"
+        elif external_claims and statuses:
+            overall = "AGREE"
+        elif local_claims:
+            overall = "LOCAL_ONLY"
+        else:
+            overall = "INSUFFICIENT_EVIDENCE"
+        return {"status": overall, "claims": [item.to_dict() for item in reconciled], "local_claim_count": len(local_claims), "external_claim_count": len(external_claims), "source_count": len({item["source_url"] for item in external_claims if item["source_url"]})}
+
+
+class ResearchAnswerQualityVerifier:
+    """Check answer coverage against selected evidence before presentation."""
+
+    @classmethod
+    def verify(cls, answer: str, facts: Sequence[Any], sources: Sequence[Any], conflicts: Sequence[Any] = ()) -> Dict[str, Any]:
+        text = str(answer or "").strip()
+        evidence = [KnowledgeReconciler._external_record(item) for item in list(facts or [])]
+        material_claims = [part.strip(" -*\n") for part in re.split(r"(?:\n+|(?<=[.!?])\s+)", text) if len(part.strip()) >= 24 and not part.strip().startswith(("Technical comparison:", "Here are the most relevant", "Relevant specifications"))]
+        unsupported: List[str] = []
+        supported: List[str] = []
+        for claim in material_claims[:12]:
+            best = max((KnowledgeReconciler._similarity(claim, item["claim"]) for item in evidence), default=0.0)
+            if best < 0.16:
+                unsupported.append(claim[:240])
+            else:
+                supported.append(claim[:240])
+        if not evidence:
+            status = "INSUFFICIENT_EVIDENCE"
+        elif conflicts:
+            status = "CONFLICTED" if not unsupported else "PARTIALLY_VERIFIED"
+        elif unsupported:
+            status = "PARTIALLY_VERIFIED"
+        else:
+            status = "VERIFIED"
+        return {"status": status, "supported_claims": supported, "unsupported_claims": unsupported, "source_count": len({item["source_url"] for item in evidence if item["source_url"]}), "repair_recommended": bool(unsupported) or (bool(evidence) and len(sources or []) == 0), "checked_claim_count": len(material_claims[:12])}
 
 
 __all__ = [

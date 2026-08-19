@@ -10,10 +10,11 @@ from __future__ import annotations
 import ipaddress
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
-from urllib.parse import urlparse
+from urllib.parse import quote_plus, urlparse
 
 import requests
 
@@ -247,17 +248,94 @@ class DDGSProvider:
             return AdapterOutcome(False, "ddgs_images", errors=[f"DDGS image search failed: {type(error).__name__}"], attempts=[{"provider": "ddgs_images", "success": False}])
 
 
-class SearchProviderPool:
-    """Provider pool that prefers DDGS and reports fallback attempts explicitly."""
+class EvidenceCache:
+    """Small in-process TTL cache for bounded research evidence."""
 
-    def __init__(self, primary: Optional[DDGSProvider] = None):
-        self.primary = primary or DDGSProvider()
+    def __init__(self):
+        self._entries: Dict[str, tuple[float, Any]] = {}
+
+    def get(self, key: str) -> Any:
+        entry = self._entries.get(str(key))
+        if not entry:
+            return None
+        expires_at, value = entry
+        if time.monotonic() >= expires_at:
+            self._entries.pop(str(key), None)
+            return None
+        return value
+
+    def set(self, key: str, value: Any, ttl_seconds: float) -> None:
+        self._entries[str(key)] = (time.monotonic() + max(1.0, float(ttl_seconds)), value)
+
+    def clear(self) -> None:
+        self._entries.clear()
+
+
+class BingHtmlProvider:
+    """Best-effort public HTML search fallback when the primary provider fails."""
+
+    name = "bing_html"
+
+    def __init__(self, timeout_seconds: float = 12.0):
+        self.timeout_seconds = max(3.0, float(timeout_seconds))
 
     def search(self, query: str, *, max_results: int = 5) -> AdapterOutcome:
-        outcome = self.primary.search(query, max_results=max_results)
-        if outcome.success:
-            return outcome
-        return outcome
+        try:
+            from bs4 import BeautifulSoup
+            response = requests.get(
+                "https://www.bing.com/search?q=" + quote_plus(str(query)) + "&count=" + str(max(1, min(int(max_results), 10))),
+                timeout=self.timeout_seconds,
+                headers={"User-Agent": "Freya/1.0 public research fallback"},
+            )
+            response.raise_for_status()
+            soup = BeautifulSoup(response.text, "html.parser")
+            records: List[Dict[str, Any]] = []
+            for index, node in enumerate(soup.select("li.b_algo"), start=1):
+                link = node.select_one("h2 a")
+                if link is None:
+                    continue
+                url = _public_url(link.get("href"))
+                title = re.sub(r"\s+", " ", link.get_text(" ", strip=True))
+                snippet_node = node.select_one(".b_caption p") or node.select_one("p")
+                snippet = re.sub(r"\s+", " ", snippet_node.get_text(" ", strip=True) if snippet_node else "")
+                if url and title:
+                    records.append({"title": title[:240], "url": url, "snippet": snippet[:800], "source": self.name, "source_domain": _domain(url), "rank": index, "relevance": round(1.0 / max(1, index), 4), "provider": self.name})
+            return AdapterOutcome(bool(records), self.name, results=records[:max_results], errors=[] if records else ["Bing HTML returned no usable public results"], attempts=[{"provider": self.name, "success": bool(records)}])
+        except Exception as error:
+            logger.info("Bing HTML search failed: %s", error)
+            return AdapterOutcome(False, self.name, errors=[f"Bing HTML search failed: {type(error).__name__}"], attempts=[{"provider": self.name, "success": False}])
+
+
+class SearchProviderPool:
+    """Bounded multi-provider pool that aggregates independent candidates when requested."""
+
+    def __init__(self, primary: Optional[DDGSProvider] = None, secondary: Optional[BingHtmlProvider] = None):
+        self.primary = primary or DDGSProvider()
+        self.secondary = secondary or BingHtmlProvider()
+
+    def search(self, query: str, *, max_results: int = 5, multi_provider: bool = False) -> AdapterOutcome:
+        primary = self.primary.search(query, max_results=max_results)
+        outcomes = [primary]
+        if multi_provider or not primary.success:
+            outcomes.append(self.secondary.search(query, max_results=max_results))
+        merged: List[Dict[str, Any]] = []
+        seen: set[str] = set()
+        for outcome in outcomes:
+            for item in outcome.results:
+                url = str(item.get("url") or item.get("source_url") or "").split("#", 1)[0].rstrip("/")
+                if not url or url in seen:
+                    continue
+                seen.add(url)
+                merged.append(dict(item))
+        merged = merged[: max(1, min(int(max_results), 20))]
+        return AdapterOutcome(
+            bool(merged),
+            "multi_provider" if len(outcomes) > 1 else primary.provider,
+            results=merged,
+            errors=[error for outcome in outcomes for error in outcome.errors],
+            attempts=[attempt for outcome in outcomes for attempt in outcome.attempts],
+            metadata={"providers_attempted": [outcome.provider for outcome in outcomes], "independent_provider_count": len(outcomes)},
+        )
 
 
 class TrafilaturaPageReader:
@@ -350,12 +428,27 @@ class WebResearchAdapter:
         self.search_providers = SearchProviderPool(DDGSProvider(timeout_seconds=min(timeout_seconds, 15.0)))
         self.page_reader = TrafilaturaPageReader(timeout_seconds=timeout_seconds)
         self.image_providers = ImageSearchProviderPool(DDGSProvider(timeout_seconds=min(timeout_seconds, 15.0)))
+        self.evidence_cache = EvidenceCache()
 
-    def search(self, query: str, *, max_results: int = 5) -> AdapterOutcome:
-        return self.search_providers.search(query, max_results=max_results)
+    def search(self, query: str, *, max_results: int = 5, multi_provider: bool = False) -> AdapterOutcome:
+        key = f"search:{str(query).strip().lower()}:{int(max_results)}:{bool(multi_provider)}"
+        cached = self.evidence_cache.get(key)
+        if isinstance(cached, AdapterOutcome):
+            return cached
+        outcome = self.search_providers.search(query, max_results=max_results, multi_provider=multi_provider)
+        if outcome.success:
+            self.evidence_cache.set(key, outcome, 300.0)
+        return outcome
 
     def read_page(self, url: str) -> AdapterOutcome:
-        return self.page_reader.read(url)
+        key = f"page:{str(url).strip()}"
+        cached = self.evidence_cache.get(key)
+        if isinstance(cached, AdapterOutcome):
+            return cached
+        outcome = self.page_reader.read(url)
+        if outcome.success:
+            self.evidence_cache.set(key, outcome, 1800.0)
+        return outcome
 
     def search_images(self, query: str, *, limit: int = 4) -> AdapterOutcome:
         return self.image_providers.search(query, limit=limit)

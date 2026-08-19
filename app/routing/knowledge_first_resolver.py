@@ -24,7 +24,7 @@ from app.core.llm_stack import LLMStack
 from app.core.priority_llm import LLMPriority
 from app.core.logger import logger
 from app.intent import IntentType
-from app.research.intelligence import RequestSemanticAnalyzer
+from app.research.intelligence import KnowledgeImprovementAssessor, RequestSemanticAnalyzer
 from app.research.task_learning import ResearchTaskSemanticAnalyzer
 
 
@@ -53,7 +53,8 @@ def _classify_conversational_request(query: str) -> Optional[str]:
             normalized,
         )
         and not re.search(
-            r"\b(?:can\s+you|please|write|build|make|implement|fix|debug|install|run|create|compare|design)\b",
+                        r"\b(?:can\s+you|please|write|build|make|implement|fix|debug|install|run|create|compare|design|best|recommend(?:ation)?|current|latest|version|model|software|technical|architecture|benchmark|review|price|available|options)\b",
+
             normalized,
         )
     ):
@@ -240,7 +241,27 @@ class KnowledgeFirstResolver:
         reasoning.extend(answerability.reasoning)
 
         routing_metadata = self._research_routing_metadata(answerability)
+        semantic = RequestSemanticAnalyzer.analyze(query, context=context or {})
+        local_results = answerability.context_evaluation.retrieved_results if answerability.context_evaluation else retrieved_results
+        local_snapshot = KnowledgeImprovementAssessor.build_snapshot(query, local_results, semantic)
+        if local_results or not answerability.can_answer:
+            improvement = KnowledgeImprovementAssessor.assess(query, semantic, local_snapshot)
+            semantic.knowledge_improvement_state = str(improvement.get("state") or "LOCAL_UNKNOWN")
+            semantic.local_knowledge_confidence = local_snapshot.confidence
+            semantic.freshness_class = str(improvement.get("freshness") or local_snapshot.freshness)
+            semantic.research_reason = str(improvement.get("reason") or "")
+            routing_metadata.update({
+                "knowledge_improvement_state": semantic.knowledge_improvement_state,
+                "local_knowledge_snapshot": local_snapshot.to_dict(),
+                "improvement_assessment": improvement,
+            })
+            if improvement.get("should_research"):
+                routing_metadata["needs_external_information"] = True
+                routing_metadata["research_reason"] = improvement.get("reason")
+        else:
+            improvement = {"state": "LOCAL_SUFFICIENT_AND_CURRENT", "should_research": False, "reason": "caller supplied a sufficient local answer without retrieval records", "freshness": "LOW_CHANGE"}
         intent_str = intent_type.value if intent_type is not None else answerability.recommended_action
+
         capability_matches = self._capability_router.find_matching(query, intent_str)
         local_capability_matches = [match for match in capability_matches if match[0] != "research_capability"]
 
@@ -373,6 +394,12 @@ class KnowledgeFirstResolver:
         """Invoke the one registered research capability through CapabilityRouter."""
         research_context = dict(context or {})
         semantic = RequestSemanticAnalyzer.analyze(query, context=research_context)
+        improvement = routing_metadata.get("improvement_assessment") or {}
+        snapshot = routing_metadata.get("local_knowledge_snapshot") or {}
+        semantic.knowledge_improvement_state = str(improvement.get("state") or semantic.knowledge_improvement_state)
+        semantic.local_knowledge_confidence = float(snapshot.get("confidence") or 0.0)
+        semantic.freshness_class = str(improvement.get("freshness") or snapshot.get("freshness") or semantic.freshness_class)
+        semantic.research_reason = str(improvement.get("reason") or routing_metadata.get("research_reason") or "")
         research_mode = semantic.execution_mode
         research_context.update(
             {
@@ -383,6 +410,8 @@ class KnowledgeFirstResolver:
                 "semantic": semantic.to_dict(),
                 "intent": semantic.intent,
                 "routing_metadata": routing_metadata,
+                "local_knowledge_snapshot": snapshot,
+                "improvement_assessment": improvement,
             }
         )
 

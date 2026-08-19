@@ -42,6 +42,9 @@ from app.research.comparison_intelligence import ComparisonIntelligenceEngine, C
 from app.research.intelligence import (
     EvidenceClassifier,
     EvidenceType,
+    KnowledgeImprovementAssessor,
+    KnowledgeReconciler,
+    ResearchAnswerQualityVerifier,
     RequestSemanticAnalyzer,
     RequestSemanticModel,
     ResearchIntent,
@@ -603,7 +606,8 @@ class WebSearchTool:
         except Exception as error:
             return {"success": False, "query": query, "results": [], "errors": [f"Google HTML fallback failed: {error}"], "provider": "google_html"}
 
-    async def search_async(self, query: str, max_results: int = 5) -> Dict[str, Any]:
+    async def search_async(self, query: str, max_results: int = 5, multi_provider: bool = False) -> Dict[str, Any]:
+
         if not isinstance(query, str) or not query.strip():
             return {"success": False, "query": query, "results": [], "errors": ["query is required"]}
         normalized = query.strip()
@@ -611,7 +615,7 @@ class WebSearchTool:
         adapter_outcome: Optional[AdapterOutcome] = None
         if self._prefer_adapter:
             try:
-                adapter_outcome = await asyncio.to_thread(self.adapter.search, normalized, max_results=max_results)
+                adapter_outcome = await asyncio.to_thread(self.adapter.search, normalized, max_results=max_results, multi_provider=multi_provider)
                 if adapter_outcome.success:
                     return {
                         "success": True,
@@ -620,6 +624,7 @@ class WebSearchTool:
                         "errors": list(adapter_outcome.errors),
                         "provider": adapter_outcome.provider,
                         "attempts": list(adapter_outcome.attempts),
+                        "provider_metadata": dict(adapter_outcome.metadata or {}),
                     }
                 primary_error = "; ".join(adapter_outcome.errors) or "Maintained web-search provider returned no usable public results"
             except Exception as error:
@@ -660,8 +665,8 @@ class WebSearchTool:
             logger.warning("DuckDuckGo web-search fallback failed: %s", fallback_error)
             return {"success": False, "query": normalized, "results": [], "errors": [primary_error, str(fallback_error)], "provider": "none"}
 
-    def search(self, query: str, max_results: int = 5) -> Dict[str, Any]:
-        return _run_coroutine(self.search_async(query, max_results=max_results))
+    def search(self, query: str, max_results: int = 5, multi_provider: bool = False) -> Dict[str, Any]:
+        return _run_coroutine(self.search_async(query, max_results=max_results, multi_provider=multi_provider))
 
 
 class WebPageReader:
@@ -1490,7 +1495,8 @@ class ResearchCapability(Capability):
                 self._publish_event("research.search.completed", {"query": query[:200], "result_count": len(rss_result["results"]), "error_count": 0})
                 return rss_result
 
-        result = self._invoke("search", query=normalized_query, max_results=max_results)
+        multi_provider = bool(inputs.get("multi_provider") or semantic.execution_mode == ResearchMode.DEEP_RESEARCH.value or semantic.intent in {ResearchIntent.NEWS_RESEARCH.value, ResearchIntent.TECHNICAL_COMPARISON.value, ResearchIntent.PRODUCT_COMPARISON.value, ResearchIntent.REVIEW_RESEARCH.value})
+        result = self._invoke("search", query=normalized_query, max_results=max_results, multi_provider=multi_provider)
 
         if not isinstance(result, dict):
             result = {"success": False, "error": "Invalid search tool response", "results": []}
@@ -1577,7 +1583,14 @@ class ResearchCapability(Capability):
             payload = {key: value for key, value in supplied.items() if key in allowed}
             payload.setdefault("query", topic)
             try:
-                return RequestSemanticModel(**payload)
+                model = RequestSemanticModel(**payload)
+                assessment = values.get("improvement_assessment") or {}
+                snapshot = values.get("local_knowledge_snapshot") or {}
+                model.knowledge_improvement_state = str(assessment.get("state") or model.knowledge_improvement_state)
+                model.local_knowledge_confidence = float(snapshot.get("confidence") or model.local_knowledge_confidence or 0.0)
+                model.freshness_class = str(assessment.get("freshness") or snapshot.get("freshness") or model.freshness_class)
+                model.research_reason = str(assessment.get("reason") or model.research_reason or "")
+                return model
             except Exception:
                 pass
         return self.semantic_analyzer.analyze(topic, context=values.get("context") if isinstance(values.get("context"), dict) else None)
@@ -1788,9 +1801,18 @@ class ResearchCapability(Capability):
             stopping_reason = "evidence gaps were followed up within the bounded budget"
         else:
             stopping_reason = "core evidence covered or no high-value evidence gap detected"
+        local_snapshot = inputs.get("local_knowledge_snapshot") if isinstance(inputs.get("local_knowledge_snapshot"), dict) else KnowledgeImprovementAssessor.build_snapshot(topic, inputs.get("local_knowledge") or [], semantic).to_dict()
+        reconciliation = KnowledgeReconciler.reconcile(
+            KnowledgeImprovementAssessor.build_snapshot(topic, local_snapshot.get("claims", []) if isinstance(local_snapshot, dict) else [], semantic),
+            [fact.to_dict() for fact in facts],
+            semantic,
+        )
         synthesis = self._synthesize_research(semantic, [fact.to_dict() for fact in facts], sources, conflicts, citations)
         answer = str(synthesis.get("answer") or ("Insufficient readable evidence was retrieved to answer this question." if not facts else "The retrieved sources support the findings below."))
+        answer_quality = ResearchAnswerQualityVerifier.verify(answer, [fact.to_dict() for fact in facts], sources, conflicts)
         uncertainty.extend(str(item) for item in synthesis.get("uncertainty", []) if item)
+        if answer_quality.get("status") in {"PARTIALLY_VERIFIED", "INSUFFICIENT_EVIDENCE"}:
+            uncertainty.append("Answer-quality verification found unsupported or insufficiently grounded claims.")
         result = ResearchResult(
 
             topic=topic,
@@ -1811,6 +1833,7 @@ class ResearchCapability(Capability):
         data = result.to_dict()
         data.update({
             "research_mode": ResearchMode.DEEP_RESEARCH.value,
+
             "queries": list(seen_queries),
             "follow_up_queries": follow_up_queries,
             "limits": limits.to_dict(),
@@ -1822,11 +1845,18 @@ class ResearchCapability(Capability):
             "intent": semantic.intent,
             "semantic": semantic.to_dict(),
             "answer_plan": semantic.output_goal,
+            "local_knowledge_snapshot": local_snapshot,
+            "knowledge_reconciliation": reconciliation,
+            "answer_quality": answer_quality,
 
         })
         self._publish_event("research.phase", {"mode": ResearchMode.DEEP_RESEARCH.value, "phase": "SYNTHESIZING", "source_count": len(sources), "page_count": len(pages)})
-        self._publish_event("research.completed" if facts else "research.partial_or_failed", {"topic": topic[:200], "mode": ResearchMode.DEEP_RESEARCH.value, "query_count": len(seen_queries), "source_count": len(sources), "page_count": len(pages), "fact_count": len(facts), "partial": result.partial, "stopping_reason": stopping_reason})
-        return {"success": bool(facts), "data": data, "errors": result.errors, "mode": ResearchMode.DEEP_RESEARCH.value, "message": answer}
+
+        self._publish_event("research.completed" if facts else "research.partial_or_failed", {"topic": topic[:200], "mode": ResearchMode.DEEP_RESEARCH.value, "query_count": len(seen_queries), "source_count": len(sources), "page_count": len(pages), "fact_count": len(facts), "partial": result.partial, "stopping_reason": stopping_reason, "answer_quality": answer_quality.get("status"), "reconciliation": reconciliation.get("status")})
+        payload = {"success": bool(facts), "data": data, "errors": result.errors, "mode": ResearchMode.DEEP_RESEARCH.value, "message": answer}
+        if facts and answer_quality.get("status") == "VERIFIED" and inputs.get("learn", True):
+            payload["learning"] = self.action_learn_finding({"research_result": data, "remember": True, "verified": True})
+        return payload
 
     def _action_comparison_research(self, topic: str, inputs: Dict[str, Any], semantic: RequestSemanticModel) -> Dict[str, Any]:
         """Run comparison-specific research before ordinary synthesis."""
@@ -2033,13 +2063,27 @@ class ResearchCapability(Capability):
         conflicts = self._material_conflicts(raw_conflicts, semantic)
         citations_raw = self._invoke("citations", facts=[fact.to_dict() for fact in facts])
         citations = citations_raw if isinstance(citations_raw, list) else []
+        local_snapshot = inputs.get("local_knowledge_snapshot") if isinstance(inputs.get("local_knowledge_snapshot"), dict) else KnowledgeImprovementAssessor.build_snapshot(topic, inputs.get("local_knowledge") or [], semantic).to_dict()
+        reconciliation = KnowledgeReconciler.reconcile(
+            KnowledgeImprovementAssessor.build_snapshot(
+                topic,
+                local_snapshot.get("claims", []) if isinstance(local_snapshot, dict) else [],
+                semantic,
+            ),
+            [fact.to_dict() for fact in facts],
+            semantic,
+        )
         synthesis = self._synthesize_research(semantic, [fact.to_dict() for fact in facts], sources, conflicts, citations)
         uncertainty = list(synthesis.get("uncertainty", []))
         if errors:
             uncertainty.append("Some public providers or pages failed; the answer uses the remaining bounded evidence.")
+        answer_text = str(synthesis.get("answer") or "I could not verify enough relevant public evidence to answer that reliably.")
+        answer_quality = ResearchAnswerQualityVerifier.verify(answer_text, [fact.to_dict() for fact in facts], sources, conflicts)
+        if answer_quality.get("status") in {"PARTIALLY_VERIFIED", "INSUFFICIENT_EVIDENCE"}:
+            uncertainty.append("Answer-quality verification found unsupported or insufficiently grounded claims.")
         result = ResearchResult(
             topic=topic,
-            answer=str(synthesis.get("answer") or "I could not verify enough relevant public evidence to answer that reliably."),
+            answer=answer_text,
             key_findings=synthesis.get("facts", []),
             supporting_evidence=[fact.to_dict() for fact in facts],
             sources=sources,
@@ -2053,9 +2097,25 @@ class ResearchCapability(Capability):
             answer_plan=semantic.output_goal,
         )
         data = result.to_dict()
-        data.update({"research_mode": semantic.execution_mode, "intent": semantic.intent, "semantic": semantic.to_dict(), "queries": queries, "evidence_count": len(facts), "source_count": len(sources), "answer_plan": semantic.output_goal, "stopping_reason": "semantic evidence budget reached or relevant evidence covered"})
-        self._publish_event("research.completed" if facts else "research.partial_or_failed", {"topic": topic[:200], "mode": semantic.execution_mode, "intent": semantic.intent, "source_count": len(sources), "fact_count": len(facts), "partial": result.partial})
-        return {"success": bool(facts), "data": data, "errors": result.errors, "mode": semantic.execution_mode, "message": result.answer}
+        data.update({
+            "research_mode": semantic.execution_mode,
+            "intent": semantic.intent,
+            "semantic": semantic.to_dict(),
+            "queries": queries,
+            "evidence_count": len(facts),
+            "source_count": len(sources),
+            "answer_plan": semantic.output_goal,
+            "stopping_reason": "semantic evidence budget reached or relevant evidence covered",
+            "local_knowledge_snapshot": local_snapshot,
+            "knowledge_reconciliation": reconciliation,
+            "answer_quality": answer_quality,
+            "provider_attempts": [item for source in sources for item in (source.get("search_result", {}).get("attempts", []) if isinstance(source.get("search_result"), dict) else [])],
+        })
+        self._publish_event("research.completed" if facts else "research.partial_or_failed", {"topic": topic[:200], "mode": semantic.execution_mode, "intent": semantic.intent, "source_count": len(sources), "fact_count": len(facts), "partial": result.partial, "answer_quality": answer_quality.get("status"), "reconciliation": reconciliation.get("status")})
+        payload = {"success": bool(facts), "data": data, "errors": result.errors, "mode": semantic.execution_mode, "message": result.answer}
+        if facts and answer_quality.get("status") == "VERIFIED" and inputs.get("learn", True):
+            payload["learning"] = self.action_learn_finding({"research_result": data, "remember": True, "verified": True})
+        return payload
 
     def action_research_topic(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
         topic = str(inputs.get("topic") or inputs.get("query") or "").strip()
@@ -2247,14 +2307,43 @@ class ResearchCapability(Capability):
             return {"success": False, "accepted": False, "reason": "LearningPipeline is not initialized"}
         from app.learning.models import LearningCandidate, LearningCandidateType
         research_result = inputs.get("research_result") or inputs.get("finding") or {}
+        verified = bool(inputs.get("verified", True))
+        result_data = research_result if isinstance(research_result, dict) else {}
+        quality = result_data.get("answer_quality") if isinstance(result_data.get("answer_quality"), dict) else {}
+        answer = str(result_data.get("answer") or result_data.get("message") or "").strip()
+        topic = str(result_data.get("topic") or result_data.get("query") or "researched finding").strip()
+        citations = list(result_data.get("citations") or [])
+        evidence = list(result_data.get("supporting_evidence") or result_data.get("key_findings") or [])
+        freshness = str((result_data.get("semantic") or {}).get("freshness_class") or result_data.get("freshness_class") or "MEDIUM_CHANGE")
+        verification_status = "verified" if verified and quality.get("status", "VERIFIED") == "VERIFIED" else "unverified"
         candidate = LearningCandidate(
             candidate_type=LearningCandidateType.MANUAL_INPUT,
             source_component="ResearchCapability",
-            raw_observation={"research_result": research_result, "verified": bool(inputs.get("verified", True))},
-            context={"provenance": research_result.get("citations", []) if isinstance(research_result, dict) else []},
-            tags=["research", "external", "provenance-preserved"],
-            metadata={"source": "public_web", "provenance_preserved": True},
+            raw_observation={
+                "title": f"Verified research: {topic[:180]}",
+                "content": answer,
+                "category": "verified_research",
+                "confidence": float(result_data.get("confidence") or 0.0),
+                "source": "public_web",
+                "verified": verified,
+                "verification_status": verification_status,
+                "metadata": {
+                    "topic": topic,
+                    "citations": citations[:20],
+                    "evidence_count": len(evidence),
+                    "evidence_ids": [str(item.get("source_url") or item.get("source") or "") for item in evidence if isinstance(item, dict)],
+                    "freshness_class": freshness,
+                    "learned_at": datetime.now(timezone.utc).isoformat(),
+                    "verified_at": datetime.now(timezone.utc).isoformat() if verified else "",
+                    "conflicts": list(result_data.get("conflicts") or []),
+                    "knowledge_reconciliation": result_data.get("knowledge_reconciliation") or {},
+                },
+            },
+            context={"provenance": citations[:20], "source_type": "public_web", "freshness_class": freshness},
+            tags=["research", "external", "verified", "provenance-preserved", f"freshness:{freshness.lower()}"],
+            metadata={"source": "public_web", "provenance_preserved": True, "verification_status": verification_status, "quality_status": quality.get("status", "")},
         )
+
         try:
             if callable(getattr(self._learning_pipeline, "run", None)):
                 result = self._learning_pipeline.run(candidate)
