@@ -30,7 +30,8 @@ from bs4 import BeautifulSoup
 from app.orchestrator.capability_registry import Capability, CapabilityCategory, CapabilityMetadata, CapabilityState
 from app.software_engineering_knowledge.external_import import InternetResearchImporter
 from app.research.osint import WebSearchCapability, OSINTCapability
-from app.free_image_research_providers import FreeImageResearchChain
+from app.free_image_research_providers import FreeImageResearchChain, _overfetch_limit, validate_image_candidates
+
 from app.research.web_adapter import (
     AdapterOutcome,
     DeepResearchCoordinator,
@@ -1498,24 +1499,33 @@ class ResearchCapability(Capability):
             if confidence >= 0.35 or not terms:
                 ranked.append((confidence, item))
         ranked.sort(key=lambda pair: (-pair[0], str(pair[1].get("title") or "").lower()))
-        return [item for _, item in ranked[: max(1, min(4, limit))]]
+        return [item for _, item in ranked[: max(1, min(50, limit))]]
 
     def action_image_search(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
         query = str(inputs.get("query") or inputs.get("topic") or "").strip()
-        limit = max(1, min(int(inputs.get("max_results", inputs.get("limit", 8))), 20))
+        requested_count = max(1, min(int(inputs.get("requested_count") or inputs.get("count") or inputs.get("max_results", inputs.get("limit", 8))), 20))
+        discovery_limit = _overfetch_limit(requested_count, hard_limit=50)
+        excluded_urls = inputs.get("exclude_image_urls") or inputs.get("exclude_urls") or []
         if not query:
-            return {"success": False, "error": "query is required", "image_results": [], "provider": "free_image_research"}
+            return {"success": False, "error": "query is required", "image_results": [], "provider": "free_image_research", "metrics": {"requested_count": requested_count, "returned_count": 0, "coverage_gap": "NO_QUERY"}}
         # Preserve the injectable provider seam for deterministic tests and local integrations.
         if self.image_search_provider is not None:
             try:
-                records = self.image_search_provider.search(query, limit=limit)
-                candidates = self._rank_image_candidates(query, records, limit)
-                return {"success": bool(candidates), "query": query, "mode": ResearchMode.IMAGE_SEARCH.value, "image_results": candidates[:limit], "results": candidates[:limit], "provider": "injected_free_provider", "error": None if candidates else "Injected image provider returned no exact-enough public candidates"}
+                raw = self.image_search_provider.search(query, limit=discovery_limit)
+                records = raw.get("image_results") or raw.get("matches") or raw.get("results") or [] if isinstance(raw, dict) else raw
+                validated, metrics = validate_image_candidates(query, records, limit=requested_count, exclude_urls=excluded_urls)
+                candidates = self._rank_image_candidates(query, validated, requested_count)
+                metrics["returned_count"] = len(candidates)
+                metrics["coverage_gap"] = "COUNT_GAP" if len(candidates) < requested_count else ""
+                return {"success": bool(candidates), "query": query, "mode": ResearchMode.IMAGE_SEARCH.value, "requested_count": requested_count, "image_results": candidates, "results": candidates, "provider": "injected_free_provider", "metrics": metrics, "error": None if candidates else "Injected image provider returned no sufficiently validated public image candidates"}
             except Exception as error:
-                return {"success": False, "query": query, "mode": ResearchMode.IMAGE_SEARCH.value, "image_results": [], "results": [], "provider": "injected_free_provider", "error": str(error)}
-        outcome = self.web_adapter.search_images(query, limit=min(4, limit))
-        candidates = self._rank_image_candidates(query, outcome.results, limit)
-        return {"success": bool(candidates), "query": query, "mode": ResearchMode.IMAGE_SEARCH.value, "image_results": candidates, "results": candidates, "provider": outcome.provider, "attempts": outcome.attempts, "errors": outcome.errors, "error": None if candidates else (outcome.errors[-1] if outcome.errors else "No exact-enough public image candidates were verified")}
+                return {"success": False, "query": query, "mode": ResearchMode.IMAGE_SEARCH.value, "requested_count": requested_count, "image_results": [], "results": [], "provider": "injected_free_provider", "metrics": {"requested_count": requested_count, "returned_count": 0, "coverage_gap": "PROVIDER_ERROR"}, "error": str(error)}
+        outcome = self.web_adapter.search_images(query, limit=discovery_limit)
+        validated, metrics = validate_image_candidates(query, outcome.results, limit=requested_count, exclude_urls=excluded_urls)
+        candidates = self._rank_image_candidates(query, validated, requested_count)
+        metrics["returned_count"] = len(candidates)
+        metrics["coverage_gap"] = "COUNT_GAP" if len(candidates) < requested_count else ""
+        return {"success": bool(candidates), "query": query, "mode": ResearchMode.IMAGE_SEARCH.value, "requested_count": requested_count, "image_results": candidates, "results": candidates, "provider": outcome.provider, "attempts": outcome.attempts, "errors": outcome.errors, "metrics": metrics, "error": None if candidates else (outcome.errors[-1] if outcome.errors else "No sufficiently validated public image candidates were found")}
 
     def action_search_web(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
         query = str(inputs.get("query", "")).strip()

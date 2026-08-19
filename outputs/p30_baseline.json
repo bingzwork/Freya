@@ -1,0 +1,575 @@
+{
+  "benchmark": "WEB_RESPONSE_QUALITY_BENCHMARK.json",
+  "implementation_commit": "7a822ef",
+  "case_count": 25,
+  "passed_cases": 25,
+  "failed_cases": 0,
+  "failure_counts": {},
+  "results": [
+    {
+      "id": "factual_01",
+      "prompt": "Who makes the RTX 5090?",
+      "expected": {
+        "intent": "FACTUAL_LOOKUP",
+        "mode": "FAST_SEARCH",
+        "count": null,
+        "result_type": "direct_answer"
+      },
+      "actual": {
+        "intent": "FACTUAL_LOOKUP",
+        "mode": "FAST_SEARCH",
+        "operation": "answer",
+        "output_goal": "direct_answer",
+        "response_type": "direct_answer",
+        "count": null,
+        "freshness": "NONE",
+        "entities": [
+          "Who makes RTX 5090"
+        ],
+        "requested_domain": ""
+      },
+      "failures": []
+    },
+    {
+      "id": "current_02",
+      "prompt": "What's the latest stable version of Python?",
+      "expected": {
+        "intent": "CURRENT_LOOKUP",
+        "mode": "FAST_SEARCH",
+        "count": null,
+        "result_type": "current_answer"
+      },
+      "actual": {
+        "intent": "CURRENT_LOOKUP",
+        "mode": "FAST_SEARCH",
+        "operation": "answer",
+        "output_goal": "current_answer",
+        "response_type": "current_answer",
+        "count": null,
+        "freshness": "LATEST",
+        "entities": [],
+        "requested_domain": ""
+      },
+      "failures": []
+    },
+    {
+      "id": "deep_03",
+      "prompt": "Research the current AMD support for this software in depth.",
+      "expected": {
+        "intent": "DEEP_RESEARCH",
+        "mode": "DEEP_RESEARCH",
+        "count": null,
+        "result_type": "research_synthesis"
+      },
+      "actual": {
+        "intent": "DEEP_RESEARCH",
+        "mode": "DEEP_RESEARCH",
+        "operation": "research",
+        "output_goal": "deep_synthesis",
+        "response_type": "deep_synthesis",
+        "count": null,
+        "freshness": "LATEST",
+        "entities": [
+          "current AMD support for this software in depth"
+        ],
+        "requested_domain": ""
+      },
+      "failures": []
+    },
+    {
+      "id": "quick_04",
+      "prompt": "Search the web for the official NVIDIA RTX 5060 specifications.",
+      "expected": {
+        "intent": "GENERAL_WEB_RESEARCH",
+        "mode": "FAST_SEARCH",
+        "count": null,
+        "result_type": "direct_answer"
+      },
+      "actual": {
+        "intent": "GENERAL_WEB_RESEARCH",
+        "mode": "FAST_SEARCH",
+        "operation": "research",
+        "output_goal": "direct_answer",
+        "response_type": "direct_answer",
+        "count": null,
+        "freshness": "CURRENT_PREFERRED",
+        "entities": [
+          "Search web for official NVIDIA RTX 5060 specifications"
+        ],
+        "requested_domain": ""
+      },
+      "failures": []
+    },
+    {
+      "id": "image_05",
+      "prompt": "Find me 10 photos of River Lynn.",
+      "expected": {
+        "intent": "IMAGE_SEARCH",
+        "mode": "IMAGE_SEARCH",
+        "count": 10,
+        "result_type": "image_results"
+      },
+      "actual": {
+        "intent": "IMAGE_SEARCH",
+        "mode": "IMAGE_SEARCH",
+        "operation": "search_images",
+        "output_goal": "image_results",
+        "response_type": "image_results",
+        "count": 10,
+        "freshness": "NONE",
+        "entities": [],
+        "requested_domain": ""
+      },
+      "failures": []
+    },
+    {
+      "id": "reverse_06",
+      "prompt": "Find where this image came from.",
+      "expected": {
+        "intent": "REVERSE_IMAGE_SEARCH",
+        "mode": "IMAGE_SEARCH",
+        "count": null,
+        "result_type": "image_results"
+      },
+      "actual": {
+        "intent": "REVERSE_IMAGE_SEARCH",
+        "mode": "IMAGE_SEARCH",
+        "operation": "find_source",
+        "output_goal": "image_results",
+        "response_type": "image_results",
+        "count": null,
+        "freshness": "NONE",
+        "entities": [],
+        "requested_domain": ""
+      },
+      "failures": []
+    },
+    {
+      "id": "similar_07",
+      "prompt": "Find 5 visually similar images.",
+      "expected": {
+        "intent": "SIMILAR_IMAGE_SEARCH",
+        "mode": "IMAGE_SEARCH",
+        "count": 5,
+        "result_type": "image_results"
+      },
+      "actual": {
+        "intent": "SIMILAR_IMAGE_SEARCH",
+        "mode": "IMAGE_SEARCH",
+        "operation": "find_similar",
+        "output_goal": "image_results",
+        "response_type": "image_results",
+        "count": 5,
+        "freshness": "NONE",
+        "entities": [],
+        "requested_domain": ""
+      },
+      "failures": []
+    },
+    {
+      "id": "shopping_08",
+      "prompt": "Find me the cheapest matching 32 GB DDR5 RAM in the Philippines.",
+      "expected": {
+        "intent": "SHOPPING_PRICE_SEARCH",
+        "mode": "DEEP_RESEARCH",
+        "count": null,
+        "result_type": "price_comparison"
+      },
+      "actual": {
+        "intent": "SHOPPING_PRICE_SEARCH",
+        "mode": "DEEP_RESEARCH",
+        "operation": "find",
+        "output_goal": "price_comparison",
+        "response_type": "price_comparison",
+        "count": null,
+        "freshness": "CURRENT_PREFERRED",
+        "entities": [],
+        "requested_domain": ""
+      },
+      "failures": []
+    },
+    {
+      "id": "comparison_09",
+      "prompt": "Compare RTX 5050 and RTX 5060 for gaming.",
+      "expected": {
+        "intent": "TECHNICAL_COMPARISON",
+        "mode": "DEEP_RESEARCH",
+        "count": null,
+        "result_type": "comparison"
+      },
+      "actual": {
+        "intent": "TECHNICAL_COMPARISON",
+        "mode": "DEEP_RESEARCH",
+        "operation": "compare",
+        "output_goal": "comparison",
+        "response_type": "comparison",
+        "count": null,
+        "freshness": "NONE",
+        "entities": [
+          "RTX 5050 and RTX 5060 for gaming"
+        ],
+        "requested_domain": ""
+      },
+      "failures": []
+    },
+    {
+      "id": "recommendation_10",
+      "prompt": "Which local model should I use for Freya and why?",
+      "expected": {
+        "intent": "FACTUAL_LOOKUP",
+        "mode": "FAST_SEARCH",
+        "count": null,
+        "result_type": "recommendation"
+      },
+      "actual": {
+        "intent": "FACTUAL_LOOKUP",
+        "mode": "FAST_SEARCH",
+        "operation": "troubleshoot",
+        "output_goal": "recommendation",
+        "response_type": "recommendation",
+        "count": null,
+        "freshness": "NONE",
+        "entities": [],
+        "requested_domain": ""
+      },
+      "failures": []
+    },
+    {
+      "id": "troubleshooting_11",
+      "prompt": "Why does Freya's browser search return no readable pages?",
+      "expected": {
+        "intent": "FACTUAL_LOOKUP",
+        "mode": "FAST_SEARCH",
+        "count": null,
+        "result_type": "troubleshooting"
+      },
+      "actual": {
+        "intent": "FACTUAL_LOOKUP",
+        "mode": "FAST_SEARCH",
+        "operation": "troubleshoot",
+        "output_goal": "troubleshooting",
+        "response_type": "troubleshooting",
+        "count": null,
+        "freshness": "NONE",
+        "entities": [],
+        "requested_domain": ""
+      },
+      "failures": []
+    },
+    {
+      "id": "software_12",
+      "prompt": "How does the FastAPI library handle middleware? Check the repository.",
+      "expected": {
+        "intent": "GENERAL_WEB_RESEARCH",
+        "mode": "FAST_SEARCH",
+        "count": null,
+        "result_type": "direct_answer"
+      },
+      "actual": {
+        "intent": "GENERAL_WEB_RESEARCH",
+        "mode": "FAST_SEARCH",
+        "operation": "research",
+        "output_goal": "direct_answer",
+        "response_type": "direct_answer",
+        "count": null,
+        "freshness": "NONE",
+        "entities": [],
+        "requested_domain": ""
+      },
+      "failures": []
+    },
+    {
+      "id": "news_13",
+      "prompt": "What's the latest news about NVIDIA?",
+      "expected": {
+        "intent": "NEWS_RESEARCH",
+        "mode": "DEEP_RESEARCH",
+        "count": null,
+        "result_type": "news_developments"
+      },
+      "actual": {
+        "intent": "NEWS_RESEARCH",
+        "mode": "DEEP_RESEARCH",
+        "operation": "summarize",
+        "output_goal": "news_developments",
+        "response_type": "news_developments",
+        "count": null,
+        "freshness": "LATEST",
+        "entities": [
+          "latest news about NVIDIA"
+        ],
+        "requested_domain": ""
+      },
+      "failures": []
+    },
+    {
+      "id": "public_person_14",
+      "prompt": "Research the public work of a named author from reliable sources.",
+      "expected": {
+        "intent": "GENERAL_WEB_RESEARCH",
+        "mode": "FAST_SEARCH",
+        "count": null,
+        "result_type": "research_synthesis"
+      },
+      "actual": {
+        "intent": "GENERAL_WEB_RESEARCH",
+        "mode": "FAST_SEARCH",
+        "operation": "research",
+        "output_goal": "research_synthesis",
+        "response_type": "research_synthesis",
+        "count": null,
+        "freshness": "NONE",
+        "entities": [
+          "author from reliable sources"
+        ],
+        "requested_domain": ""
+      },
+      "failures": []
+    },
+    {
+      "id": "location_15",
+      "prompt": "Research the best public places to visit in Cebu this year.",
+      "expected": {
+        "intent": "GENERAL_WEB_RESEARCH",
+        "mode": "FAST_SEARCH",
+        "count": null,
+        "result_type": "recommendation"
+      },
+      "actual": {
+        "intent": "GENERAL_WEB_RESEARCH",
+        "mode": "FAST_SEARCH",
+        "operation": "research",
+        "output_goal": "recommendation",
+        "response_type": "recommendation",
+        "count": null,
+        "freshness": "NONE",
+        "entities": [],
+        "requested_domain": ""
+      },
+      "failures": []
+    },
+    {
+      "id": "count_16",
+      "prompt": "Give me 5 reliable alternatives to Ollama.",
+      "expected": {
+        "intent": "GENERAL_WEB_RESEARCH",
+        "mode": "FAST_SEARCH",
+        "count": 5,
+        "result_type": "counted_options"
+      },
+      "actual": {
+        "intent": "GENERAL_WEB_RESEARCH",
+        "mode": "FAST_SEARCH",
+        "operation": "research",
+        "output_goal": "counted_options",
+        "response_type": "counted_options",
+        "count": 5,
+        "freshness": "NONE",
+        "entities": [],
+        "requested_domain": ""
+      },
+      "failures": []
+    },
+    {
+      "id": "best_17",
+      "prompt": "What is the best browser automation approach for Freya?",
+      "expected": {
+        "intent": "FACTUAL_LOOKUP",
+        "mode": "FAST_SEARCH",
+        "count": null,
+        "result_type": "recommendation"
+      },
+      "actual": {
+        "intent": "FACTUAL_LOOKUP",
+        "mode": "FAST_SEARCH",
+        "operation": "answer",
+        "output_goal": "recommendation",
+        "response_type": "recommendation",
+        "count": null,
+        "freshness": "NONE",
+        "entities": [],
+        "requested_domain": ""
+      },
+      "failures": []
+    },
+    {
+      "id": "sources_18",
+      "prompt": "Find sources supporting the claim that browser automation can be blocked by CAPTCHAs.",
+      "expected": {
+        "intent": "CLAIM_VERIFICATION",
+        "mode": "FAST_SEARCH",
+        "count": null,
+        "result_type": "verified_claim"
+      },
+      "actual": {
+        "intent": "CLAIM_VERIFICATION",
+        "mode": "FAST_SEARCH",
+        "operation": "verify",
+        "output_goal": "verified_claim",
+        "response_type": "verified_claim",
+        "count": null,
+        "freshness": "NONE",
+        "entities": [],
+        "requested_domain": ""
+      },
+      "failures": []
+    },
+    {
+      "id": "followup_19",
+      "prompt": "Show me 5 more.",
+      "expected": {
+        "intent": "IMAGE_SEARCH",
+        "mode": "IMAGE_SEARCH",
+        "count": 5,
+        "result_type": "image_results"
+      },
+      "actual": {
+        "intent": "IMAGE_SEARCH",
+        "mode": "IMAGE_SEARCH",
+        "operation": "find_more_photos",
+        "output_goal": "image_results",
+        "response_type": "image_results",
+        "count": 5,
+        "freshness": "NONE",
+        "entities": [],
+        "requested_domain": ""
+      },
+      "failures": []
+    },
+    {
+      "id": "correction_20",
+      "prompt": "That's wrong; use the official source and correct the version.",
+      "expected": {
+        "intent": "FACTUAL_LOOKUP",
+        "mode": "FAST_SEARCH",
+        "count": null,
+        "result_type": "correction_or_verified_answer"
+      },
+      "actual": {
+        "intent": "FACTUAL_LOOKUP",
+        "mode": "FAST_SEARCH",
+        "operation": "answer",
+        "output_goal": "correction_or_verified_answer",
+        "response_type": "correction_or_verified_answer",
+        "count": null,
+        "freshness": "NONE",
+        "entities": [],
+        "requested_domain": ""
+      },
+      "failures": []
+    },
+    {
+      "id": "ambiguous_21",
+      "prompt": "Find the best one.",
+      "expected": {
+        "intent": "FACTUAL_LOOKUP",
+        "mode": "FAST_SEARCH",
+        "count": null,
+        "result_type": "clarifying_question"
+      },
+      "actual": {
+        "intent": "FACTUAL_LOOKUP",
+        "mode": "FAST_SEARCH",
+        "operation": "clarify",
+        "output_goal": "clarifying_question",
+        "response_type": "clarifying_question",
+        "count": null,
+        "freshness": "NONE",
+        "entities": [],
+        "requested_domain": ""
+      },
+      "failures": []
+    },
+    {
+      "id": "no_result_22",
+      "prompt": "Find reliable public images of a nonexistent entity with no public record.",
+      "expected": {
+        "intent": "IMAGE_SEARCH",
+        "mode": "IMAGE_SEARCH",
+        "count": null,
+        "result_type": "no_result"
+      },
+      "actual": {
+        "intent": "IMAGE_SEARCH",
+        "mode": "IMAGE_SEARCH",
+        "operation": "search_images",
+        "output_goal": "image_results",
+        "response_type": "image_results",
+        "count": null,
+        "freshness": "NONE",
+        "entities": [],
+        "requested_domain": ""
+      },
+      "failures": []
+    },
+    {
+      "id": "conflict_23",
+      "prompt": "Which source is correct when two official pages list different release dates?",
+      "expected": {
+        "intent": "CLAIM_VERIFICATION",
+        "mode": "FAST_SEARCH",
+        "count": null,
+        "result_type": "conflict_explanation"
+      },
+      "actual": {
+        "intent": "CLAIM_VERIFICATION",
+        "mode": "FAST_SEARCH",
+        "operation": "verify",
+        "output_goal": "conflict_explanation",
+        "response_type": "conflict_explanation",
+        "count": null,
+        "freshness": "NONE",
+        "entities": [],
+        "requested_domain": ""
+      },
+      "failures": []
+    },
+    {
+      "id": "freshness_24",
+      "prompt": "What changed in the latest Freya web-search behavior?",
+      "expected": {
+        "intent": "CURRENT_LOOKUP",
+        "mode": "FAST_SEARCH",
+        "count": null,
+        "result_type": "current_answer"
+      },
+      "actual": {
+        "intent": "CURRENT_LOOKUP",
+        "mode": "FAST_SEARCH",
+        "operation": "answer",
+        "output_goal": "current_answer",
+        "response_type": "current_answer",
+        "count": null,
+        "freshness": "LATEST",
+        "entities": [],
+        "requested_domain": ""
+      },
+      "failures": []
+    },
+    {
+      "id": "attachment_25",
+      "prompt": "This is an RTX 5060. Compare it with the RTX 5050.",
+      "expected": {
+        "intent": "TECHNICAL_COMPARISON",
+        "mode": "DEEP_RESEARCH",
+        "count": null,
+        "result_type": "comparison"
+      },
+      "actual": {
+        "intent": "TECHNICAL_COMPARISON",
+        "mode": "DEEP_RESEARCH",
+        "operation": "compare",
+        "output_goal": "comparison",
+        "response_type": "comparison",
+        "count": null,
+        "freshness": "NONE",
+        "entities": [
+          "This is RTX 5060. it with RTX 5050",
+          "an RTX"
+        ],
+        "requested_domain": ""
+      },
+      "failures": []
+    }
+  ]
+}

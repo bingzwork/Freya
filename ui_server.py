@@ -25,6 +25,7 @@ from app.research.task_learning import ResearchTaskSemanticAnalyzer, ResearchTas
 FREYA=None
 SUBSCRIBERS=set()
 LAST_IMAGE_SUBJECT = ""
+LAST_IMAGE_RESULT_URLS = []
 UI_SESSION_ID = f"session_{uuid.uuid4().hex}"
 UI_REQUEST_TIMEOUT_SECONDS = max(30.0, float(os.getenv("FREYA_UI_REQUEST_TIMEOUT_SECONDS", "180")))
 RESEARCH_REQUEST_TIMEOUT_SECONDS = max(45.0, float(os.getenv("FREYA_RESEARCH_REQUEST_TIMEOUT_SECONDS", "120")))
@@ -195,7 +196,7 @@ def _research_text_request(question, semantic=None):
     else:
         research_query = re.sub(r"^\s*(?:please\s+)?(?:search|look\s+up|find|show)\s+(?:the\s+)?(?:public\s+)?(?:web|internet)?\s*(?:for|about)?\s*", "", research_query, flags=re.I).strip(" .?!") or research_query
     research_query=re.sub(r"\btoday(?:'s|s)?\b", "latest", research_query, flags=re.I).strip()
-    result=_bounded_call(router.execute_capability,RESEARCH_REQUEST_TIMEOUT_SECONDS,"research_capability",research_query,capability_action="research_topic",topic=str(question or "").strip(),normalized_query=research_query,site_constraint=semantic.requested_domain if semantic.shopping else "",allowed_domains=[semantic.requested_domain] if semantic.requested_domain and semantic.shopping else [],original_request=question,semantic=semantic.to_dict(),intent=semantic.intent,mode=semantic.execution_mode,max_sources=5)
+    result=_bounded_call(router.execute_capability,RESEARCH_REQUEST_TIMEOUT_SECONDS,"research_capability",research_query,capability_action="research_topic",topic=str(question or "").strip(),normalized_query=research_query,site_constraint=semantic.requested_domain if semantic.shopping else "",allowed_domains=[semantic.requested_domain] if semantic.requested_domain and semantic.shopping else [],original_request=question,semantic=semantic.to_dict(),intent=semantic.intent,mode=semantic.execution_mode,response_type=semantic.response_type,requested_count=semantic.requested_count,freshness=semantic.freshness,max_sources=max(5, int(semantic.requested_count or 5)))
     data=getattr(result,"data",None) if isinstance(getattr(result,"data",None),dict) else {}
     data=dict(data)
     data.setdefault("shopping_query", shopping.to_dict())
@@ -209,7 +210,7 @@ def _research_text_request(question, semantic=None):
         return result,data
     try:
         from app.research.capability import WebSearchTool
-        search=WebSearchTool().search(research_query,max_results=8)
+        search=WebSearchTool().search(research_query,max_results=max(8, int(semantic.requested_count or 0)))
         records=search.get("results",[]) if isinstance(search,dict) else []
         if records:
             lines=[]; citations=[]
@@ -362,13 +363,14 @@ def _reverse_image_search_with_attachments(question, attachments):
     finally:
         emit_avatar("THINKING",activity="result_synthesis")
 
-def _image_search_by_text(question, query_override=""):
+def _image_search_by_text(question, query_override="", requested_count=None, exclude_urls=None):
     router=getattr(getattr(getattr(FREYA,"system",None),"facade",None),"_router",None)
     if router is None: raise RuntimeError("Image-search routing is unavailable because the canonical router is not initialized")
     query=str(query_override or _image_search_query(question)).strip()
     if not query:
         return CapabilityResult(success=False,data={"image_results":[]},message="I couldn't determine what subject to search for in the image request.",capability_name="research_capability")
-    return _bounded_call(router.execute_capability,25.0,"research_capability",query,capability_action="image_search",max_results=8,original_request=question)
+    count=max(1, min(int(requested_count or 8), 20))
+    return _bounded_call(router.execute_capability,35.0,"research_capability",query,capability_action="image_search",max_results=count,requested_count=count,exclude_image_urls=list(exclude_urls or []),original_request=question)
 
 
 def _known_product_image_followup(question, session_id):
@@ -512,7 +514,7 @@ def _semantic_research_query(question):
         return "what is shown in the attached image"
     return query
 
-def _dedupe_image_results(records):
+def _dedupe_image_results(records, limit=20):
     """Keep only provider-supplied image records; never invent thumbnails."""
     unique=[]
     seen=set()
@@ -534,10 +536,21 @@ def _dedupe_image_results(records):
             "image_url":image_url,
             "thumbnail_url":str(item.get("thumbnail_url") or item.get("thumbnail") or image_url),
             "url":page_url,
+            "source_page_url":str(item.get("source_page_url") or page_url),
             "source_domain":str(item.get("source_domain") or item.get("domain") or ""),
             "snippet":str(item.get("snippet") or ""),
+            "entity":str(item.get("entity") or ""),
+            "entity_match_score":item.get("entity_match_score", item.get("match_confidence")),
+            "match_confidence":item.get("match_confidence", item.get("entity_match_score")),
+            "relevance":item.get("relevance"),
+            "publication_date":str(item.get("publication_date") or item.get("published_at") or ""),
+            "freshness_score":item.get("freshness_score"),
+            "width":item.get("width"),
+            "height":item.get("height"),
+            "asset_type":str(item.get("asset_type") or "photo"),
+            "provenance":item.get("provenance") if isinstance(item.get("provenance"), dict) else {"source_page_url":page_url, "source_domain":str(item.get("source_domain") or item.get("domain") or "")},
         })
-    return unique[:12]
+    return unique[:max(1, min(int(limit or 20), 20))]
 
 
 def _research_with_visual_context(question,visual_context,visual_meta=None):
@@ -763,6 +776,7 @@ class Handler(BaseHTTPRequestHandler):
                 research_requested=_is_research_request(message) or _is_freshness_sensitive_request(message) or _is_shopping_research_request(message) or semantic_model.should_research
                 image_search_requested=_is_image_search_request(message) or semantic_model.intent == ResearchIntent.IMAGE_SEARCH.value
                 image_results=[]
+                image_search_metrics={}
                 research_data={}
                 if research_requested: emit_avatar("SEARCHING",activity="research")
                 emit_avatar("THINKING",activity="routing")
@@ -856,19 +870,32 @@ class Handler(BaseHTTPRequestHandler):
                         answer=known_answer
                         image_results=known_images
                     else:
-                        global LAST_IMAGE_SUBJECT
+                        global LAST_IMAGE_SUBJECT, LAST_IMAGE_RESULT_URLS
                         entity_query = ""
                         if isinstance(semantic_model.resolved_entities, list) and semantic_model.resolved_entities:
                             entity_query = str((semantic_model.resolved_entities[0] or {}).get("canonical") or "").strip() if isinstance(semantic_model.resolved_entities[0], dict) else str(semantic_model.resolved_entities[0]).strip()
-                        LAST_IMAGE_SUBJECT = entity_query or _image_search_query(message)
-                        image_result = _image_search_by_text(message, query_override=LAST_IMAGE_SUBJECT)
+                        entity_query = re.sub(r"^\s*\d+\s+", "", entity_query).strip()
+                        LAST_IMAGE_SUBJECT = re.sub(r"^\s*\d+\s+", "", entity_query or _image_search_query(message)).strip()
+                        requested_count = int(semantic_model.requested_count or 8)
+                        followup_images = bool(re.search(r"\b(?:more|another|again|same|it|this one)\b", message, re.I))
+                        image_result = _image_search_by_text(message, query_override=LAST_IMAGE_SUBJECT, requested_count=requested_count, exclude_urls=LAST_IMAGE_RESULT_URLS if followup_images else [])
                         image_data = getattr(image_result, "data", None) if isinstance(getattr(image_result, "data", None), dict) else {}
                         raw_images = image_data.get("image_results", []) if isinstance(image_data, dict) else []
-                        image_results = _dedupe_image_results(raw_images)
-                        if image_results:
-                            answer = f"I found public image results for {LAST_IMAGE_SUBJECT or _image_search_query(message)}."
+                        image_results = _dedupe_image_results(raw_images, limit=requested_count)
+                        image_search_metrics = dict(image_data.get("metrics") or {}) if isinstance(image_data, dict) else {}
+                        image_search_metrics["requested_count"] = requested_count
+                        image_search_metrics["returned_count"] = len(image_results)
+                        image_search_metrics["coverage_gap"] = "COUNT_GAP" if len(image_results) < requested_count else ""
+                        if followup_images:
+                            LAST_IMAGE_RESULT_URLS = list(dict.fromkeys(LAST_IMAGE_RESULT_URLS + [str(item.get("image_url") or "") for item in image_results if item.get("image_url")]))[-50:]
                         else:
-                            answer = str(getattr(image_result, "message", "") or "I searched the public web, but the available image-search providers returned no usable image results.")
+                            LAST_IMAGE_RESULT_URLS = [str(item.get("image_url") or "") for item in image_results if item.get("image_url")]
+                        if image_results:
+                            answer = f"I found {len(image_results)} verified unique public image{'s' if len(image_results) != 1 else ''} for {LAST_IMAGE_SUBJECT or _image_search_query(message)}."
+                            if len(image_results) < requested_count:
+                                answer += f" I couldn't reliably verify {requested_count - len(image_results)} more."
+                        else:
+                            answer = str(getattr(image_result, "message", "") or "I searched the public web, but I couldn't verify any usable image assets for that request.")
                 elif research_requested:
                     research_result,research_data=_research_text_request(message, semantic_model)
                     if getattr(research_result,"success",False):
@@ -891,7 +918,7 @@ class Handler(BaseHTTPRequestHandler):
                         composed += "\n\n[ROUTING INSTRUCTION] Preserve the complete user request when selecting or composing downstream capability queries. Never use only the first command verb as a search query. Use visual context only as grounded evidence."
                     self._active_exchange_recorded=True
                     answer=_bounded_call(FREYA.system.facade.chat, DIRECT_CHAT_TIMEOUT_SECONDS, composed, context={**request_context.to_dict(),"original_request":message,"attachment_paths":attachments,"visual_context":context,"has_images":False,"research_requested":research_requested})
-                emit_avatar("SPEAKING",activity="response");                 self.send_payload(200,{"answer":answer,"image_results":image_results,"vision_observations":vision_meta.get("observations",{}) if isinstance(vision_meta,dict) else {},"research_queries":research_data.get("queries",[]) if isinstance(research_data,dict) else [],"multimodal_semantic":semantic_model.to_dict()}); emit_avatar("SUCCESS"); emit_avatar("IDLE")
+                emit_avatar("SPEAKING",activity="response");                 self.send_payload(200,{"answer":answer,"image_results":image_results,"image_search_metrics":image_search_metrics,"response_type":semantic_model.response_type,"requested_count":semantic_model.requested_count,"vision_observations":vision_meta.get("observations",{}) if isinstance(vision_meta,dict) else {},"research_queries":research_data.get("queries",[]) if isinstance(research_data,dict) else [],"multimodal_semantic":semantic_model.to_dict()}); emit_avatar("SUCCESS"); emit_avatar("IDLE")
 
             except (BrokenPipeError,ConnectionResetError,ConnectionAbortedError): emit_avatar("IDLE")
             except Exception as error:

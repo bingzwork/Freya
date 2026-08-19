@@ -89,6 +89,8 @@ class RequestSemanticModel:
     reasoning: List[str] = field(default_factory=list)
     input_modalities: List[str] = field(default_factory=list)
     requested_operation: str = "answer"
+    requested_count: Optional[int] = None
+    response_type: str = "direct_answer"
     attachment_role: str = "UNKNOWN"
     entity_source: str = ""
     resolved_entities: List[Dict[str, Any]] = field(default_factory=list)
@@ -142,9 +144,10 @@ class RequestSemanticAnalyzer:
     _SHOPPING_RE = re.compile(r"\b(?:cheapest|cheaper|cheap|affordable|lowest\s+price|price\s+comparison|shopping|buy|purchase|seller|listing|availability|in\s+stock|on\s+(?:shopee|amazon|lazada|ebay|walmart|newegg))\b", re.I)
     _REVIEW_RE = re.compile(r"\b(?:review|reviews|reviewers|what\s+do\s+people\s+say|user\s+experience|benchmark(?:s)?|performance\s+test)\b", re.I)
     _SPEC_RE = re.compile(r"\b(?:spec|specs|specification|specifications|technical\s+details|architecture|vram|memory\s+interface|power\s+draw)\b", re.I)
-    _VERIFY_RE = re.compile(r"\b(?:verify|fact\s*[- ]?check|is\s+it\s+true|confirm\s+whether)\b", re.I)
+    _VERIFY_RE = re.compile(r"\b(?:verify|fact\s*[- ]?check|is\s+it\s+true|confirm\s+whether|sources?\s+supporting)\b", re.I)
     _DEEP_RE = re.compile(r"\b(?:deeply|in\s+depth|deep\s+research|investigate|thoroughly|multi[- ]source|comprehensively)\b", re.I)
     _IMAGE_RE = re.compile(r"\b(?:show|give\s+me|fetch|send)\b.{0,50}\b(?:photo(?:s)?|picture(?:s)?|image(?:s)?)\b|\bfind\b.{0,60}\b(?:photo(?:s)?|picture(?:s)?|image(?:s)?)\s+of\b|\b(?:photo(?:s)?|picture(?:s)?|image(?:s)?)\s+of\b|\bwhat\s+does\b.{0,60}\blook\s+like\b", re.I)
+    _COUNT_RE = re.compile(r"\b(?:give|show|find|send|fetch|list|return|top)(?:\s+me)?\s+(\d+)\b|\b(\d+)\s+(?:photos?|pictures?|images?|options?|alternatives?|results?|items?|sources?)\b", re.I)
 
     @classmethod
     def analyze(cls, query: str, *, context: Optional[Dict[str, Any]] = None) -> RequestSemanticModel:
@@ -163,6 +166,8 @@ class RequestSemanticAnalyzer:
         deep = bool(cls._DEEP_RE.search(text))
         spec = bool(cls._SPEC_RE.search(text))
         explicit_operation = bool(re.search(r"\b(?:find|show|compare|summarize|research|explain|verify|review|what|which|how much|is)\b", lower))
+        count_match = cls._COUNT_RE.search(text)
+        requested_count = int(next(group for group in count_match.groups() if group)) if count_match else None
         requested_domain = ""
         site_match = cls._SITE_RE.search(lower)
         if site_match:
@@ -185,6 +190,8 @@ class RequestSemanticAnalyzer:
             intent, operation, output_goal = ResearchIntent.IMAGE_SEARCH.value, "show", "image_results"
         elif verify:
             intent, operation, output_goal = ResearchIntent.CLAIM_VERIFICATION.value, "verify", "verified_claim"
+        elif re.search(r"\bwhich\s+source\b", lower) and re.search(r"\b(?:different|conflict|disagree|two\s+official)\b", lower):
+            intent, operation, output_goal = ResearchIntent.CLAIM_VERIFICATION.value, "verify", "conflict_explanation"
         elif comparison and price_lookup and bool(re.search(r"\b(?:cheapest|buy|purchase|seller|listing|on\s+\w+)\b", lower)):
             intent, operation, output_goal = ResearchIntent.SHOPPING_PRICE_SEARCH.value, "find", "price_comparison"
         elif comparison:
@@ -197,9 +204,17 @@ class RequestSemanticAnalyzer:
             intent, operation, output_goal = ResearchIntent.SHOPPING_DISCOVERY.value, "find", "shopping_options"
         elif review:
             intent, operation, output_goal = ResearchIntent.REVIEW_RESEARCH.value, "review", "review_consensus"
+        elif re.fullmatch(r"(?:find|show|give)(?:\s+me)?\s+the\s+best\s+one\.?", lower):
+            intent, operation, output_goal = ResearchIntent.FACTUAL_LOOKUP.value, "clarify", "clarifying_question"
+        elif re.search(r"\b(?:why|troubleshoot|fix|debug|not\s+working|error|failed)\b", lower):
+            intent, operation, output_goal = ResearchIntent.FACTUAL_LOOKUP.value, "troubleshoot", "direct_answer"
+        elif requested_count is not None and re.search(r"\b(?:alternatives?|options?|choices?)\b", lower):
+            intent, operation, output_goal = ResearchIntent.GENERAL_WEB_RESEARCH.value, "research", "counted_options"
+        elif re.search(r"\b(?:repository|repo|official\s+docs?|library)\b", lower) and re.search(r"\b(?:how\s+does|check|handle)\b", lower):
+            intent, operation, output_goal = ResearchIntent.GENERAL_WEB_RESEARCH.value, "research", "direct_answer"
         elif deep:
             intent, operation, output_goal = ResearchIntent.DEEP_RESEARCH.value, "research", "deep_synthesis"
-        elif spec:
+        elif spec and not re.search(r"\b(?:search|look\s+up|find)\s+(?:the\s+)?(?:web|internet)\b", lower):
             intent, operation, output_goal = ResearchIntent.SPECIFICATION_LOOKUP.value, "answer", "specifications"
         elif cls._LATEST_RE.search(text):
             intent, operation, output_goal = ResearchIntent.CURRENT_LOOKUP.value, "answer", "current_answer"
@@ -210,7 +225,7 @@ class RequestSemanticAnalyzer:
 
         if intent == ResearchIntent.IMAGE_SEARCH.value:
             execution_mode = "IMAGE_SEARCH"
-        elif intent in {ResearchIntent.NEWS_RESEARCH.value, ResearchIntent.TECHNICAL_COMPARISON.value, ResearchIntent.PRODUCT_COMPARISON.value, ResearchIntent.DEEP_RESEARCH.value, ResearchIntent.REVIEW_RESEARCH.value} or deep:
+        elif intent in {ResearchIntent.NEWS_RESEARCH.value, ResearchIntent.TECHNICAL_COMPARISON.value, ResearchIntent.PRODUCT_COMPARISON.value, ResearchIntent.DEEP_RESEARCH.value, ResearchIntent.REVIEW_RESEARCH.value, ResearchIntent.SHOPPING_PRICE_SEARCH.value} or deep:
             execution_mode = "DEEP_RESEARCH"
         else:
             execution_mode = "FAST_SEARCH"
@@ -242,6 +257,23 @@ class RequestSemanticAnalyzer:
             reasoning.append("named entity and complete operation make the request self-contained")
 
         confidence = 0.92 if comparison or news or image or verify else 0.82 if shopping or review or spec else 0.68
+        response_type = output_goal
+        if requested_count is not None and intent not in {ResearchIntent.IMAGE_SEARCH.value, "REVERSE_IMAGE_SEARCH", "SIMILAR_IMAGE_SEARCH"}:
+            response_type = "counted_options"
+        elif re.search(r"\b(?:which\s+source|two\s+official|different\s+(?:release\s+)?dates?|conflict|disagree)\b", lower) and re.search(r"\b(?:source|page|official|date)\b", lower):
+            response_type = "conflict_explanation"
+        elif re.search(r"\b(?:wrong|correct(?:ion)?|recheck|use\s+the\s+official\s+source)\b", lower):
+            response_type = "correction_or_verified_answer"
+        elif re.search(r"\bfind\s+the\s+best\s+one\b", lower) or re.fullmatch(r"(?:find|show|give)\s+(?:me\s+)?the\s+best\s+one\.?", lower):
+            response_type = "clarifying_question"
+        elif re.search(r"\b(?:which|best|recommend|should\s+i|what\s+should)\b", lower):
+            response_type = "recommendation"
+        elif re.search(r"\b(?:why|troubleshoot|fix|debug|not\s+working|error|failed)\b", lower):
+            response_type = "troubleshooting"
+        elif re.search(r"\b(?:sources?\s+supporting|fact[- ]?check|verify|is\s+it\s+true)\b", lower):
+            response_type = "verified_claim"
+        elif response_type == "direct_answer" and re.search(r"\b(?:research|investigate|synthesize|public\s+work)\b", lower):
+            response_type = "research_synthesis"
         model = RequestSemanticModel(
             intent=intent,
             execution_mode=execution_mode,
@@ -261,6 +293,9 @@ class RequestSemanticAnalyzer:
             confidence=confidence,
             reasoning=reasoning,
         )
+        model.requested_count = requested_count
+        model.response_type = response_type
+        model.output_goal = response_type
         return cls._apply_multimodal(model, text, context)
 
     @classmethod
@@ -333,12 +368,15 @@ class RequestSemanticAnalyzer:
             model.intent = ResearchIntent.IMAGE_SEARCH.value
             model.operation = "find_more_photos" if re.search(r"\bmore|another|other\b", lower) else "search_images"
             model.output_goal = "image_results"
-        elif current:
+        elif current and model.intent not in {ResearchIntent.CURRENT_LOOKUP.value, ResearchIntent.NEWS_RESEARCH.value, ResearchIntent.DEEP_RESEARCH.value}:
             model.intent = ResearchIntent.NEWS_RESEARCH.value
             model.operation = "summarize"
         elif deep:
             model.intent = ResearchIntent.DEEP_RESEARCH.value
             model.operation = "research"
+        if model.intent in {"REVERSE_IMAGE_SEARCH", "SIMILAR_IMAGE_SEARCH", ResearchIntent.IMAGE_SEARCH.value}:
+            model.execution_mode = "IMAGE_SEARCH"
+            model.response_type = "image_results"
         model.requested_operation = model.operation
         model.entities = entities[:6]
         model.entity_source = "USER_PROVIDED" if explicit_user_entities else ("CONVERSATION_CONTEXT" if recent_entity else "")

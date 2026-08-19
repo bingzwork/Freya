@@ -4,7 +4,8 @@ import asyncio
 import json
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
 from html import unescape
 from pathlib import Path
 from typing import Any, Iterable, Optional, TYPE_CHECKING
@@ -28,6 +29,7 @@ class ProviderOutcome:
     candidates: list[dict[str, Any]]
     error: str | None = None
     challenged: bool = False
+    metrics: dict[str, Any] = field(default_factory=dict)
 
 
 def _public_url(value: Any, base_url: str = "") -> str:
@@ -50,7 +52,8 @@ def _domain(url: str) -> str:
     return urlparse(url).netloc.lower()
 
 
-def _candidate(title: str, image_url: str, source_url: str, provider: str, *, match_type: str = "related", relevance: Any = None, snippet: str = "") -> dict[str, Any] | None:
+def _candidate(title: str, image_url: str, source_url: str, provider: str, *, match_type: str = "related", relevance: Any = None, snippet: str = "", entity: str = "", entity_match_score: Any = None, publication_date: str = "", freshness_score: Any = None, width: Any = None, height: Any = None, asset_type: str = "photo") -> dict[str, Any] | None:
+
     image_url = _public_url(image_url, source_url)
     source_url = _public_url(source_url)
     if not image_url:
@@ -66,7 +69,91 @@ def _candidate(title: str, image_url: str, source_url: str, provider: str, *, ma
         "relevance": relevance,
         "provider": provider,
         "snippet": re.sub(r"\s+", " ", str(snippet or "")).strip()[:500],
+        "entity": str(entity or "").strip(),
+        "entity_match_score": entity_match_score,
+        "publication_date": str(publication_date or "").strip(),
+        "freshness_score": freshness_score,
+        "width": int(width) if str(width or "").isdigit() else None,
+        "height": int(height) if str(height or "").isdigit() else None,
+        "asset_type": asset_type or "photo",
+        "provenance": {"provider": provider, "source_page_url": source_url or image_url},
     }
+
+
+def _overfetch_limit(requested_count: int, hard_limit: int = 50) -> int:
+    target = max(1, min(int(requested_count or 10), hard_limit))
+    return max(target, min(hard_limit, target * 3 if target > 1 else 8))
+
+
+def validate_image_candidates(query: str, candidates: Iterable[dict[str, Any]], *, limit: int, exclude_urls: Optional[Iterable[str]] = None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    excluded = {str(url or "").split("#", 1)[0].rstrip("/").lower() for url in (exclude_urls or []) if url}
+    tokens = [token for token in re.findall(r"[a-z0-9]+", str(query or "").lower()) if len(token) >= 3]
+    metrics = {"requested_count": int(limit), "candidates": 0, "validated": 0, "duplicates": 0, "rejected_mismatch": 0, "rejected_broken_asset": 0, "rejected_weak_asset": 0, "rejected_unsafe_asset": 0, "excluded_previous": 0}
+    usable: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw in candidates:
+        metrics["candidates"] += 1
+        if not isinstance(raw, dict):
+            metrics["rejected_broken_asset"] += 1
+            continue
+        image_url = _public_url(raw.get("image_url") or raw.get("thumbnail_url"), str(raw.get("source_page_url") or raw.get("url") or ""))
+        if not image_url:
+            metrics["rejected_broken_asset"] += 1
+            continue
+        key = image_url.split("#", 1)[0].rstrip("/").lower()
+        if key in excluded:
+            metrics["excluded_previous"] += 1
+            continue
+        if key in seen:
+            metrics["duplicates"] += 1
+            continue
+        seen.add(key)
+        text = " ".join(str(raw.get(name) or "") for name in ("title", "snippet", "entity", "source_page_url", "source_domain")).lower()
+        matched = {token for token in tokens if token in text}
+        score = len(matched) / max(1, len(set(tokens))) if tokens else 1.0
+        if len(set(tokens)) >= 2 and score < 0.25:
+            metrics["rejected_mismatch"] += 1
+            continue
+        if len(set(tokens)) == 2:
+            ordered_pattern = r"\b" + r"\W+".join(re.escape(token) for token in tokens) + r"\b"
+            if not re.search(ordered_pattern, text, re.I):
+                metrics["rejected_mismatch"] += 1
+                continue
+        visible_text = " ".join(str(raw.get(name) or "") for name in ("title", "snippet", "entity")).lower()
+        visible_tokens = {token for token in re.findall(r"[a-z0-9]+", visible_text) if len(token) >= 3}
+        visible_score = len(set(tokens) & visible_tokens) / max(1, len(set(tokens))) if tokens else 1.0
+        if len(set(tokens)) >= 2 and len(visible_tokens) >= 2 and visible_score < 0.5:
+            metrics["rejected_mismatch"] += 1
+            continue
+        if re.fullmatch(r"(?:explore|image|photo|picture|gallery|untitled|thumbnail)", str(raw.get("title") or "").strip(), re.I):
+            metrics["rejected_weak_asset"] += 1
+            continue
+        combined_text = f"{image_url} {text} {visible_text}"
+        if re.search(r"\b(?:porn|xxx|nsfw|nude|naked|sexual|sex|fuck|blowjob|hentai)\b", combined_text, re.I):
+            metrics["rejected_unsafe_asset"] += 1
+            continue
+        width = int(raw.get("width") or 0) if str(raw.get("width") or "").isdigit() else 0
+        height = int(raw.get("height") or 0) if str(raw.get("height") or "").isdigit() else 0
+        if (width and width < 160) or (height and height < 120) or re.search(r"(?:pixel|spacer|tracking|favicon|logo|icon|sprite|advertisement|\.svg(?:$|[?#])|1px)", combined_text, re.I):
+            metrics["rejected_weak_asset"] += 1
+            continue
+        item = dict(raw)
+        item["image_url"] = image_url
+        item["thumbnail_url"] = _public_url(item.get("thumbnail_url") or image_url, str(item.get("source_page_url") or item.get("url") or "")) or image_url
+        item["source_page_url"] = _public_url(item.get("source_page_url") or item.get("url") or "", "") or image_url
+        item["source_domain"] = _domain(item["source_page_url"])
+        item["entity"] = str(query or "").strip()
+        item["entity_match_score"] = round(score, 3)
+        item["relevance"] = float(item.get("relevance") or score)
+        item.setdefault("asset_type", "photo")
+        item.setdefault("provenance", {"source_page_url": item["source_page_url"], "provider": item.get("provider", "unknown")})
+        usable.append(item)
+    usable.sort(key=lambda item: (float(item.get("entity_match_score") or 0.0), float(item.get("freshness_score") or 0.0), float(item.get("relevance") or 0.0)), reverse=True)
+    selected = usable[:max(0, int(limit))]
+    metrics["validated"] = len(selected)
+    metrics["returned_count"] = len(selected)
+    metrics["coverage_gap"] = "COUNT_GAP" if len(selected) < int(limit) else ""
+    return selected, metrics
 
 
 def _elements_from_observation(observation: Any) -> list[dict[str, Any]]:
@@ -243,7 +330,8 @@ class VisionSearchFallbackProvider:
 
     def search_text(self, query: str, *, limit: int = 10) -> ProviderOutcome:
         try:
-            result = self.search_tool.search(f"{query} images", max_results=min(8, limit))
+            result = self.search_tool.search(f"{query} images", max_results=min(20, limit))
+
         except Exception:
             result = {"success": False, "results": [], "errors": ["public search failed"]}
         candidates: list[dict[str, Any]] = []
@@ -254,7 +342,8 @@ class VisionSearchFallbackProvider:
             direct = _candidate(item.get("title"), item.get("image_url") or item.get("thumbnail_url"), source_url or "", "public_search", match_type="related", snippet=item.get("snippet"))
             if direct:
                 candidates.append(direct)
-            candidates.extend(extract_public_page_images(str(source_url or ""), timeout_seconds=self.page_timeout, limit=3))
+            candidates.extend(extract_public_page_images(str(source_url or ""), timeout_seconds=self.page_timeout, limit=5))
+
         candidates = deduplicate_candidates(candidates, limit=limit)
         if not candidates:
             candidates = _public_image_search(query, limit=limit, timeout=self.page_timeout)
@@ -304,25 +393,34 @@ class FreeImageResearchChain:
         self.vision = vision
         self.fallback.vision = vision
 
-    def search_text(self, query: str, *, limit: int = 10) -> ProviderOutcome:
-        return self.fallback.search_text(query, limit=limit)
+    def search_text(self, query: str, *, limit: int = 10, exclude_urls: Optional[Iterable[str]] = None) -> ProviderOutcome:
+        discovery_limit = _overfetch_limit(limit)
+        outcome = self.fallback.search_text(query, limit=discovery_limit)
+        validated, metrics = validate_image_candidates(query, outcome.candidates, limit=limit, exclude_urls=exclude_urls)
+        outcome.candidates = validated
+        outcome.metrics = metrics
+        outcome.success = bool(validated)
+        return outcome
 
-    def search(self, image_path: str, *, limit: int = 10) -> dict[str, Any]:
+    def search(self, image_path: str, *, limit: int = 10, exclude_urls: Optional[Iterable[str]] = None) -> dict[str, Any]:
         attempts: list[dict[str, Any]] = []
         merged: list[dict[str, Any]] = []
+        discovery_limit = _overfetch_limit(limit)
         for provider in (self.google, self.yandex):
-            outcome = provider.search(image_path, limit=limit)
+            outcome = provider.search(image_path, limit=discovery_limit)
+
             attempts.append({"provider": outcome.provider, "success": outcome.success, "error": outcome.error, "challenged": outcome.challenged})
             merged.extend(outcome.candidates)
-            if len(merged) >= limit:
+            if len(merged) >= discovery_limit:
+
                 break
-        if len(merged) < limit:
-            fallback = self.fallback.search(image_path, limit=limit)
-            attempts.append({"provider": fallback.provider, "success": fallback.success, "error": fallback.error, "challenged": fallback.challenged})
+        if len(merged) < discovery_limit:
+            fallback = self.fallback.search(image_path, limit=discovery_limit)
+            attempts.append({"provider": fallback.provider, "success": fallback.success, "error": fallback.error, "challenged": fallback.challenged, "metrics": fallback.metrics})
             merged.extend(fallback.candidates)
-        merged = deduplicate_candidates(merged, limit=limit)
+        validated, metrics = validate_image_candidates("uploaded image", merged, limit=limit, exclude_urls=exclude_urls)
         provider = next((item.get("provider") for item in reversed(attempts) if item.get("success")), "free_image_research")
-        return {"success": bool(merged), "provider": provider, "matches": merged, "image_results": merged, "attempts": attempts, "warning": "Visual similarity is not identity confirmation.", "error": None if merged else "Free browser providers and vision-assisted public search returned no usable candidates."}
+        return {"success": bool(validated), "provider": provider, "matches": validated, "image_results": validated, "attempts": attempts, "metrics": metrics, "warning": "Visual similarity is not identity confirmation.", "error": None if validated else "Free browser providers and vision-assisted public search returned no usable candidates."}
 
 
 __all__ = ["FreeImageResearchChain", "GoogleLensBrowserProvider", "YandexImagesBrowserProvider", "VisionSearchFallbackProvider", "extract_public_page_images", "ProviderOutcome"]

@@ -240,9 +240,9 @@ class DDGSProvider:
             return AdapterOutcome(False, self.name, errors=[f"DDGS is unavailable: {type(error).__name__}"])
         try:
             with DDGS(timeout=self.timeout_seconds) as client:
-                raw_results = client.images(str(query), max_results=max(1, min(int(limit) * 2, 12)))
+                raw_results = client.images(str(query), max_results=max(1, min(int(limit) * 2, 30)))
             results = [item for index, raw in enumerate(raw_results or [], start=1) if (item := _normalize_image_result(raw, index, str(query)))]
-            return AdapterOutcome(bool(results), "ddgs_images", results=results[:limit], errors=[] if results else ["DDGS returned no usable public image results"], attempts=[{"provider": "ddgs_images", "success": bool(results)}])
+            return AdapterOutcome(bool(results), "ddgs_images", results=results[:max(1, int(limit))], errors=[] if results else ["DDGS returned no usable public image results"], attempts=[{"provider": "ddgs_images", "success": bool(results)}])
         except Exception as error:
             logger.info("DDGS image search failed: %s", error)
             return AdapterOutcome(False, "ddgs_images", errors=[f"DDGS image search failed: {type(error).__name__}"], attempts=[{"provider": "ddgs_images", "success": False}])
@@ -403,7 +403,7 @@ class ImageSearchProviderPool:
 
     def search(self, query: str, *, limit: int = 4) -> AdapterOutcome:
         primary = self.primary.search_images(query, limit=limit)
-        if primary.success:
+        if primary.success and len(primary.results) >= int(limit):
             return primary
         if self.fallback is None:
             return primary
@@ -416,7 +416,16 @@ class ImageSearchProviderPool:
             else:
                 records = raw.get("image_results") or raw.get("matches") or raw.get("results") or [] if isinstance(raw, dict) else []
             normalized = [dict(item) for item in records if isinstance(item, dict) and _public_url(item.get("image_url") or item.get("thumbnail_url"))]
-            return AdapterOutcome(bool(normalized), "freya_image_chain", results=normalized[:limit], errors=list(primary.errors), attempts=list(primary.attempts) + [{"provider": "freya_image_chain", "success": bool(normalized)}])
+            combined = list(primary.results or []) + normalized
+            unique = []
+            seen = set()
+            for item in combined:
+                key = str(item.get("image_url") or item.get("thumbnail_url") or item.get("url") or "").split("#", 1)[0].rstrip("/").lower()
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                unique.append(item)
+            return AdapterOutcome(bool(unique), "freya_image_chain", results=unique[:max(1, int(limit))], errors=list(primary.errors), attempts=list(primary.attempts) + [{"provider": "freya_image_chain", "success": bool(normalized)}])
         except Exception as error:
             return AdapterOutcome(False, "freya_image_chain", errors=list(primary.errors) + [f"Image fallback failed: {type(error).__name__}"], attempts=list(primary.attempts) + [{"provider": "freya_image_chain", "success": False}])
 
