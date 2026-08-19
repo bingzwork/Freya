@@ -42,6 +42,7 @@ from app.research.comparison_intelligence import ComparisonIntelligenceEngine, C
 from app.research.intelligence import (
     EvidenceClassifier,
     EvidenceType,
+    FeedbackClassifier,
     KnowledgeImprovementAssessor,
     KnowledgeReconciler,
     ResearchAnswerQualityVerifier,
@@ -49,6 +50,7 @@ from app.research.intelligence import (
     RequestSemanticModel,
     ResearchIntent,
     ResearchStrategySelector,
+    SourceQualityProfileStore,
     SynthesisEngine,
 )
 
@@ -1035,7 +1037,7 @@ class ResearchCapability(Capability):
             auto_discoverable=True,
             safe_query=True,
             default_action="search_web",
-            supported_actions=["search_web", "read_page", "research_topic", "compare_sources", "verify_claim", "learn_finding", "archive_search", "advanced_search", "cross_site_research", "image_search", "reverse_image_search", "image_intelligence"],
+            supported_actions=["search_web", "read_page", "research_topic", "compare_sources", "verify_claim", "learn_finding", "record_feedback", "archive_search", "advanced_search", "cross_site_research", "image_search", "reverse_image_search", "image_intelligence"],
             tags=["research", "web", "search", "sources", "citations", "verify", "evidence"],
             aliases=["websearch", "web search", "search the web", "internet research", "deep research", "research"],
             required_collaborators=["tool_manager"],
@@ -1044,7 +1046,9 @@ class ResearchCapability(Capability):
         self._event_bus = None
         self._tool_manager = None
         self._learning_pipeline = None
+        self._memory_coordinator = None
         self.web_adapter = WebResearchAdapter()
+
         self.search_tool = WebSearchTool(adapter=self.web_adapter)
         self.page_reader = WebPageReader(adapter=self.web_adapter)
         self.image_research = FreeImageResearchChain(self.search_tool)
@@ -1058,6 +1062,7 @@ class ResearchCapability(Capability):
         self.semantic_analyzer = RequestSemanticAnalyzer()
         self.evidence_classifier = EvidenceClassifier()
         self.strategy_selector = ResearchStrategySelector()
+        self.source_profiles = SourceQualityProfileStore()
         self.synthesis_engine = SynthesisEngine()
         self.comparison_engine = ComparisonIntelligenceEngine()
 
@@ -1381,7 +1386,45 @@ class ResearchCapability(Capability):
     def set_learning_pipeline(self, learning_pipeline) -> None:
         self._learning_pipeline = learning_pipeline
 
+    def set_memory_coordinator(self, memory_coordinator) -> None:
+        """Bind the canonical memory owner for validated source-profile persistence."""
+        self._memory_coordinator = memory_coordinator
+        try:
+            semantic_memory = getattr(memory_coordinator, "semantic_memory", None)
+            entries = semantic_memory.search(category="source_profile", limit=200) if semantic_memory is not None else []
+            for entry in entries or []:
+                profile_data = (getattr(entry, "metadata", {}) or {}).get("profile")
+                if isinstance(profile_data, dict) and profile_data.get("domain"):
+                    allowed = set(SourceQualityProfile.__dataclass_fields__)
+                    self.source_profiles._profiles[profile_data["domain"]] = SourceQualityProfile(**{key: value for key, value in profile_data.items() if key in allowed})
+        except Exception:
+            logger.debug("Unable to load persisted source profiles", exc_info=True)
+
+    def _persist_source_profiles(self) -> List[str]:
+        if self._memory_coordinator is None:
+            return []
+        stored = []
+        store = getattr(self._memory_coordinator, "store_learned", None)
+        if not callable(store):
+            return stored
+        for profile in self.source_profiles.snapshot():
+            try:
+                stored.append(str(store({
+                    "learning_type": "knowledge",
+                    "title": f"Source profile: {profile.get('domain')}",
+                    "content": f"Validated operational source profile for {profile.get('domain')} with extraction success rate {profile.get('extraction_success_rate')} and verification rate {profile.get('verification_rate')}.",
+                    "category": "source_profile",
+                    "confidence": max(0.45, min(0.95, float(profile.get("authority_score", 0.45)))),
+                    "source": "Pasted29_validated_source_profile",
+                    "tags": ["source-profile", str(profile.get("source_type") or "GENERAL_WEB").lower()],
+                    "metadata": {"profile": profile, "learning_type": "knowledge", "validated": True},
+                })))
+            except Exception:
+                logger.debug("Unable to persist source profile", exc_info=True)
+        return stored
+
     def _invoke(self, stage: str, **kwargs) -> Any:
+
         if self._tool_manager is None:
             return {"success": False, "error": "ToolManager not initialized"}
         result = self._tool_manager.execute(self.TOOL_NAMES[stage], **kwargs)
@@ -1514,7 +1557,20 @@ class ResearchCapability(Capability):
             result["results"] = _query_relevant_public_search_results(result["results"], normalized_query)[:max_results]
         else:
             result["results"] = _usable_public_search_results(result["results"])[:max_results]
+        ranked_results = []
+        for item in result.get("results", []) if isinstance(result.get("results"), list) else []:
+            if not isinstance(item, dict):
+                continue
+            enriched_item = dict(item)
+            source_url = str(enriched_item.get("url") or enriched_item.get("source_url") or "")
+            enriched_item["source_profile_bonus"] = self.source_profiles.ranking_bonus(source_url)
+            enriched_item["vertical"] = self.strategy_selector.select_vertical(semantic)
+            ranked_results.append(enriched_item)
+        result["results"] = sorted(ranked_results, key=lambda item: (float(item.get("source_profile_bonus", 0.0)), float(item.get("relevance", 0.0))), reverse=True)[:max_results]
+        result["vertical_plan"] = self.strategy_selector.vertical_plan(semantic)
+        result["source_profiles"] = self.source_profiles.snapshot()
         result["success"] = bool(result["results"])
+
         if not result["success"]:
             result.setdefault("errors", []).append("No usable public page results remained after filtering search homepages")
             browser_result = self._browser_search(query, max_results, site_constraint=requested_domain, allowed_domains=allowed_domains, normalized_query=normalized_query, semantic=semantic)
@@ -1597,6 +1653,10 @@ class ResearchCapability(Capability):
 
     def _classify_evidence(self, record: Dict[str, Any], semantic: Optional[RequestSemanticModel] = None) -> Dict[str, Any]:
         metadata = self.evidence_classifier.classify(record, semantic)
+        profile = self.source_profiles.get(str(record.get("url") or record.get("source_url") or ""), str(metadata.get("evidence_type") or "GENERAL_WEB"))
+        metadata["source_profile"] = profile.to_dict()
+        metadata["source_quality_with_profile"] = round(max(0.0, min(1.0, float(metadata.get("source_quality", 0.0)) + profile.ranking_bonus())), 3)
+        metadata["vertical_plan"] = self.strategy_selector.vertical_plan(semantic) if semantic is not None else {}
         enriched = dict(record)
         enriched.update({"evidence_type": metadata.get("evidence_type"), "source_role": metadata.get("source_role"), "price_type": metadata.get("price_type"), "commerce_verified": metadata.get("commerce_verified", False), "topic_relevance": metadata.get("topic_relevance", {})})
         return {"record": enriched, "metadata": metadata}
@@ -1813,10 +1873,11 @@ class ResearchCapability(Capability):
         uncertainty.extend(str(item) for item in synthesis.get("uncertainty", []) if item)
         if answer_quality.get("status") in {"PARTIALLY_VERIFIED", "INSUFFICIENT_EVIDENCE"}:
             uncertainty.append("Answer-quality verification found unsupported or insufficiently grounded claims.")
+        answer = SynthesisEngine.attach_inline_citations(answer, [fact.to_dict() for fact in facts], citations)
         result = ResearchResult(
-
             topic=topic,
             answer=answer,
+
             key_findings=[fact.to_dict() for fact in facts],
             supporting_evidence=[fact.to_dict() for fact in facts],
             sources=sources,
@@ -1856,6 +1917,7 @@ class ResearchCapability(Capability):
         payload = {"success": bool(facts), "data": data, "errors": result.errors, "mode": ResearchMode.DEEP_RESEARCH.value, "message": answer}
         if facts and answer_quality.get("status") == "VERIFIED" and inputs.get("learn", True):
             payload["learning"] = self.action_learn_finding({"research_result": data, "remember": True, "verified": True})
+            data["source_profile_memory_ids"] = self._persist_source_profiles()
         return payload
 
     def _action_comparison_research(self, topic: str, inputs: Dict[str, Any], semantic: RequestSemanticModel) -> Dict[str, Any]:
@@ -2010,6 +2072,7 @@ class ResearchCapability(Capability):
                     continue
                 page_response = self.action_read_page({"url": url})
                 if not page_response.get("success"):
+                    self.source_profiles.observe(url, source_type=str(raw_evidence["metadata"].get("evidence_type") or "GENERAL_WEB"), authority_score=float(raw_evidence["metadata"].get("source_quality", 0.45)), extracted=False, rate_limited=bool(re.search(r"rate|timeout|blocked|captcha", str(page_response.get("error") or ""), re.I)))
                     errors.append(str(page_response.get("error") or f"Failed to read {url}"))
                     if semantic.news:
                         headline_fact = self._headline_fact(raw_evidence["record"], raw_evidence["metadata"])
@@ -2025,6 +2088,7 @@ class ResearchCapability(Capability):
                 if not self._relevant_evidence(page_evidence["metadata"], semantic):
                     continue
                 seen_urls.add(url)
+                self.source_profiles.observe(url, source_type=str(page_evidence["metadata"].get("evidence_type") or "GENERAL_WEB"), authority_score=float(page_evidence["metadata"].get("source_quality", 0.45)), extracted=True, relevant=True)
                 quality_raw = self._invoke("evaluate", page=page.to_dict(), query=" ".join(semantic.entities) or topic)
                 quality = quality_raw if isinstance(quality_raw, dict) else _jsonable(quality_raw)
                 source_record = {"search_result": raw_evidence["record"], "page": page.to_dict(), "quality": quality, "evidence": page_evidence["metadata"], "role": page_evidence["metadata"].get("source_role"), "query": query}
@@ -2081,6 +2145,7 @@ class ResearchCapability(Capability):
         answer_quality = ResearchAnswerQualityVerifier.verify(answer_text, [fact.to_dict() for fact in facts], sources, conflicts)
         if answer_quality.get("status") in {"PARTIALLY_VERIFIED", "INSUFFICIENT_EVIDENCE"}:
             uncertainty.append("Answer-quality verification found unsupported or insufficiently grounded claims.")
+        answer_text = SynthesisEngine.attach_inline_citations(answer_text, [fact.to_dict() for fact in facts], citations)
         result = ResearchResult(
             topic=topic,
             answer=answer_text,
@@ -2109,12 +2174,15 @@ class ResearchCapability(Capability):
             "local_knowledge_snapshot": local_snapshot,
             "knowledge_reconciliation": reconciliation,
             "answer_quality": answer_quality,
+            "vertical_plan": self.strategy_selector.vertical_plan(semantic),
+            "source_profiles": self.source_profiles.snapshot(),
             "provider_attempts": [item for source in sources for item in (source.get("search_result", {}).get("attempts", []) if isinstance(source.get("search_result"), dict) else [])],
         })
         self._publish_event("research.completed" if facts else "research.partial_or_failed", {"topic": topic[:200], "mode": semantic.execution_mode, "intent": semantic.intent, "source_count": len(sources), "fact_count": len(facts), "partial": result.partial, "answer_quality": answer_quality.get("status"), "reconciliation": reconciliation.get("status")})
         payload = {"success": bool(facts), "data": data, "errors": result.errors, "mode": semantic.execution_mode, "message": result.answer}
         if facts and answer_quality.get("status") == "VERIFIED" and inputs.get("learn", True):
             payload["learning"] = self.action_learn_finding({"research_result": data, "remember": True, "verified": True})
+            data["source_profile_memory_ids"] = self._persist_source_profiles()
         return payload
 
     def action_research_topic(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
@@ -2299,7 +2367,57 @@ class ResearchCapability(Capability):
             status = "insufficient_evidence"
         return {"success": bool(findings), "data": {"claim": claim, "status": status, "supporting_sources": support_sources, "evidence": findings, "conflicts": conflicts, "uncertainty": data.get("uncertainty", []), "confidence": data.get("confidence", 0.0)}, "errors": research.get("errors", [])}
 
+    def action_record_feedback(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        """Classify feedback and route it to the appropriate validated owner."""
+        text = str(inputs.get("feedback") or inputs.get("text") or inputs.get("message") or "").strip()
+        if not text:
+            return {"success": False, "accepted": False, "reason": "feedback text is required"}
+        context = inputs.get("context") if isinstance(inputs.get("context"), dict) else {}
+        feedback = FeedbackClassifier.classify(text, context)
+        feedback_type = feedback.get("type")
+        if feedback_type == "UNKNOWN":
+            return {"success": True, "accepted": False, "feedback": feedback, "reason": "feedback type was not confidently classified"}
+        if feedback_type in {"USER_PREFERENCE", "ANSWER_STYLE"}:
+            try:
+                from app.memory.preference_learning import learn_from_interaction
+                learned = learn_from_interaction(text, str(inputs.get("assistant_response") or ""))
+                return {"success": True, "accepted": bool(learned), "feedback": feedback, "preferences_learned": len(learned)}
+            except Exception as error:
+                return {"success": False, "accepted": False, "feedback": feedback, "reason": f"preference learning unavailable: {type(error).__name__}"}
+        if self._learning_pipeline is None:
+            return {"success": False, "accepted": False, "feedback": feedback, "reason": "LearningPipeline is not initialized"}
+        from app.learning.models import LearningCandidate, LearningCandidateType
+        verified = bool(inputs.get("verified", False))
+        candidate = LearningCandidate(
+            candidate_type=LearningCandidateType.CONVERSATION_FEEDBACK,
+            source_component="FeedbackClassifier",
+            raw_observation={
+                "title": f"User feedback: {feedback_type}",
+                "content": text,
+                "category": "experience" if feedback_type == "EXECUTION_FEEDBACK" else "source_feedback" if feedback_type == "SOURCE_FEEDBACK" else "factual_correction",
+                "confidence": 0.85 if verified else 0.45,
+                "source": "user_feedback",
+                "verified": verified,
+                "verification_status": "verified" if verified else "unverified",
+                "metadata": {"feedback_type": feedback_type, "prior_research": context.get("research_result") or context.get("last_research_result") or {}, "source_urls": list(inputs.get("source_urls") or [])},
+            },
+            context={"feedback": feedback, "provenance": context.get("research_result") or context.get("last_research_result") or {}},
+            tags=["feedback", feedback_type.lower(), "verified" if verified else "requires-verification"],
+            metadata={"feedback_type": feedback_type, "verified": verified},
+        )
+        try:
+            result = self._learning_pipeline.run(candidate) if callable(getattr(self._learning_pipeline, "run", None)) else None
+            if result is None and callable(getattr(self._learning_pipeline, "submit", None)):
+                self._learning_pipeline.submit(candidate)
+                return {"success": True, "accepted": False, "queued": True, "feedback": feedback, "candidate_id": candidate.id}
+            decision = getattr(getattr(result, "final_decision", None), "value", getattr(result, "final_decision", None))
+            return {"success": True, "accepted": decision == "yes", "decision": decision, "feedback": feedback, "pipeline_result": _jsonable(result)}
+        except Exception as error:
+            logger.warning("Feedback learning handoff failed: %s", error)
+            return {"success": False, "accepted": False, "feedback": feedback, "reason": str(error)}
+
     def action_learn_finding(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+
         """Submit a finding to the existing gated learning pipeline only on request."""
         if not inputs.get("remember", True):
             return {"success": True, "accepted": False, "reason": "Research findings are not automatically remembered"}

@@ -415,6 +415,9 @@ class SystemInitializer:
         self._learning_pipeline = learning_pipeline
         if research_capability is not None and hasattr(research_capability, "set_learning_pipeline"):
             research_capability.set_learning_pipeline(learning_pipeline)
+        if research_capability is not None and hasattr(research_capability, "set_memory_coordinator"):
+            research_capability.set_memory_coordinator(memory_coordinator)
+
         execution_engine.set_learning_pipeline(learning_pipeline)
         answer_verifier.set_learning_pipeline(learning_pipeline)
         if autonomy is not None:

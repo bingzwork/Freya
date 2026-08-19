@@ -435,6 +435,180 @@ class ResearchStrategySelector:
             queries = [base, f"{base} primary source", f"{base} independent analysis", f"{base} official documentation"]
         return list(dict.fromkeys(item for item in queries if item.strip()))[: max(1, min(8, int(max_queries)))]
 
+    @staticmethod
+    def select_vertical(semantic: RequestSemanticModel) -> str:
+        if semantic.intent == ResearchIntent.NEWS_RESEARCH.value:
+            return "NEWS"
+        if semantic.intent == ResearchIntent.SPECIFICATION_LOOKUP.value:
+            return "OFFICIAL_DOCUMENTATION"
+        if semantic.intent == ResearchIntent.REVIEW_RESEARCH.value:
+            return "REVIEWS"
+        if semantic.intent in {ResearchIntent.SHOPPING_DISCOVERY.value, ResearchIntent.SHOPPING_PRICE_SEARCH.value}:
+            return "MARKETPLACES" if semantic.requested_domain else "PRODUCTS"
+        if semantic.intent in {ResearchIntent.TECHNICAL_COMPARISON.value, ResearchIntent.PRODUCT_COMPARISON.value}:
+            return "PRODUCTS"
+        if semantic.intent == ResearchIntent.IMAGE_SEARCH.value:
+            return "IMAGE_SEARCH"
+        query = semantic.query.lower()
+        if re.search(r"\b(?:paper|journal|study|research|doi|arxiv|scientific)\b", query):
+            return "ACADEMIC_RESEARCH"
+        if re.search(r"\b(?:github|repository|source code|library|package|api|sdk)\b", query):
+            return "SOFTWARE_REPOSITORIES"
+        if re.search(r"\b(?:docs|documentation|manual|reference|how to use)\b", query):
+            return "OFFICIAL_DOCUMENTATION"
+        return "GENERAL_WEB"
+
+    @classmethod
+    def vertical_plan(cls, semantic: RequestSemanticModel) -> Dict[str, Any]:
+        vertical = cls.select_vertical(semantic)
+        configs = {
+            "NEWS": (['primary_reporting', 'official_announcement', 'independent_reputable_news'], "REALTIME", ['latest', 'official announcement', 'independent reporting'], ['publication date', 'event date', 'source independence'], ['prefer recent publication/event date', 'retain date uncertainty']),
+            "OFFICIAL_DOCUMENTATION": (['first_party_docs', 'source_repository', 'standards'], "HIGH_CHANGE", ['official documentation', 'release notes', 'source repository'], ['version', 'supported behavior', 'deprecation'], ['prefer first-party sources', 'check version/date']),
+            "ACADEMIC_RESEARCH": (['paper', 'journal', 'recognized_research'], "MEDIUM_CHANGE", ['primary paper', 'systematic review', 'independent replication'], ['methodology', 'sample/context', 'publication metadata'], ['separate findings from hypotheses']),
+            "PRODUCTS": (['manufacturer', 'official_specs', 'independent_review', 'retailer'], "HIGH_CHANGE", ['official specifications', 'independent review', 'current price/value'], ['model/variant', 'specification', 'price type'], ['do not use reviews as manufacturer facts']),
+            "MARKETPLACES": (['actual_listing', 'retailer', 'seller'], "HIGH_CHANGE", ['current listing', 'price stock variant', 'seller reputation'], ['listing URL', 'currency/region', 'availability', 'variant'], ['verify actual product page']),
+            "REVIEWS": (['independent_review', 'benchmark', 'user_experience'], "MEDIUM_CHANGE", ['independent review', 'benchmark testing', 'strengths weaknesses'], ['test methodology', 'date', 'tradeoffs'], ['separate measured facts from opinion']),
+            "SOFTWARE_REPOSITORIES": (['official_docs', 'source_repository', 'release_notes'], "HIGH_CHANGE", ['official documentation', 'release notes', 'source repository'], ['version', 'platform', 'license/compatibility'], ['prefer repository and first-party docs']),
+            "IMAGE_SEARCH": (['image_source', 'entity_relevance', 'provenance'], "MEDIUM_CHANGE", ['entity images', 'source provenance'], ['image URL', 'source page', 'entity relevance'], ['do not claim identity beyond user context']),
+            "GENERAL_WEB": (['authoritative_explanation', 'primary_source', 'independent_analysis'], "MEDIUM_CHANGE", ['primary source', 'independent analysis', 'official documentation'], ['claim', 'source', 'date'], ['qualify insufficient evidence']),
+        }
+        priorities, freshness, suffixes, extraction, verification = configs[vertical]
+        return VerticalResearchPlan(vertical, priorities, freshness, suffixes, extraction, verification).to_dict()
+
+
+class ResearchVertical(str, Enum):
+    GENERAL_WEB = "GENERAL_WEB"
+    NEWS = "NEWS"
+    OFFICIAL_DOCUMENTATION = "OFFICIAL_DOCUMENTATION"
+    ACADEMIC_RESEARCH = "ACADEMIC_RESEARCH"
+    PRODUCTS = "PRODUCTS"
+    MARKETPLACES = "MARKETPLACES"
+    REVIEWS = "REVIEWS"
+    SOFTWARE_REPOSITORIES = "SOFTWARE_REPOSITORIES"
+    IMAGE_SEARCH = "IMAGE_SEARCH"
+
+
+@dataclass
+class VerticalResearchPlan:
+    vertical: str
+    source_priorities: List[str] = field(default_factory=list)
+    freshness_requirement: str = "MEDIUM_CHANGE"
+    query_suffixes: List[str] = field(default_factory=list)
+    extraction_requirements: List[str] = field(default_factory=list)
+    verification_rules: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class SourceQualityProfile:
+    domain: str
+    source_type: str = "GENERAL_WEB"
+    authority_score: float = 0.45
+    extraction_successes: int = 0
+    extraction_failures: int = 0
+    freshness_successes: int = 0
+    relevance_hits: int = 0
+    duplicate_observations: int = 0
+    conflict_observations: int = 0
+    verification_successes: int = 0
+    rate_limit_failures: int = 0
+    last_evaluated_at: str = ""
+
+    @property
+    def extraction_success_rate(self) -> float:
+        total = self.extraction_successes + self.extraction_failures
+        return round(self.extraction_successes / total, 3) if total else 0.5
+
+    @property
+    def verification_rate(self) -> float:
+        return round(self.verification_successes / max(1, self.relevance_hits), 3)
+
+    def ranking_bonus(self) -> float:
+        return round(max(-0.25, min(0.25, (self.authority_score - 0.5) * 0.25 + (self.extraction_success_rate - 0.5) * 0.15 + (self.verification_rate - 0.5) * 0.10 - self.rate_limit_failures * 0.01)), 3)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {**asdict(self), "extraction_success_rate": self.extraction_success_rate, "verification_rate": self.verification_rate, "ranking_bonus": self.ranking_bonus()}
+
+
+class SourceQualityProfileStore:
+    """Operational source profiles; evidence remains stronger than reputation."""
+
+    def __init__(self):
+        self._profiles: Dict[str, SourceQualityProfile] = {}
+
+    @staticmethod
+    def _domain(value: str) -> str:
+        host = (urlparse(str(value or "")).hostname or str(value or "")).lower().strip()
+        return host.removeprefix("www.")
+
+    def get(self, url_or_domain: str, source_type: str = "GENERAL_WEB") -> SourceQualityProfile:
+        domain = self._domain(url_or_domain)
+        if domain not in self._profiles:
+            self._profiles[domain] = SourceQualityProfile(domain=domain, source_type=source_type)
+        profile = self._profiles[domain]
+        if source_type and profile.source_type == "GENERAL_WEB":
+            profile.source_type = source_type
+        return profile
+
+    def observe(self, url: str, *, source_type: str = "GENERAL_WEB", authority_score: Optional[float] = None, extracted: Optional[bool] = None, relevant: Optional[bool] = None, duplicate: bool = False, conflict: bool = False, verified: bool = False, rate_limited: bool = False) -> SourceQualityProfile:
+        profile = self.get(url, source_type)
+        if authority_score is not None:
+            profile.authority_score = round(max(0.0, min(1.0, (profile.authority_score + float(authority_score)) / 2)), 3)
+        if extracted is True:
+            profile.extraction_successes += 1
+        elif extracted is False:
+            profile.extraction_failures += 1
+        if relevant:
+            profile.relevance_hits += 1
+        if duplicate:
+            profile.duplicate_observations += 1
+        if conflict:
+            profile.conflict_observations += 1
+        if verified:
+            profile.verification_successes += 1
+        if rate_limited:
+            profile.rate_limit_failures += 1
+        profile.last_evaluated_at = datetime.now(timezone.utc).isoformat()
+        return profile
+
+    def ranking_bonus(self, url: str) -> float:
+        return self.get(url).ranking_bonus()
+
+    def snapshot(self) -> List[Dict[str, Any]]:
+        return [profile.to_dict() for profile in self._profiles.values()]
+
+
+class FeedbackType(str, Enum):
+    USER_PREFERENCE = "USER_PREFERENCE"
+    FACTUAL_CORRECTION = "FACTUAL_CORRECTION"
+    SOURCE_FEEDBACK = "SOURCE_FEEDBACK"
+    ANSWER_STYLE = "ANSWER_STYLE"
+    EXECUTION_FEEDBACK = "EXECUTION_FEEDBACK"
+    ANSWER_CONFIRMATION = "ANSWER_CONFIRMATION"
+    UNKNOWN = "UNKNOWN"
+
+
+class FeedbackClassifier:
+    @classmethod
+    def classify(cls, text: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        value = " ".join(str(text or "").split()).strip()
+        lower = value.lower()
+        if re.search(r"\b(?:wrong|incorrect|not correct|that's not right|that is not right|false|you made a mistake|fix that)", lower):
+            feedback_type = FeedbackType.FACTUAL_CORRECTION.value
+        elif re.search(r"\b(?:source|citation|reference|don't use|do not use|better source|more reliable)", lower):
+            feedback_type = FeedbackType.SOURCE_FEEDBACK.value
+        elif re.search(r"\b(?:prefer|i like|i want|keep answers|be more|be less|concise|verbose|shorter|longer)", lower):
+            feedback_type = FeedbackType.USER_PREFERENCE.value if "prefer" in lower or "i like" in lower or "i want" in lower else FeedbackType.ANSWER_STYLE.value
+        elif re.search(r"\b(?:didn't work|did not work|failed|failure|broken|error|couldn't|could not)", lower):
+            feedback_type = FeedbackType.EXECUTION_FEEDBACK.value
+        elif re.search(r"\b(?:correct|right|accurate|thanks|thank you|works|helpful)", lower):
+            feedback_type = FeedbackType.ANSWER_CONFIRMATION.value
+        else:
+            feedback_type = FeedbackType.UNKNOWN.value
+        return {"type": feedback_type, "text": value, "has_prior_research": bool((context or {}).get("research_result") or (context or {}).get("last_research_result")), "requires_fact_verification": feedback_type == FeedbackType.FACTUAL_CORRECTION.value}
+
 
 class EvidenceClassifier:
     """Classify public evidence and restrict fields that synthesis may infer."""
@@ -557,6 +731,46 @@ class SynthesisEngine:
         value = value.replace("|", " ")
         value = re.sub(r"\s+", " ", value).strip(" -:;,.\t\r\n")
         return value
+
+    @classmethod
+    def attach_inline_citations(cls, answer: str, facts: Sequence[Dict[str, Any]], citations: Sequence[Dict[str, Any]]) -> str:
+        text = str(answer or "").strip()
+        if not text or not facts or not citations:
+            return text
+        citation_by_url: Dict[str, int] = {}
+        visible_sources: List[Dict[str, Any]] = []
+        for item in citations:
+            if not isinstance(item, dict):
+                continue
+            url = str(item.get("url") or item.get("source_url") or "").strip()
+            if not url:
+                continue
+            if url not in citation_by_url:
+                citation_by_url[url] = len(citation_by_url) + 1
+                visible_sources.append({"number": citation_by_url[url], "title": str(item.get("title") or item.get("source_title") or url), "url": url})
+        if not citation_by_url:
+            return text
+        fact_records = [item for item in facts if isinstance(item, dict)]
+        paragraphs = re.split(r"(?<=[.!?])\s+", text)
+        rendered: List[str] = []
+        for paragraph in paragraphs:
+            sentence = paragraph.strip()
+            if not sentence:
+                continue
+            best = None
+            best_score = 0.0
+            for fact in fact_records:
+                score = KnowledgeReconciler._similarity(sentence, str(fact.get("claim") or fact.get("evidence") or ""))
+                if score > best_score:
+                    best_score = score
+                    best = fact
+            url = str((best or {}).get("source_url") or (best or {}).get("url") or "")
+            number = citation_by_url.get(url)
+            rendered.append(sentence + (f" [{number}]" if number and best_score >= 0.16 else ""))
+        if not rendered:
+            return text
+        source_lines = [f"[{item['number']}] [{item['title']}]({item['url']})" for item in visible_sources]
+        return " ".join(rendered) + "\n\nSources:\n" + "\n".join(source_lines)
 
     @classmethod
     def synthesize(cls, semantic: RequestSemanticModel, facts: Sequence[Dict[str, Any]], sources: Sequence[Dict[str, Any]], conflicts: Sequence[Dict[str, Any]] = (), citations: Sequence[Dict[str, Any]] = ()) -> Dict[str, Any]:
