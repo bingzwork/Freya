@@ -95,3 +95,53 @@ No downloads, installs, package additions, model pulls, browser-driver downloads
 - `tests/input_mapping_payloads.txt` — valid decision, invalid decision, and local-file canonical action evidence.
 - `tests/live_browser_metadata.log` — browser discoverability and bridge projection evidence.
 - `tests/environment_capability_regression.log` and `tests/extended_capability_regression.log` — local/provider-boundary coverage.
+
+## Pasted18 live-browser and research update
+
+Pasted18 extended the earlier capability audit with real Playwright Chromium and normal production UI evidence. The local environment now has Playwright Python **1.62.0** and the matching managed Chromium runtime installed in `C:\AI Projects\Freya\.venv`. Chromium launches through `PlaywrightBrowserAdapter`, and the adapter now serializes all Playwright sync API calls onto a dedicated owner thread so requests arriving from the threaded HTTP server do not cross Playwright thread boundaries.
+
+The browser production path was verified through the normal launcher and frontend with `open_url`, page-title retrieval, screenshot capture, tab creation, tab switching, and multi-request session reuse. Browser actions remain read-only unless the existing SafetyGate approves consequential operations. The browser adapter closes its context and Playwright runtime on Freya shutdown; controlled failures remain explicit for invalid URLs, blocked pages, empty pages, login walls, and unavailable providers.
+
+The live research chain now uses the existing fast providers first, then bounded browser fallback through Chromium. Browser fallback supports ordinary topic normalization, DuckDuckGo/Bing/Google fallback attempts, Google News RSS parsing, Bing redirect decoding, public result filtering, publisher-source retries, and rejection of search homepages, login walls, challenge pages, empty result pages, and unrelated provider records. Current-information queries now require external evidence; stable local-knowledge-first behavior remains unchanged for non-fresh questions.
+
+Product and shopping requests are routed deterministically to `research_capability` before generic planning. Semantic coverage includes product discovery, shopping research, price lookup/comparison, availability, specifications, reviews, and current product information. Product answers include real source-linked public result evidence where available and explicitly state when the limited sources do not establish a globally cheapest option. Freya does not fabricate prices or claim exhaustive market coverage.
+
+The request lifecycle was aligned across the frontend and backend. The UI uses a bounded 180-second request window; backend research uses a bounded 120-second window, direct chat uses a bounded 90-second window, and browser actions use a bounded 45-second window. Deterministic browser and research requests bypass the planner, preventing local model planning delay from selecting unrelated tools such as `list_files`. Existing avatar/event progress states and fail-closed error responses remain in place.
+
+### Pasted18 real UI acceptance evidence
+
+The expanded Playwright UI acceptance script entered normal user messages through `http://127.0.0.1:5173/` after starting Freya through `run_freya.ps1`. All ten UI submissions received a completed assistant response without a frontend timeout:
+
+| Prompt class | Result |
+|---|---|
+| `Open https://example.com and tell me the page title.` | **PASS** — returned `Example Domain`. |
+| Latest Intel CPU | **PASS** — current public evidence and source links returned; caveats preserved. |
+| Intel official-site/newest desktop processor | **PASS** — current Nova Lake/Intel newsroom and secondary source evidence returned. |
+| Cheapest 32GB DDR5 RAM | **PASS with honest limitation** — live RAM price/deal evidence returned; Freya explicitly refused to claim global cheapest status. |
+| RTX 5070 price comparison | **PASS with unresolved-source caveat** — current price-related evidence and conflicts returned. |
+| RAM-kit reviews | **PASS with partial-source caveat** — response completed without unrelated-tool routing or fabricated review claims. |
+| Latest Nvidia news | **PASS** — current NVIDIA newsroom and public news sources returned. |
+| Screenshot | **PASS** — screenshot written to the local outputs directory. |
+| Open another tab and search AMD latest desktop CPU | **PASS** — tab opened and follow-up research completed in the same browser path. |
+| Go back to the first tab | **PASS** — tab switch completed. |
+
+The final UI acceptance run completed all ten prompts with `success: true` and no UI timeout. The live response times ranged from approximately 0.04 seconds for tab switching to approximately 40 seconds for bounded product research. Product and research responses remain partial when public providers expose only limited or conflicting evidence; that behavior is intentional and safer than fabricated certainty.
+
+### Pasted18 verification commands
+
+- `python -m playwright install chromium` in the Freya virtual environment — matching Chromium runtime installed.
+- Playwright browser smoke and browser capability tests — **6 passed** in the final focused run.
+- `tests/test_pasted18_live_paths.py` — **15 passed**.
+- Final focused pasted15–pasted18, routing, research, browser, safety, HTTP, and autonomous suite — reached **100% completion with no failing tests** after the collaborator-search compatibility repair; one expected background-job error was logged by a test that intentionally exercises failure handling.
+- Frontend production build `pnpm --dir client build` — **passed**.
+- Normal launcher `run_freya.ps1 -NoBrowser` — backend and frontend readiness both passed.
+- Real Playwright frontend acceptance — **10/10 completed**.
+
+### Pasted18 remaining limitations
+
+The free/public search environment still exposes occasional bot checks, locale pages, publisher homepages, malformed HTML, and conflicting public claims. Freya now filters or reports those conditions rather than treating them as reliable evidence. Product research is therefore a bounded-source comparison, not an exhaustive market crawler; “cheapest” is never asserted unless the evidence justifies it. Account-backed commerce, purchasing, authenticated websites, and mutation actions remain SafetyGate/provider-limited by design.
+
+The browser owner-thread queue serializes browser operations for correctness and intentional session reuse; it does not provide unlimited parallel browser pages. The frontend still uses bounded request cancellation at the HTTP client boundary; Python work already running in a lower-level provider cannot be forcibly terminated by cancelling a thread, so cleanup relies on bounded provider timeouts and adapter shutdown. These are documented non-blocking lifecycle limitations, not silent-success paths.
+
+The earlier pasted16 capability count remains **32 fully working and 10 working with environment limitation** for the full 42-capability inventory. Within the browser/research subset, browser automation and live public research are now production-functional in the verified local environment, subject to the honest public-provider limitations documented above.
+

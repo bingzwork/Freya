@@ -12,7 +12,8 @@ from app.browser.adapter import BrowserAdapter, BrowserObservation, PlaywrightBr
 _BROWSER_ACTIONS = [
     "open_url", "navigate", "back", "forward", "reload", "click", "type", "fill",
     "select", "scroll", "read_page", "find_element", "wait_for_element", "upload_file",
-    "download_file", "extract_media", "open_tab", "close_tab", "switch_tab", "get_current_url",
+    "download_file", "extract_links", "extract_media", "open_tab", "close_tab", "switch_tab", "get_current_url",
+
     "get_page_title", "take_screenshot",
 ]
 _CONSEQUENTIAL_TERMS = {

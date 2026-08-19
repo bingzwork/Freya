@@ -41,7 +41,7 @@ class CapabilityRegistrationBridge:
     _SEMANTIC_ALIASES = {
         "audio": ["audio file", "sound file", "audio recording", "convert this recording", "trim audio", "trim the beginning from this sound file", "split audio", "split this recording", "join audio", "extract audio"],
         "automation": ["remind me", "set a reminder", "schedule a reminder", "scheduled reminder", "pause the reminder", "resume the reminder", "cancel the reminder", "scheduled automation", "every day", "every week"],
-        "browser_capability": ["open website", "browse website", "open web page", "read this url", "read the contents of this url", "reload the page", "find the login link", "find the link on this web page"],
+        "browser_capability": ["open website", "browse website", "open web page", "read this url", "read the contents of this url", "reload the page", "find the login link", "find the link on this web page", "take a screenshot of this page", "open another tab", "go back to the page", "go back", "close the tab", "switch tab"],
         "calendar": ["calendar", "appointments", "what appointments", "next meeting", "find my next meeting", "meeting availability", "do i have availability", "schedule appointment"],
         "capability_introspection": ["available capabilities", "capability list", "what capabilities are available", "what functions are supported", "what can freya help me with"],
         "code_execution": ["python", "code", "run python", "run code", "execute code", "execute python", "execute this command", "run the script", "safe local command", "test this code"],
@@ -63,7 +63,7 @@ class CapabilityRegistrationBridge:
         "orchestration_core": ["run workflow", "run this workflow", "execute workflow", "execute the existing workflow", "check the status of the workflow", "workflow status", "composed sequence of steps", "orchestrate these tasks", "workflow orchestration"],
         "planning_engine": ["create a plan", "create a project plan", "make a plan", "break this objective into steps", "replan the work", "current plan", "plan this"],
         "reasoning_engine": ["reason about", "reason through", "reason through this problem step by step", "analyze why", "explain why", "explain why this result happened", "analyze the causes", "think through the tradeoffs", "synthesize an answer"],
-        "research_capability": ["search_web", "read_page", "research_topic", "compare_sources", "verify_claim", "learn_finding", "archive_search", "advanced_search", "cross_site_research", "reverse_image_search", "image_intelligence", "read the relevant pages", "find current information", "public sources"],
+        "research_capability": ["search_web", "read_page", "research_topic", "compare_sources", "verify_claim", "learn_finding", "archive_search", "advanced_search", "cross_site_research", "reverse_image_search", "image_intelligence", "read the relevant pages", "find current information", "public sources", "current information", "latest news", "current news", "find current news", "current processor news", "processor news", "Intel processor news", "latest processor", "newest processor", "latest desktop processor", "newest desktop processor", "latest cpu", "newest cpu", "current cpu", "current price", "latest price", "cheapest", "cheap products", "find a cheap", "cheap RAM", "lowest price", "compare prices", "price comparison", "product discovery", "shopping research", "find products", "product availability", "product specifications", "find reviews", "search reviews", "what are people saying", "look up the current", "search the web"],
         "safety_guard": ["check whether safe", "check whether this action is safe", "safety check", "is this safe", "is this operation allowed", "assess the risk", "should freya block", "dangerous operation"],
         "show_goals": ["show goals", "my goals", "current objectives", "display the goals i created"],
         "show_identity": ["who are you", "what is your name and role", "which assistant am i speaking with", "describe who you are"],
@@ -232,7 +232,10 @@ class CapabilityRegistrationBridge:
         if not metadata.auto_discoverable:
             return []
         phrases = [metadata.name.replace("_", " "), *metadata.aliases, *cls._semantic_aliases(metadata)]
-        return [rf"\b{re.escape(str(phrase).strip())}\b" for phrase in dict.fromkeys(phrases) if str(phrase).strip()]
+        patterns = [rf"\b{re.escape(str(phrase).strip())}\b" for phrase in dict.fromkeys(phrases) if str(phrase).strip()]
+        if metadata.name == "browser_capability":
+            patterns.extend([r"https?://[^\s<>\"']+", r"\b(?:open|visit|navigate\s+to)\s+(?:the\s+)?(?:website|web\s+page|url)\b"])
+        return patterns
 
     def _normalize_result(capability_name: str, result: Any) -> CapabilityResult:
         if isinstance(result, CapabilityResult):

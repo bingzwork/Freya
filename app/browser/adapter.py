@@ -1,9 +1,13 @@
 """Browser engine adapters hidden behind a small synchronous controller contract."""
 from __future__ import annotations
 
+from concurrent.futures import Future
 from dataclasses import dataclass, field
 from pathlib import Path
+from queue import Queue
+from threading import Event, Lock, Thread, get_ident
 from typing import Any, Dict, Iterable, Optional, Protocol
+
 from urllib.parse import urlparse
 
 
@@ -45,6 +49,12 @@ class PlaywrightBrowserAdapter:
         self._context = None
         self._pages: list[Any] = []
         self._active_index = 0
+        self._owner_thread_id: Optional[int] = None
+        self._owner_thread: Optional[Thread] = None
+        self._commands: Queue = Queue()
+        self._owner_ready = Event()
+        self._owner_closed = False
+        self._owner_start_lock = Lock()
 
     def _ensure_started(self) -> None:
         if self._context is not None:
@@ -93,7 +103,53 @@ class PlaywrightBrowserAdapter:
             data=data or {},
         )
 
+    def _owner_loop(self) -> None:
+        self._owner_thread_id = get_ident()
+        self._owner_ready.set()
+        while True:
+            command = self._commands.get()
+            if command is None:
+                break
+            action, inputs, future = command
+            if action == "__close__":
+                try:
+                    self._close_local()
+                    future.set_result(True)
+                except Exception as exc:
+                    future.set_exception(exc)
+                break
+            try:
+                future.set_result(self._execute_local(action, inputs))
+            except Exception as exc:
+                future.set_exception(exc)
+        self._owner_thread_id = None
+
+    def _ensure_owner(self) -> None:
+        with self._owner_start_lock:
+            if self._owner_thread is not None and self._owner_thread.is_alive():
+                self._owner_ready.wait(timeout=10)
+                return
+            self._owner_closed = False
+            self._owner_ready.clear()
+            self._owner_thread = Thread(target=self._owner_loop, name="freya-playwright-owner", daemon=True)
+            self._owner_thread.start()
+            if not self._owner_ready.wait(timeout=10):
+                raise RuntimeError("Playwright browser owner thread did not start")
+
     def execute(self, action: str, inputs: Dict[str, Any]) -> BrowserObservation:
+        payload = dict(inputs or {})
+        if self._owner_thread_id == get_ident():
+            return self._execute_local(action, payload)
+        try:
+            self._ensure_owner()
+            future: Future = Future()
+            self._commands.put((action, payload, future))
+            timeout_seconds = max(30.0, float(payload.get("timeout_ms", 120000)) / 1000.0 + 10.0)
+            return future.result(timeout=timeout_seconds)
+        except Exception as exc:
+            return BrowserObservation(False, action, error=str(exc))
+
+    def _execute_local(self, action: str, inputs: Dict[str, Any]) -> BrowserObservation:
         try:
             if action in {"open_url", "navigate"}:
                 url = str(inputs.get("url", "")).strip()
@@ -168,7 +224,34 @@ class PlaywrightBrowserAdapter:
                     except Exception:
                         continue
                 return self._observation(action, {"elements": elements, "count": len(elements)})
+            if action == "extract_links":
+                selector = str(inputs.get("selector") or "a[href]")
+                limit = max(1, min(int(inputs.get("limit", 50)), 200))
+                locator = self.page.locator(selector)
+                count = min(locator.count(), limit)
+                links = []
+                for index in range(count):
+                    element = locator.nth(index)
+                    try:
+                        data = element.evaluate("""element => ({
+                            href: element.href || element.getAttribute('href') || '',
+                            text: (element.innerText || element.textContent || '').trim().slice(0, 240),
+                            title: element.getAttribute('title') || '',
+                            rel: element.getAttribute('rel') || ''
+                        })""")
+                        href = str(data.get("href") or "").strip() if isinstance(data, dict) else ""
+                        if href.startswith(("http://", "https://")):
+                            links.append({
+                                "href": href,
+                                "text": str(data.get("text") or "").strip(),
+                                "title": str(data.get("title") or "").strip(),
+                                "rel": str(data.get("rel") or "").strip(),
+                            })
+                    except Exception:
+                        continue
+                return self._observation(action, {"links": links, "count": len(links)})
             if action == "download_file":
+
                 with self.page.expect_download(timeout=int(inputs.get("timeout_ms", 30000))) as download_info:
                     self.page.locator(str(inputs["selector"])).click()
                 download = download_info.value
@@ -177,9 +260,11 @@ class PlaywrightBrowserAdapter:
                 download.save_as(str(target))
                 return self._observation(action, {"path": str(target), "suggested_filename": download.suggested_filename})
             if action == "open_tab":
+                self._ensure_started()
                 page = self._context.new_page()
                 self._pages.append(page)
                 self._active_index = len(self._pages) - 1
+
                 if inputs.get("url"):
                     page.goto(str(inputs["url"]), wait_until="domcontentloaded")
                 return self._observation(action, {"tab_index": self._active_index})
@@ -209,7 +294,7 @@ class PlaywrightBrowserAdapter:
         except Exception as exc:
             return BrowserObservation(False, action, error=str(exc))
 
-    def close(self) -> None:
+    def _close_local(self) -> None:
         try:
             if self._context is not None:
                 self._context.close()
@@ -219,6 +304,25 @@ class PlaywrightBrowserAdapter:
             if self._playwright is not None:
                 self._playwright.stop()
                 self._playwright = None
+            self._owner_closed = True
+
+    def close(self) -> None:
+        if self._owner_thread_id == get_ident():
+            self._close_local()
+            return
+        owner = self._owner_thread
+        if owner is None or not owner.is_alive():
+            self._close_local()
+            return
+        future: Future = Future()
+        self._commands.put(("__close__", {}, future))
+        try:
+            future.result(timeout=30)
+        except Exception:
+            pass
+        owner.join(timeout=30)
+        self._owner_thread = None
+        self._owner_thread_id = None
 
 
 __all__ = ["BrowserAdapter", "BrowserObservation", "PlaywrightBrowserAdapter"]

@@ -9,7 +9,10 @@ ToolManager tools when the capability is wired into the runtime.
 from __future__ import annotations
 
 import asyncio
+import base64
+from html import unescape
 import concurrent.futures
+
 import ipaddress
 import json
 import logging
@@ -218,7 +221,32 @@ def _jsonable(value: Any) -> Any:
     if isinstance(value, dict):
         return {key: _jsonable(item) for key, item in value.items()}
     return value
+_SEARCH_STOPWORDS = {"the", "and", "for", "with", "from", "search", "latest", "newest", "today", "current", "currently", "what", "is", "of", "to", "me", "please", "find", "information", "about", "can", "you", "this", "that", "one", "some", "found", "kit", "kits", "web", "internet"}
+_PRODUCT_QUERY_WORDS = {"cheapest", "cheap", "affordable", "price", "prices", "lowest", "shopping", "product", "products", "listing", "listings", "availability", "available", "buy", "purchase", "review", "reviews"}
+_BLOCKED_BROWSER_RESULT_TERMS = ("skip to main", "select address", "sign in", "sign-in", "register", "login", "captcha", "access denied", "0 items that match")
+
+
+def _is_product_query(query: str) -> bool:
+    return bool(_PRODUCT_QUERY_WORDS.intersection({token.lower() for token in re.findall(r"[a-z0-9]{3,}", str(query or ""))}))
+
+
+def _query_relevant_public_search_results(records: Any, query: str) -> list[dict[str, Any]]:
+    usable = _usable_public_search_results(records)
+    terms = {token.lower() for token in re.findall(r"[a-z0-9]{3,}", str(query or "").lower()) if token.lower() not in _SEARCH_STOPWORDS}
+    if not terms:
+        return usable
+    relevant = []
+    for item in usable:
+        haystack = " ".join(str(item.get(field) or "") for field in ("title", "snippet", "url", "source_domain")).lower()
+        overlap = sum(1 for term in terms if term in haystack)
+        minimum_overlap = 2 if len(terms) >= 2 else 1
+        if overlap >= minimum_overlap:
+            relevant.append(item)
+    return relevant
+
+
 def _usable_public_search_results(records: Any) -> list[dict[str, Any]]:
+
     """Keep actual public pages and reject search-homepage garbage."""
     results: list[dict[str, Any]] = []
     search_hosts = {"google.com", "www.google.com", "google.com.ph", "www.google.com.ph", "search.google", "bing.com", "www.bing.com", "search.yahoo.com", "yahoo.com", "www.yahoo.com", "duckduckgo.com", "html.duckduckgo.com", "startpage.com", "www.startpage.com"}
@@ -703,8 +731,10 @@ class ResearchCapability(Capability):
         self.image_research = FreeImageResearchChain(self.search_tool)
         # Optional test/integration seam; production uses the free chain above.
         self.image_search_provider = None
+        self.browser_capability = None
 
         self.source_evaluator = SourceEvaluator()
+
         self.fact_extractor = FactExtractor()
         self.cross_reference = CrossReference()
         self.citation_manager = CitationManager()
@@ -772,9 +802,241 @@ class ResearchCapability(Capability):
         tool_manager.register(self.TOOL_NAMES["citations"], lambda **kwargs: _jsonable(self.citation_manager.create(**kwargs)))
 
     def set_browser_capability(self, browser_capability) -> None:
+        self.browser_capability = browser_capability
         self.image_research.set_browser(browser_capability)
 
+    @staticmethod
+    def _browser_result_url(value: Any) -> str:
+        url = str(value or "").strip()
+        if not url.startswith(("http://", "https://")):
+            return ""
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").lower()
+        if host.endswith("bing.com") and parsed.path.startswith("/ck/a"):
+            encoded = parse_qs(parsed.query).get("u", [""])[0]
+            if encoded.startswith("a1"):
+                try:
+                    payload = encoded[2:]
+                    payload += "=" * (-len(payload) % 4)
+                    decoded = base64.urlsafe_b64decode(payload).decode("utf-8", errors="replace")
+                    if decoded.startswith(("http://", "https://")):
+                        return decoded
+                except Exception:
+                    return ""
+        return url
+
+    @staticmethod
+    def _browser_rss_records(text: str, query: str, max_results: int) -> List[Dict[str, Any]]:
+        try:
+            soup = BeautifulSoup(str(text or ""), "xml")
+        except Exception:
+            return []
+        query_terms = {
+            token.lower() for token in re.findall(r"[a-z0-9]{3,}", query.lower())
+            if token.lower() not in {"the", "and", "for", "with", "from", "search", "latest", "newest", "today", "current", "currently", "what", "is", "of", "to", "me", "please", "find", "information", "about", "can", "you"}
+        }
+        records: List[Dict[str, Any]] = []
+        seen: set[str] = set()
+        item_blocks = re.findall(r"<item\b.*?</item>", str(text or ""), flags=re.IGNORECASE | re.DOTALL)
+        item_nodes = soup.find_all("item")
+        if not item_nodes:
+            item_nodes = [BeautifulSoup(block, "html.parser") for block in item_blocks]
+        for item_index, item in enumerate(item_nodes):
+            title = item.find("title")
+            link = item.find("link")
+            if title is None:
+                continue
+            title_text = title.get_text(" ", strip=True)
+            raw_block = item_blocks[item_index] if item_index < len(item_blocks) else ""
+            link_match = re.search(r"<link[^>]*>(.*?)</link>", raw_block, flags=re.IGNORECASE | re.DOTALL)
+            url = unescape(re.sub(r"<[^>]+>", "", link_match.group(1)).strip()) if link_match else ""
+            if not url and link is not None:
+                url = str(link.get_text(" ", strip=True) or link.get("href") or "").strip()
+            source = item.find("source")
+            source_url = str(source.get("url") or "").strip() if source is not None else ""
+            if not url.startswith(("http://", "https://")) or url in seen or len(title_text) < 8:
+                continue
+            title_lower = title_text.lower()
+            overlap = sum(1 for term in query_terms if term in title_lower)
+            if query_terms and overlap < 1:
+                continue
+            seen.add(url)
+            records.append({
+                "title": title_text[:240],
+                "url": url,
+                "snippet": str(item.find("description").get_text(" ", strip=True) if item.find("description") is not None else "")[:500],
+                "source": "playwright_chromium_google_news_rss",
+                "source_domain": (urlparse(source_url).hostname or "").lower() if source_url else "",
+                "source_url": source_url,
+                "published_at": str(item.find("pubDate").get_text(" ", strip=True) if item.find("pubDate") is not None else ""),
+            })
+            if len(records) >= max_results:
+                break
+        return records
+
+    def _browser_search(self, query: str, max_results: int) -> Dict[str, Any]:
+        """Search public web pages through the existing Playwright capability.
+
+        This is deliberately a fallback: provider search remains cheaper and is
+        attempted first.  Browser results are accepted only when they contain
+        real external links with visible titles, never a search homepage alone.
+        """
+        if self.browser_capability is None:
+            return {"success": False, "results": [], "errors": ["Browser fallback is unavailable"]}
+        query = str(query or "").strip()
+        if not query:
+            return {"success": False, "results": [], "errors": ["query is required"]}
+        search_query = re.sub(r"^\s*(?:what(?:'s| is)|who is|where is|can you tell me|find me|find|search for|look up|research)\b", "", query, flags=re.IGNORECASE)
+        search_query = re.sub(r"\b(?:today|right now)\b", "", search_query, flags=re.IGNORECASE)
+        search_query = re.sub(r"\s+", " ", search_query).strip(" .?!")
+        search_query = re.sub(r"^the\s+", "", search_query, flags=re.IGNORECASE)
+        search_query = search_query or query
+        topical_terms = [token for token in re.findall(r"[a-z0-9]{3,}", search_query.lower()) if token not in _SEARCH_STOPWORDS]
+        if len(topical_terms) >= 2:
+            search_query = " ".join(topical_terms)
+        search_hosts = {
+            "google.com", "www.google.com", "bing.com", "www.bing.com",
+            "duckduckgo.com", "html.duckduckgo.com", "search.yahoo.com",
+        }
+        query_terms = {
+            token.lower() for token in re.findall(r"[a-z0-9]{3,}", search_query.lower())
+            if token.lower() not in {"the", "and", "for", "with", "from", "search", "latest", "newest", "today", "current", "currently", "what", "is", "of", "to", "me", "please", "find", "information", "about", "can", "you"}
+        }
+        engines = (
+            "https://html.duckduckgo.com/html/?q=" + quote_plus(search_query),
+            "https://www.bing.com/search?" + urlencode({"q": search_query, "count": min(10, max_results * 2), "setlang": "en-US", "setmkt": "en-US", "cc": "us"}),
+            "https://news.google.com/rss/search?" + urlencode({"q": search_query, "hl": "en-US", "gl": "US", "ceid": "US:en"}),
+            "https://www.google.com/search?" + urlencode({"q": search_query, "num": min(10, max_results * 2)}),
+        )
+        if _is_product_query(query):
+            engines = (
+                "https://www.google.com/search?" + urlencode({"tbm": "shop", "q": search_query, "num": min(10, max_results * 2)}),
+                "https://www.bing.com/shop?" + urlencode({"q": search_query, "setlang": "en-US", "setmkt": "en-US"}),
+                "https://www.amazon.com/s" + "?" + urlencode({"k": search_query}),
+                "https://www.newegg.com/p/pl" + "?" + urlencode({"d": search_query}),
+                "https://www.bestbuy.com/site/searchpage.jsp" + "?" + urlencode({"st": search_query}),
+                "https://www.ebay.com/sch/i.html" + "?" + urlencode({"_nkw": search_query}),
+                "https://www.walmart.com/search" + "?" + urlencode({"q": search_query}),
+                "https://www.microcenter.com/search/search_results.aspx" + "?" + urlencode({"Ntt": search_query}),
+                *engines,
+            )
+        errors: List[str] = []
+        for engine_url in engines:
+            try:
+                opened = self.browser_capability.execute("open_url", {
+                    "url": engine_url,
+                    "wait_until": "domcontentloaded",
+                    "timeout_ms": int(os.getenv("FREYA_BROWSER_NAVIGATION_TIMEOUT", "25000")),
+                    "safe_read_only": True,
+                })
+                if not opened.get("success"):
+                    errors.append(str(opened.get("error") or "Browser search page could not be opened"))
+                    continue
+                extracted = self.browser_capability.execute("extract_links", {"selector": "a[href]", "limit": 120, "safe_read_only": True})
+                if not extracted.get("success"):
+                    errors.append(str(extracted.get("error") or "Browser search results could not be inspected"))
+                    continue
+                records: List[Dict[str, Any]] = []
+                seen: set[str] = set()
+                for link in extracted.get("data", {}).get("links", []) if isinstance(extracted.get("data"), dict) else []:
+                    if not isinstance(link, dict):
+                        continue
+                    url = self._browser_result_url(link.get("href"))
+                    if not url or url in seen:
+                        continue
+                    parsed = urlparse(url)
+                    host = (parsed.hostname or "").lower()
+                    path_lower = (parsed.path or "").lower()
+                    if host in search_hosts or host.endswith(".google.com") or any(marker in path_lower for marker in ("/search", "/searchpage", "/p/pl", "/sch/", "/site/search")):
+                        continue
+                    title = str(link.get("text") or link.get("title") or "").strip()
+                    title_lower = title.lower()
+                    if len(title) < 4 or any(term in title_lower for term in _BLOCKED_BROWSER_RESULT_TERMS):
+                        continue
+                    haystack = (title + " " + url).lower()
+                    overlap = sum(1 for term in query_terms if term in haystack)
+                    if query_terms and overlap < (2 if len(query_terms) >= 2 else 1):
+                        continue
+                    seen.add(url)
+                    records.append({
+                        "title": title[:240],
+                        "url": url,
+                        "snippet": "",
+                        "source": "playwright_chromium",
+                    })
+                    if len(records) >= max_results:
+                        break
+                if not records:
+                    body_result = self.browser_capability.execute("read_page", {"selector": "body", "max_chars": 50000, "safe_read_only": True})
+                    body_data = body_result.get("data") if isinstance(body_result.get("data"), dict) else {}
+                    body_text = str(body_result.get("text") or body_data.get("text") or "")
+                    records = self._browser_rss_records(body_text, search_query, max_results)
+                if records:
+                    return {"success": True, "query": query, "results": records, "errors": errors, "provider": "playwright_chromium"}
+                errors.append("Browser search page contained no usable public result links")
+            except Exception as error:
+                errors.append(str(error))
+        return {"success": False, "query": query, "results": [], "errors": errors, "provider": "playwright_chromium"}
+
+    def _browser_read_page(self, url: str) -> Dict[str, Any]:
+        """Read visible text from a public page through the browser fallback."""
+        if self.browser_capability is None:
+            return {"success": False, "url": url, "page": None, "error": "Browser fallback is unavailable"}
+        try:
+            result = self.browser_capability.execute("open_url", {
+                "url": url,
+                "wait_until": "domcontentloaded",
+                "timeout_ms": int(os.getenv("FREYA_BROWSER_NAVIGATION_TIMEOUT", "25000")),
+                "safe_read_only": True,
+            })
+            if not result.get("success"):
+                return {"success": False, "url": url, "page": None, "error": str(result.get("error") or "Browser could not open the public page")}
+            resolved_from = str(result.get("url") or url)
+            parsed_result = urlparse(resolved_from)
+            if (parsed_result.hostname or "").lower().endswith("news.google.com") and "/rss/articles/" in parsed_result.path:
+                links_result = self.browser_capability.execute("extract_links", {"selector": "a[href]", "limit": 120, "safe_read_only": True})
+                links_data = links_result.get("data") if isinstance(links_result.get("data"), dict) else {}
+                candidates = links_data.get("links", []) if isinstance(links_data.get("links"), list) else []
+                for candidate in candidates:
+                    if not isinstance(candidate, dict):
+                        continue
+                    candidate_url = self._browser_result_url(candidate.get("href"))
+                    candidate_host = (urlparse(candidate_url).hostname or "").lower()
+                    if not candidate_url or candidate_host.endswith("news.google.com") or candidate_host.endswith("google.com"):
+                        continue
+                    if len(str(candidate.get("text") or candidate.get("title") or "").strip()) < 5:
+                        continue
+                    redirected = self.browser_capability.execute("open_url", {"url": candidate_url, "wait_until": "domcontentloaded", "timeout_ms": int(os.getenv("FREYA_BROWSER_NAVIGATION_TIMEOUT", "25000")), "safe_read_only": True})
+                    if redirected.get("success"):
+                        result = redirected
+                        resolved_from = str(redirected.get("url") or candidate_url)
+                        break
+            visible = self.browser_capability.execute("read_page", {
+                "selector": "body",
+                "max_chars": int(os.getenv("FREYA_BROWSER_PAGE_MAX_CHARS", "30000")),
+                "safe_read_only": True,
+            })
+            text = str(visible.get("text") or "").strip()
+            title = str(visible.get("title") or result.get("title") or "").strip()
+            text_lower = text[:5000].lower()
+            title_lower = title.lower()
+            if any(term in title_lower for term in _BLOCKED_BROWSER_RESULT_TERMS) or "we found 0 items that match" in text_lower or "verify you are human" in text_lower:
+                return {"success": False, "url": url, "page": None, "error": "Browser page was a login wall, challenge, or empty result page"}
+            if not visible.get("success") or len(text) < 80:
+                return {"success": False, "url": url, "page": None, "error": "Browser page contained insufficient readable public content"}
+            page = WebPage(
+                url=str(visible.get("url") or result.get("url") or url),
+                title=title,
+                content=text,
+                retrieved_at=datetime.now(timezone.utc).isoformat(),
+                source_metadata={"provider": "playwright_chromium", "browser_fallback": True},
+            )
+            return {"success": True, "url": page.url, "page": page, "error": None}
+        except Exception as error:
+            return {"success": False, "url": url, "page": None, "error": str(error)}
+
     def set_vision_capability(self, vision_capability) -> None:
+
         self.image_research.set_vision(vision_capability)
         self.osint.vision = vision_capability
 
@@ -832,12 +1094,20 @@ class ResearchCapability(Capability):
             return {"success": False, "error": "query is required", "results": []}
         result = self._invoke("search", query=query, max_results=max_results)
         if not isinstance(result, dict):
-            return {"success": False, "error": "Invalid search tool response", "results": []}
+            result = {"success": False, "error": "Invalid search tool response", "results": []}
         result.setdefault("results", [])
-        result["results"] = _usable_public_search_results(result["results"])[:max_results]
+        if result.get("provider") or result.get("source"):
+            result["results"] = _query_relevant_public_search_results(result["results"], query)[:max_results]
+        else:
+            result["results"] = _usable_public_search_results(result["results"])[:max_results]
         result["success"] = bool(result["results"])
         if not result["success"]:
             result.setdefault("errors", []).append("No usable public page results remained after filtering search homepages")
+            browser_result = self._browser_search(query, max_results)
+            if browser_result.get("success"):
+                browser_result["errors"] = list(result.get("errors", [])) + list(browser_result.get("errors", []))
+                result = browser_result
+
         self._publish_event(
             "research.search.completed" if result["success"] else "research.search.failed",
             {"query": query[:200], "result_count": len(result["results"]), "error_count": len(result.get("errors", []))},
@@ -867,6 +1137,21 @@ class ResearchCapability(Capability):
         if isinstance(result, dict) and isinstance(result.get("page"), WebPage):
             result["page"] = result["page"].to_dict()
         normalized = result if isinstance(result, dict) else {"success": False, "error": "Invalid page reader response", "page": None}
+        page_value = normalized.get("page") if isinstance(normalized, dict) else None
+        page_content = page_value.get("content") if isinstance(page_value, dict) else getattr(page_value, "content", "")
+        if normalized.get("success") and len(str(page_content or "").strip()) < 80:
+            normalized["success"] = False
+            normalized["error"] = "Fast page reader returned insufficient readable content"
+        if not normalized.get("success"):
+            browser_result = self._browser_read_page(str(url))
+            if browser_result.get("success"):
+                browser_page = browser_result.get("page")
+                normalized = dict(browser_result)
+                if isinstance(browser_page, WebPage):
+                    normalized["page"] = browser_page.to_dict()
+            else:
+                normalized["error"] = "; ".join(filter(None, [str(normalized.get("error") or ""), str(browser_result.get("error") or "")]))
+
         self._publish_event(
             "research.page.retrieved" if normalized.get("success") else "research.page.failed",
             {"url": str(url)[:500], "error": normalized.get("error")},
@@ -888,28 +1173,74 @@ class ResearchCapability(Capability):
         sources: List[Dict[str, Any]] = []
         facts: List[Fact] = []
         seen_urls: set[str] = set()
+        product_query = _is_product_query(topic)
+        topic_terms = {token.lower() for token in re.findall(r"[a-z0-9]{3,}", topic.lower()) if token.lower() not in _SEARCH_STOPWORDS and token.lower() not in _PRODUCT_QUERY_WORDS}
+
         for raw_result in search.get("results", []):
             url = raw_result.get("url") if isinstance(raw_result, dict) else None
             if not url or url in seen_urls:
                 continue
             seen_urls.add(url)
             page_response = self.action_read_page({"url": url})
+            if not page_response.get("success") and isinstance(raw_result, dict):
+                source_url = str(raw_result.get("source_url") or "").strip()
+                if source_url.startswith(("http://", "https://")) and source_url != url:
+                    source_retry = self.action_read_page({"url": source_url})
+                    if source_retry.get("success"):
+                        page_response = source_retry
+                        page_response.setdefault("source_metadata", {})
+                        if isinstance(page_response.get("page"), dict):
+                            page_response["page"].setdefault("source_metadata", {})["rss_source_fallback"] = True
             if not page_response.get("success"):
                 errors.append(str(page_response.get("error") or f"Failed to read {url}"))
                 continue
+
             page = self._dict_page(page_response.get("page"))
             if page is None:
                 errors.append(f"Invalid page result for {url}")
                 continue
             pages.append(page)
+            if product_query and topic_terms:
+                page_tokens = set(re.findall(r"[a-z0-9]{3,}", f"{page.title} {page.content}".lower()))
+                if sum(1 for term in topic_terms if term in page_tokens) < min(2, len(topic_terms)):
+                    sources.append({"search_result": raw_result, "page": page.to_dict(), "quality": {"relevance_score": 0.0, "rationale": ["Page did not contain enough requested product terms"]}})
+                    continue
             quality_raw = self._invoke("evaluate", page=page.to_dict(), query=topic)
+
             quality = quality_raw if isinstance(quality_raw, dict) else _jsonable(quality_raw)
             sources.append({"search_result": raw_result, "page": page.to_dict(), "quality": quality})
             facts_raw = self._invoke("facts", page=page.to_dict(), query=topic, source_quality=quality)
             if isinstance(facts_raw, list):
-                facts.extend(self._dict_fact(item) for item in facts_raw)
+                extracted_facts = [self._dict_fact(item) for item in facts_raw]
+                if product_query and topic_terms:
+                    extracted_facts = [fact for fact in extracted_facts if topic_terms.intersection(set(re.findall(r"[a-z0-9]{3,}", f"{fact.claim} {fact.evidence}".lower())))]
+                facts.extend(extracted_facts)
 
+        if product_query:
+            for raw_result in search.get("results", []):
+                if not isinstance(raw_result, dict):
+                    continue
+                title = str(raw_result.get("title") or "").strip()
+                snippet = str(raw_result.get("snippet") or "").strip()
+                evidence = " ".join(part for part in (title, snippet) if part).strip()
+                if not evidence or not re.search(r"(?:[$€£¥]\s?\d|\d[\d,.]*\s?(?:usd|eur|gbp|cad|price|cost)|\b(?:price|deal|sale|costs?)\b)", evidence, re.IGNORECASE):
+                    continue
+                result_terms = {token.lower() for token in re.findall(r"[a-z0-9]{3,}", evidence.lower())}
+                if topic_terms and len(topic_terms.intersection(result_terms)) < 1:
+                    continue
+                source_url = str(raw_result.get("source_url") or raw_result.get("url") or "").strip()
+                facts.insert(0, Fact(
+                    claim=f"Public result: {title}",
+                    evidence=evidence[:1200],
+                    source_url=source_url,
+                    source_title=title[:240] or "Public product result",
+                    retrieved_at=datetime.now(timezone.utc).isoformat(),
+                    context="Search-result evidence; it does not establish that the item is the cheapest across all current listings.",
+                    confidence=0.55,
+                    fact_id=f"search-result-{abs(hash(source_url + title))}",
+                ))
         cross_raw = self._invoke("cross_reference", facts=[fact.to_dict() for fact in facts], claims_to_check=[topic])
+
         cross = cross_raw if isinstance(cross_raw, dict) else _jsonable(cross_raw)
         citations_raw = self._invoke("citations", facts=[fact.to_dict() for fact in facts])
         citations = citations_raw if isinstance(citations_raw, list) else []
@@ -928,8 +1259,11 @@ class ResearchCapability(Capability):
             confidence = min(confidence, 0.5)
         if facts:
             answer = "Based on the retrieved sources: " + " ".join(fact.claim for fact in facts[:3])
+            if product_query:
+                answer += " I could not establish that any result is the cheapest across all current listings; treat this as a limited-source comparison."
         else:
             answer = "Insufficient readable evidence was retrieved to answer this question."
+
         result = ResearchResult(
             topic=topic,
             answer=answer,

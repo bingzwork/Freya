@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import functools
 import http.server
-import shutil
 import threading
 from pathlib import Path
 
@@ -11,7 +10,19 @@ import pytest
 from app.browser.adapter import PlaywrightBrowserAdapter
 
 
-@pytest.mark.skipif(shutil.which("chromium") is None, reason="Chromium executable is unavailable")
+def _playwright_chromium_available() -> bool:
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            browser.close()
+        return True
+    except Exception:
+        return False
+
+
+@pytest.mark.skipif(not _playwright_chromium_available(), reason="Playwright-managed Chromium runtime is unavailable")
+
 def test_playwright_adapter_navigates_reads_and_interacts(tmp_path: Path):
     (tmp_path / "index.html").write_text(
         """<!doctype html><html><body><button id='next' onclick=\"document.body.dataset.clicked='yes'; document.querySelector('#message').textContent='Clicked'\">Go</button><p id='message'>Ready</p></body></html>""",
@@ -24,7 +35,7 @@ def test_playwright_adapter_navigates_reads_and_interacts(tmp_path: Path):
     adapter = PlaywrightBrowserAdapter(
         profile_dir=tmp_path / "profile",
         headless=True,
-        executable_path=shutil.which("chromium"),
+
     )
     try:
         opened = adapter.execute("open_url", {"url": f"http://127.0.0.1:{server.server_port}/index.html"})

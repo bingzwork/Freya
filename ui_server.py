@@ -23,6 +23,10 @@ FREYA=None
 SUBSCRIBERS=set()
 LAST_IMAGE_SUBJECT = ""
 UI_SESSION_ID = f"session_{uuid.uuid4().hex}"
+UI_REQUEST_TIMEOUT_SECONDS = max(30.0, float(os.getenv("FREYA_UI_REQUEST_TIMEOUT_SECONDS", "180")))
+RESEARCH_REQUEST_TIMEOUT_SECONDS = max(45.0, float(os.getenv("FREYA_RESEARCH_REQUEST_TIMEOUT_SECONDS", "120")))
+DIRECT_CHAT_TIMEOUT_SECONDS = max(30.0, float(os.getenv("FREYA_DIRECT_CHAT_TIMEOUT_SECONDS", "90")))
+BROWSER_ACTION_TIMEOUT_SECONDS = max(15.0, float(os.getenv("FREYA_BROWSER_ACTION_TIMEOUT_SECONDS", "45")))
 LOCK=threading.Lock()
 SUPPORTED_EXTENSIONS={".jpg",".jpeg",".png",".webp",".mp3",".wav",".m4a",".flac",".mp4",".mov",".webm",".txt",".md",".pdf",".docx",".csv",".xlsx",".json"}
 IMAGE_EXTENSIONS={".jpg",".jpeg",".png",".webp",".gif",".bmp"}
@@ -179,7 +183,7 @@ def _research_text_request(question):
         raise RuntimeError("Research routing is unavailable because the canonical router is not initialized")
     research_query=re.sub(r"^\s*(?:please\s+)?(?:search|look\s+up|find|show)\s+(?:the\s+)?(?:public\s+)?(?:web|internet)?\s*(?:for|about)?\s*", "", str(question or ""), flags=re.I).strip(" .?!") or str(question or "").strip()
     research_query=re.sub(r"\btoday(?:'s|s)?\b", "latest", research_query, flags=re.I).strip()
-    result=_bounded_call(router.execute_capability,45.0,"research_capability",research_query,capability_action="research_topic",topic=research_query,original_request=question,max_sources=8)
+    result=_bounded_call(router.execute_capability,RESEARCH_REQUEST_TIMEOUT_SECONDS,"research_capability",research_query,capability_action="research_topic",topic=research_query,original_request=question,max_sources=5)
     data=getattr(result,"data",None) if isinstance(getattr(result,"data",None),dict) else {}
     if getattr(result,"success",False):
         return result,data
@@ -296,8 +300,72 @@ def _image_search_by_text(question):
         return CapabilityResult(success=False,data={"image_results":[]},message="I couldn't determine what subject to search for in the image request.",capability_name="research_capability")
     return _bounded_call(router.execute_capability,25.0,"research_capability",query,capability_action="image_search",max_results=8,original_request=question)
 
+def _is_shopping_research_request(question):
+    normalized=" ".join(str(question or "").lower().split())
+    return bool(re.search(
+        r"\b(?:cheapest|cheap|affordable|lowest\s+price|price\s+comparison|compare\s+prices?|shopping|product(?:s)?|listing(?:s)?|availability|available|buy|purchase|reviews?|what\s+are\s+people\s+saying)\b",
+        normalized,
+    ))
+
+
 def _is_research_request(question):
     lower=question.lower(); return any(word in lower for word in RESEARCH_WORDS)
+
+
+def _browser_ui_request(question):
+    """Handle explicit, read-oriented browser actions through the canonical capability."""
+    value = " ".join(str(question or "").split()).strip()
+    lower = value.lower()
+    router = getattr(getattr(getattr(FREYA, "system", None), "facade", None), "_router", None)
+    if router is None:
+        return None
+    action = None
+    inputs = {"original_request": value, "safe_read_only": True}
+    url_match = re.search(r"https?://[^\s<>\"']+", value, re.I)
+    if url_match and re.search(r"\b(?:open|navigate|visit|read|title|page)\b", lower) and not _is_freshness_sensitive_request(value):
+        action = "open_url"
+        inputs["url"] = url_match.group(0).rstrip(".,!?)]")
+    elif re.search(r"\b(?:take|capture)\s+(?:a\s+)?screenshot\b", lower):
+        action = "take_screenshot"
+        target = getattr(FREYA, "workspace", Path.cwd()) / "outputs" / f"browser_screenshot_{uuid.uuid4().hex}.png"
+        inputs["path"] = str(target)
+        inputs["full_page"] = bool(re.search(r"full\s+page", lower))
+    elif re.search(r"\bopen\s+(?:another|a\s+new)\s+tab\b", lower):
+        action = "open_tab"
+        if url_match:
+            inputs["url"] = url_match.group(0).rstrip(".,!?)]")
+    elif re.search(r"\b(?:go|navigate)\s+back\b|\bback\s+to\s+the\s+first\s+tab\b", lower):
+        action = "switch_tab" if "first tab" in lower else "back"
+        if action == "switch_tab":
+            inputs["tab_index"] = 0
+    elif re.search(r"\bclose\s+(?:the\s+)?(?:current\s+)?tab\b", lower):
+        action = "close_tab"
+    if not action:
+        return None
+    result = _bounded_call(router.execute_capability, BROWSER_ACTION_TIMEOUT_SECONDS, "browser_capability", value, capability_action=action, **inputs)
+    data = getattr(result, "data", None) if isinstance(getattr(result, "data", None), dict) else {}
+    success = bool(getattr(result, "success", False)) and bool(data.get("success", True))
+    if not success:
+        return str(getattr(result, "message", None) or data.get("error") or "The browser action could not be completed safely."), data
+    if action == "open_tab" and re.search(r"\b(?:search|find|look\s+up|research)\b", lower):
+        followup_query = re.split(r"\band\b", value, maxsplit=1, flags=re.IGNORECASE)[-1].strip(" .?!")
+        if followup_query:
+            followup = _bounded_call(router.execute_capability, RESEARCH_REQUEST_TIMEOUT_SECONDS, "research_capability", followup_query, capability_action="research_topic", topic=followup_query, original_request=value, max_sources=5)
+            if getattr(followup, "success", False):
+                return f"Opened browser tab {data.get('tab_index', 0)} and completed the follow-up research.\n\n{format_capability_result(followup)}", {"action": action, "tab": data, "research": getattr(followup, "data", {})}
+            return f"Opened browser tab {data.get('tab_index', 0)}, but the follow-up research did not return enough reliable evidence: {getattr(followup, 'message', '') or 'no usable public result'}", {"action": action, "tab": data}
+    if action == "open_url":
+        title_result = _bounded_call(router.execute_capability, min(20.0, BROWSER_ACTION_TIMEOUT_SECONDS), "browser_capability", value, capability_action="get_page_title", safe_read_only=True, original_request=value)
+        title_data = getattr(title_result, "data", None) if isinstance(getattr(title_result, "data", None), dict) else {}
+        title = str(title_data.get("title") or data.get("title") or "").strip()
+        return f"Opened {data.get('url') or inputs.get('url')}. Page title: {title or 'title unavailable'}", {"action": action, "page": data, "title": title}
+    if action == "take_screenshot":
+        return f"Screenshot captured at {data.get('path') or inputs.get('path')}.", data
+    if action == "open_tab":
+        return f"Opened browser tab {data.get('tab_index', 0)}.", data
+    if action == "switch_tab":
+        return f"Switched to browser tab {data.get('tab_index', 0)}.", data
+    return f"Browser action '{action}' completed.", data
 
 def _attachment_block(path):
     suffix=path.suffix.lower(); stat=path.stat(); header={"name":path.name,"extension":suffix,"mime_type":mimetypes.guess_type(path.name)[0] or "application/octet-stream","size_bytes":stat.st_size}
@@ -495,7 +563,11 @@ class Handler(BaseHTTPRequestHandler):
                 reverse_image_requested=_is_reverse_image_request(message) and bool(attachments)
                 if blocked:
                     emit_avatar("SPEAKING",activity="privacy_response"); self.send_payload(200,{"answer":privacy}); emit_avatar("SUCCESS"); emit_avatar("IDLE"); return
-                research_requested=_is_research_request(message) or _is_freshness_sensitive_request(message)
+                browser_answer = None
+                browser_data = {}
+                if not attachments and not vision_meta.get("processed"):
+                    browser_answer, browser_data = _browser_ui_request(message) or (None, {})
+                research_requested=_is_research_request(message) or _is_freshness_sensitive_request(message) or _is_shopping_research_request(message)
                 image_search_requested=_is_image_search_request(message)
                 image_results=[]
                 research_data={}
@@ -549,6 +621,9 @@ class Handler(BaseHTTPRequestHandler):
                                     answer=str((raw.get("error") or raw.get("message")) if isinstance(raw,dict) else (getattr(raw,"error",None) or getattr(raw,"message",None)) or "The attached file could not be processed.")
                         else:
                             answer="Attachment processing is unavailable because the canonical router is not initialized."
+                elif browser_answer is not None:
+                    answer = browser_answer
+                    research_data = browser_data if isinstance(browser_data, dict) else {}
                 elif research_requested:
                         research_result,research_data=_research_text_request(message)
                         research_data=getattr(research_result,"data",None) if isinstance(getattr(research_result,"data",None),dict) else {}
@@ -588,14 +663,14 @@ class Handler(BaseHTTPRequestHandler):
                     else:
                         composed=message or "Please inspect the attached files and report the useful findings."
                         self._active_exchange_recorded=True
-                        answer=_bounded_call(FREYA.system.facade.chat, 60.0, composed, context={**request_context.to_dict(),"original_request":message})
+                        answer=_bounded_call(FREYA.system.facade.chat, DIRECT_CHAT_TIMEOUT_SECONDS, composed, context={**request_context.to_dict(),"original_request":message})
                 else:
                     composed=message or "Please inspect the attached files and report the useful findings."
                     if context: composed += "\n\n"+context
                     if context or research_requested:
                         composed += "\n\n[ROUTING INSTRUCTION] Preserve the complete user request when selecting or composing downstream capability queries. Never use only the first command verb as a search query. Use visual context only as grounded evidence."
                     self._active_exchange_recorded=True
-                    answer=_bounded_call(FREYA.system.facade.chat, 60.0, composed, context={**request_context.to_dict(),"original_request":message,"attachment_paths":attachments,"visual_context":context,"has_images":False,"research_requested":research_requested})
+                    answer=_bounded_call(FREYA.system.facade.chat, DIRECT_CHAT_TIMEOUT_SECONDS, composed, context={**request_context.to_dict(),"original_request":message,"attachment_paths":attachments,"visual_context":context,"has_images":False,"research_requested":research_requested})
                 emit_avatar("SPEAKING",activity="response"); self.send_payload(200,{"answer":answer,"image_results":image_results,"vision_observations":vision_meta.get("observations",{}) if isinstance(vision_meta,dict) else {},"research_queries":research_data.get("queries",[]) if isinstance(research_data,dict) else []}); emit_avatar("SUCCESS"); emit_avatar("IDLE")
             except (BrokenPipeError,ConnectionResetError,ConnectionAbortedError): emit_avatar("IDLE")
             except Exception as error:

@@ -77,7 +77,10 @@ function Composer({ value, setValue, onSend, setNotice }: { value: string; setVa
   </form>;
 }
 
-async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit, timeoutMs = 120000) {
+const UI_REQUEST_TIMEOUT_MS = 180000;
+
+async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit, timeoutMs = UI_REQUEST_TIMEOUT_MS) {
+
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
   try { return await fetch(input, { ...init, signal: controller.signal }); }

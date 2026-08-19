@@ -199,7 +199,11 @@ class IntentClassification:
 
     @property
     def external_information_required(self) -> bool:
-        return False
+        message = str(self.original_message or self.context.get("original_message", ""))
+        return bool(re.search(
+            r"\b(?:latest|newest|current|currently|today|now|recent|price|cost|cheapest|lowest\s+price|available|availability|news|reviews?|online|shopping|product)\b",
+            message.lower(),
+        ))
 
     @property
     def ambiguity(self) -> str:
@@ -220,6 +224,8 @@ class IntentClassification:
             requirements.append("conversation_or_memory_context")
         if self.action_required:
             requirements.append("execution_context")
+        if self.external_information_required:
+            requirements.append("fresh_external_evidence")
         return requirements
 
     @property
