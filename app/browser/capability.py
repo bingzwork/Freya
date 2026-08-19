@@ -7,6 +7,7 @@ from app.core.events import get_event_bus
 from app.orchestrator.capabilities import BaseCapability
 from app.orchestrator.capability_registry import CapabilityCategory, CapabilityMetadata
 from app.browser.adapter import BrowserAdapter, BrowserObservation, PlaywrightBrowserAdapter
+from app.browser.monitors import BrowserMonitorCoordinator
 
 
 _BROWSER_ACTIONS = [
@@ -43,9 +44,12 @@ class BrowserCapability(BaseCapability):
         self._safety_gate = None
         self._profile_dir = profile_dir
         self._started_event_sent = False
+        self._monitor = BrowserMonitorCoordinator(self._adapter, self._event_bus, session_id=f"browser_{id(self):x}")
 
     def set_adapter(self, adapter: BrowserAdapter) -> None:
+        self._monitor.stop()
         self._adapter = adapter
+        self._monitor = BrowserMonitorCoordinator(self._adapter, self._event_bus, session_id=f"browser_{id(self):x}")
 
     def set_safety_gate(self, safety_gate: Any) -> None:
         self._safety_gate = safety_gate
@@ -61,6 +65,7 @@ class BrowserCapability(BaseCapability):
         return super()._deactivate()
 
     def close(self) -> None:
+        self._monitor.stop()
         self._adapter.close()
         self._started_event_sent = False
 
@@ -106,13 +111,18 @@ class BrowserCapability(BaseCapability):
         if not self._started_event_sent:
             self._publish_event("browser.started", {"profile_dir": self._profile_dir, "persistent": bool(self._profile_dir)})
             self._started_event_sent = True
+            self._monitor.start()
         self._publish_event("browser.action", {"action": action})
+
         if action in {"open_url", "navigate", "back", "forward", "reload"}:
             self._publish_event("browser.navigation", {"action": action, "url": inputs.get("url")})
         observation = self._adapter.execute(action, inputs)
         result = observation.to_dict() if isinstance(observation, BrowserObservation) else dict(observation)
+
         result.setdefault("action", action)
+        result = self._monitor.observe(action, result)
         self._publish_event("browser.observation", result)
+
         self._publish_event("browser.completed" if result.get("success") else "browser.failed", result)
         return result
 

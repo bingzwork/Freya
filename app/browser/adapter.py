@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from concurrent.futures import Future
 from dataclasses import dataclass, field
+import hashlib
 from pathlib import Path
 from queue import Queue
 from threading import Event, Lock, Thread, get_ident
@@ -90,17 +91,45 @@ class PlaywrightBrowserAdapter:
             self._active_index = 0
         return self._pages[self._active_index]
 
+    def _page_snapshot(self) -> Dict[str, Any]:
+        """Return a cheap owner-thread snapshot for browser monitors."""
+        try:
+            previous_count = len(self._pages)
+            if self._context is not None:
+                self._pages = list(self._context.pages)
+                if len(self._pages) > previous_count:
+                    self._active_index = len(self._pages) - 1
+                elif self._active_index >= len(self._pages):
+                    self._active_index = max(0, len(self._pages) - 1)
+            page = self.page
+            body = ""
+            try:
+                body = page.locator("body").inner_text(timeout=1000)[:4000]
+            except Exception:
+                pass
+            token_source = f"{page.url}|{page.title()}|{body}"
+            return {
+                "page_count": len(self._pages),
+                "active_index": self._active_index,
+                "state_token": hashlib.sha256(token_source.encode("utf-8", "ignore")).hexdigest()[:20],
+                "body_preview": body[:500],
+            }
+        except Exception:
+            return {"page_count": len(self._pages), "active_index": self._active_index}
+
     def _observation(self, action: str, data: Optional[Dict[str, Any]] = None, text: str = "", error: Optional[str] = None) -> BrowserObservation:
         if error:
             return BrowserObservation(False, action, error=error, data=data or {})
         page = self.page
+        merged = self._page_snapshot()
+        merged.update(data or {})
         return BrowserObservation(
             True,
             action,
             url=page.url,
             title=page.title(),
             text=text,
-            data=data or {},
+            data=merged,
         )
 
     def _owner_loop(self) -> None:
@@ -118,6 +147,12 @@ class PlaywrightBrowserAdapter:
                 except Exception as exc:
                     future.set_exception(exc)
                 break
+            if action == "__recover__":
+                try:
+                    future.set_result(self._recover_local())
+                except Exception as exc:
+                    future.set_exception(exc)
+                continue
             try:
                 future.set_result(self._execute_local(action, inputs))
             except Exception as exc:
@@ -305,6 +340,24 @@ class PlaywrightBrowserAdapter:
                 self._playwright.stop()
                 self._playwright = None
             self._owner_closed = True
+
+    def _recover_local(self) -> bool:
+        """Recreate the owned Playwright context on the owner thread only."""
+        self._close_local()
+        self._owner_closed = False
+        self._ensure_started()
+        return self._context is not None and bool(self._pages)
+
+    def recover(self) -> bool:
+        if self._owner_thread_id == get_ident():
+            return self._recover_local()
+        self._ensure_owner()
+        future: Future = Future()
+        self._commands.put(("__recover__", {}, future))
+        try:
+            return bool(future.result(timeout=30))
+        except Exception:
+            return False
 
     def close(self) -> None:
         if self._owner_thread_id == get_ident():
