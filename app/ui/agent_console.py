@@ -368,6 +368,14 @@ def get_system_snapshot(system: Any, autonomy: Optional[Dict[str, Any]] = None) 
     memory_used = _metric(metrics, "system.memory.used_gb", "memory_used_gb", "memory.used_gb", "memory.used")
     memory_percent = _metric(metrics, "system.memory.percent", "memory_percent", "memory.percent")
     gpu = _metric(metrics, "gpu", "gpus")
+    if not gpu:
+        try:
+            from app.monitoring.gpu_monitor import get_gpu_monitor
+            gpu_summary = get_gpu_monitor().get_summary()
+            if isinstance(gpu_summary, dict) and gpu_summary.get("total_gpus", 0):
+                gpu = gpu_summary
+        except Exception:
+            gpu = None
     uptime = _metric(metrics, "uptime_seconds", "system.uptime_seconds")
     if uptime is None and psutil is not None:
         try:
