@@ -1,5 +1,4 @@
-// Style reminder: luminous nocturne command center — the app shell stays dark,
-// atmospheric, asymmetric, and glassy so page routes never dilute the reference.
+// Freya uses a warm, light operational workspace; page routes share the same calm visual language.
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/NotFound";
@@ -21,7 +20,7 @@ function Router() {
 function App() {
   return (
     <ErrorBoundary>
-      <ThemeProvider defaultTheme="dark">
+      <ThemeProvider defaultTheme="light">
         <TooltipProvider>
           <Toaster />
           <Router />
