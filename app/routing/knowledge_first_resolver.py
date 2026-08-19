@@ -25,6 +25,7 @@ from app.core.priority_llm import LLMPriority
 from app.core.logger import logger
 from app.intent import IntentType
 from app.research.intelligence import RequestSemanticAnalyzer
+from app.research.task_learning import ResearchTaskSemanticAnalyzer
 
 
 def _classify_conversational_request(query: str) -> Optional[str]:
@@ -186,7 +187,24 @@ class KnowledgeFirstResolver:
                 reasoning=reasoning,
             )
 
+        task_semantic = ResearchTaskSemanticAnalyzer.analyze(query)
+        if task_semantic.requires_task:
+            reasoning.append("Explicit substantial study request escalated before local knowledge answer")
+            return ResolutionResult(
+                action="task",
+                llm_context={"task_semantic": task_semantic.to_dict(), "knowledge_first_entry": True},
+                routing_metadata={
+                    "task_required": True,
+                    "task_intent": task_semantic.intent,
+                    "learning_requested": task_semantic.learning_requested,
+                    "fresh_external_inspection_required": task_semantic.fresh_external_inspection_required,
+                    "local_knowledge_reuse_as_context": True,
+                },
+                reasoning=reasoning,
+            )
+
         direct_matches = self._capability_router.find_matching(query, intent_type.value if intent_type is not None else None)
+
         explicit_matches = [
             item for item in direct_matches
             if item[1] >= 0.95

@@ -21,6 +21,7 @@ from app.capabilities.router import CapabilityResult
 from app.core.request_context import RequestContext
 from app.ui.agent_console import get_agent_console_snapshot, get_autonomy_snapshot, get_tasks_snapshot, get_memory_snapshot, get_system_snapshot
 from app.research.intelligence import RequestSemanticAnalyzer, ResearchIntent
+from app.research.task_learning import ResearchTaskSemanticAnalyzer, ResearchTaskLearningOrchestrator
 FREYA=None
 SUBSCRIBERS=set()
 LAST_IMAGE_SUBJECT = ""
@@ -727,6 +728,7 @@ class Handler(BaseHTTPRequestHandler):
                 request_context=RequestContext.create(message,session_id=session_id,attachments=attachments,source="user",channel="web",metadata={"content_type":self.headers.get("Content-Type","application/json")})
                 self._active_trace_id=request_context.trace_id; self._active_chat_message=message; self._active_request_context=request_context.to_dict(); self._active_exchange_recorded=False; self._active_shopping_state=_get_shopping_state(session_id)
                 semantic_model = RequestSemanticAnalyzer.analyze(message, context={"shopping_state": self._active_shopping_state})
+                task_semantic = ResearchTaskSemanticAnalyzer.analyze(message)
                 if not message and not attachments: self.send_payload(400,{"error":"Write a message or attach a file first."}); return
                 context,vision_meta=attachment_context(self.workspace,attachments,message,inputs_return_meta=True); privacy,blocked=_privacy_response(message,context)
                 social_response=_direct_social_response(message) if not attachments and not blocked else None
@@ -738,6 +740,20 @@ class Handler(BaseHTTPRequestHandler):
                 reverse_image_requested=_is_reverse_image_request(message) and bool(attachments)
                 if blocked:
                     emit_avatar("SPEAKING",activity="privacy_response"); self.send_payload(200,{"answer":privacy}); emit_avatar("SUCCESS"); emit_avatar("IDLE"); return
+                if not attachments and task_semantic.requires_task:
+                    emit_avatar("SEARCHING", activity="research_task", task_intent=task_semantic.intent)
+                    emit_avatar("THINKING", activity="task_planning", task_intent=task_semantic.intent)
+                    router = getattr(getattr(getattr(FREYA, "system", None), "facade", None), "_router", None)
+                    task_result = {"success": False, "intent": task_semantic.intent, "task_status": "FAILED", "message": "The study task could not start because Freya’s canonical router is unavailable."}
+                    if router is not None:
+                        task_result = ResearchTaskLearningOrchestrator(FREYA.system, router).run(task_semantic, timeout_seconds=170)
+                    answer = str(task_result.get("message") or "The study task did not return a report.")
+                    research_data = task_result
+                    emit_avatar("SPEAKING", activity="research_task_report", task_intent=task_semantic.intent)
+                    self.send_payload(200, {"answer": answer, "image_results": [], "vision_observations": {}, "research_queries": [], "task": task_result})
+                    emit_avatar("SUCCESS" if task_result.get("success") else "ERROR", activity="research_task_complete")
+                    emit_avatar("IDLE")
+                    return
                 browser_answer = None
                 browser_data = {}
                 if not attachments and not vision_meta.get("processed"):
