@@ -274,6 +274,34 @@ def _component_status(readiness: Dict[str, Any], names: Iterable[str]) -> Dict[s
     return {"status": "Unavailable", "ready": False, "source": None}
 
 
+def _browser_component_status(system: Any, readiness: Dict[str, Any]) -> Dict[str, Any]:
+    """Report Browser from the canonical BrowserCapability, not a missing readiness dependency."""
+    capability = getattr(system, "browser_capability", None)
+    if capability is None:
+        try:
+            from app.orchestrator.capability_registry import CapabilityRegistry
+            capability = CapabilityRegistry().get_capability("browser_capability")
+        except Exception:
+            capability = None
+    if capability is not None:
+        state = getattr(getattr(capability, "state", None), "value", getattr(capability, "state", ""))
+        executable = bool(getattr(capability, "is_executable", lambda: False)())
+        adapter = getattr(capability, "_adapter", None)
+        context_active = bool(getattr(adapter, "_context", None) is not None)
+        owner_thread = getattr(adapter, "_owner_thread", None)
+        owner_active = bool(owner_thread is not None and owner_thread.is_alive())
+        active = context_active and owner_active
+        ready = executable and state not in {"error", "deactivating"}
+        if active:
+            status = "Active"
+        elif ready:
+            status = "Ready"
+        else:
+            status = "Unavailable"
+        return {"status": status, "ready": ready, "active": active, "source": "browser_capability"}
+    return _component_status(readiness, ("browser", "browser_capability", "playwright_browser"))
+
+
 def _metric(metrics: Any, *paths: str) -> Any:
     for path in paths:
         if isinstance(metrics, dict) and path in metrics:
@@ -319,8 +347,7 @@ def get_system_snapshot(system: Any, autonomy: Optional[Dict[str, Any]] = None) 
         "local_model": {"status": "Ready" if model_ready else "Unavailable", "ready": model_ready, "model": model_name},
         "memory": {"status": "Ready" if memory_status == "Ready" else "Unavailable", "ready": memory_status == "Ready"},
         "database": _component_status(readiness, ("database", "memory_coordinator")),
-        "browser": _component_status(readiness, ("browser", "browser_capability", "playwright_browser")),
-        "research": _component_status(readiness, ("research_capability", "research")),
+        "browser": _browser_component_status(system, readiness),
         "safety_gate": _component_status(readiness, ("safety_gate", "safetygate")),
     }
     safety_gate = getattr(getattr(system, "orchestrator", None), "_safety_gate", None)
