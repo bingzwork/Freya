@@ -671,10 +671,12 @@ class SystemInitializer:
             if not orchestrator.start():
                 raise RuntimeError("WorkflowOrchestrator failed to start")
             logger.info("[SystemInitializer] WorkflowOrchestrator started")
-        if autonomy is not None:
+        if autonomy is not None and self.config.start_autonomy_on_boot:
             if not autonomy.start() or not autonomy.is_running():
                 raise RuntimeError("AutonomyManager failed to start")
             logger.info("[SystemInitializer] AutonomyManager started")
+        elif autonomy is not None:
+            logger.info("[SystemInitializer] AutonomyManager constructed; startup state is OFF")
         if runtime_awareness is not None:
             runtime_awareness.start()
         if predictive_diagnostics is not None:
@@ -1050,7 +1052,8 @@ class SystemInitializer:
                 name="autonomy_manager",
                 component_type=ComponentType.SERVICE,
                 category="background_service",
-                check=autonomy.is_running,
+                                check=lambda: autonomy.is_running() or getattr(autonomy, "_state", "") == "OFF",
+
             )
 
     @staticmethod

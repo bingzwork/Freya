@@ -447,6 +447,43 @@ class MemoryCoordinator:
     # ------------------------------------------------------------------
     # Read access (delegated to unified retrieval where possible)
     # ------------------------------------------------------------------
+    def get_status_snapshot(self) -> Dict[str, Any]:
+        """Return safe operational memory metadata for status surfaces.
+
+        Counts and readiness flags are exposed; conversation content, records,
+        embeddings, and private summaries remain behind the existing memory APIs.
+        """
+        with self._lock:
+            working = self._working.get_summary()
+            try:
+                conversation_items = len(self._conversation.get_history(limit=50))
+            except Exception:
+                conversation_items = None
+            active_items = None
+            if isinstance(working, dict):
+                active_items = (
+                    int(working.get("tool_outputs_count") or 0)
+                    + int(working.get("file_references_count") or 0)
+                    + int(working.get("task_state_keys") and len(working.get("task_state_keys")) or 0)
+                    + int(working.get("plan_steps") or 0)
+                ) if working.get("active") else 0
+            return {
+                "memory_system_ready": True,
+                "working_memory_active": bool(working.get("active")) if isinstance(working, dict) else False,
+                "working_memory_active_items": active_items,
+                "conversation_context_items": conversation_items,
+                "long_term_memory_available": self._long_term is not None,
+                "knowledge_store_available": self._semantic is not None,
+                "retrieval_status": "ready" if self._retrieval is not None else "unavailable",
+                "recent_retrieval_count": None,
+                "recent_storage_count": None,
+                "last_memory_activity_at": None,
+                "learning_pipeline_ready": None,
+                "pending_learning_count": None,
+                "accepted_learning_count": None,
+                "rejected_learning_count": None,
+                "last_learning_activity_at": None,
+            }
 
     def retrieve_for_planning(self, query: str) -> str:
         """Retrieve relevant context for planning."""

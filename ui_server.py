@@ -19,6 +19,7 @@ from app.core.initializer import SystemConfig
 from app.capabilities.formatter import format_capability_result
 from app.capabilities.router import CapabilityResult
 from app.core.request_context import RequestContext
+from app.ui.agent_console import get_agent_console_snapshot, get_autonomy_snapshot, get_tasks_snapshot, get_memory_snapshot, get_system_snapshot
 FREYA=None
 SUBSCRIBERS=set()
 LAST_IMAGE_SUBJECT = ""
@@ -610,6 +611,36 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path=urlparse(self.path).path
         if path=="/api/health": self.send_payload(200,FREYA.get_health_surface()); return
+        if path=="/api/agent-console":
+            try:
+                self.send_payload(200, get_agent_console_snapshot(FREYA.system))
+            except Exception:
+                self.send_payload(503, {"error": "Agent Console status is unavailable"})
+            return
+        if path=="/api/tasks":
+            try:
+                self.send_payload(200, get_tasks_snapshot(FREYA.system))
+            except Exception:
+                self.send_payload(503, {"available": False, "tasks": [], "error": "Task state is unavailable"})
+            return
+        if path=="/api/memory/status":
+            try:
+                self.send_payload(200, get_memory_snapshot(FREYA.system))
+            except Exception:
+                self.send_payload(503, {"available": False, "error": "Memory metadata is unavailable"})
+            return
+        if path=="/api/system/status":
+            try:
+                self.send_payload(200, get_system_snapshot(FREYA.system))
+            except Exception:
+                self.send_payload(503, {"available": False, "error": "System status is unavailable"})
+            return
+        if path=="/api/autonomy/status":
+            try:
+                self.send_payload(200, get_autonomy_snapshot(FREYA.system))
+            except Exception:
+                self.send_payload(503, {"available": False, "state": "ERROR", "error": "Autonomy status is unavailable"})
+            return
         if path=="/api/capabilities":
             try:
                 from app.orchestrator.capability_registry import get_capability_registry
@@ -633,6 +664,42 @@ class Handler(BaseHTTPRequestHandler):
         self.send_payload(404,{"error":"not found"})
     def do_POST(self):
         length=int(self.headers.get("Content-Length","0")); body=self.rfile.read(length); path=urlparse(self.path).path
+        if path=="/api/autonomy/start":
+            manager = getattr(getattr(FREYA, "system", None), "autonomy", None)
+            if manager is None:
+                self.send_payload(503, {"available": False, "state": "ERROR", "error": "Autonomy manager unavailable"})
+                return
+            emit_avatar("THINKING", activity="autonomy_start_requested")
+            try:
+                started = bool(manager.start())
+                status = get_autonomy_snapshot(FREYA.system)
+                if started and status.get("state") == "ON":
+                    emit_avatar("SUCCESS", activity="autonomy_started")
+                    self.send_payload(200, {"autonomy": status})
+                else:
+                    emit_avatar("ERROR", activity="autonomy_start_failed", message=status.get("last_error") or "Autonomy did not reach ON")
+                    self.send_payload(409, {"autonomy": status, "error": status.get("last_error") or "Autonomy did not reach ON"})
+            except Exception as exc:
+                status = get_autonomy_snapshot(FREYA.system)
+                emit_avatar("ERROR", activity="autonomy_start_failed", message=status.get("last_error") or "Autonomy could not start")
+                self.send_payload(409, {"autonomy": status, "error": status.get("last_error") or "Autonomy could not start"})
+            return
+        if path=="/api/autonomy/stop":
+            manager = getattr(getattr(FREYA, "system", None), "autonomy", None)
+            if manager is None:
+                self.send_payload(503, {"available": False, "state": "OFF", "error": "Autonomy manager unavailable"})
+                return
+            emit_avatar("THINKING", activity="autonomy_stop_requested")
+            try:
+                manager.stop()
+                status = get_autonomy_snapshot(FREYA.system)
+                emit_avatar("SUCCESS", activity="autonomy_stopped")
+                self.send_payload(200, {"autonomy": status})
+            except Exception:
+                status = get_autonomy_snapshot(FREYA.system)
+                emit_avatar("ERROR", activity="autonomy_stop_failed", message=status.get("last_error") or "Autonomy could not stop")
+                self.send_payload(409, {"autonomy": status, "error": status.get("last_error") or "Autonomy could not stop"})
+            return
         if path=="/api/upload":
             query=parse_qs(urlparse(self.path).query); filename=Path(query.get("filename",["attachment.bin"])[0]).name; suffix=Path(filename).suffix.lower()
             if suffix not in SUPPORTED_EXTENSIONS: self.send_payload(415,{"error":"This file type is not currently supported."}); return
@@ -795,7 +862,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def serve(workspace,host="127.0.0.1",port=8787):
     global FREYA
-    workspace=Path(workspace).resolve(); FREYA=FreyaApp(workspace,SystemConfig(enable_autonomy=False,workspace=workspace)); FREYA.start(); Handler.workspace=workspace; server=ThreadingHTTPServer((host,port),Handler)
+    workspace=Path(workspace).resolve(); FREYA=FreyaApp(workspace,SystemConfig(enable_autonomy=True,start_autonomy_on_boot=False,workspace=workspace)); FREYA.start(); Handler.workspace=workspace; server=ThreadingHTTPServer((host,port),Handler)
     try: server.serve_forever()
     finally: FREYA.shutdown(); server.server_close()
 if __name__=="__main__":

@@ -339,7 +339,14 @@ class Job:
                 "started_at": self.started_at,
                 "completed_at": self.completed_at,
                 "last_error": self.last_error,
-                "tags": self.tags,
+                "tags": dict(self.tags),
+                "origin": self.metadata.get("origin") or self.metadata.get("source") or self.tags.get("origin"),
+                "autonomous": bool(self.metadata.get("autonomous") or self.tags.get("autonomous") in {"true", "1", "yes"}),
+                "goal_id": self.metadata.get("goal_id"),
+                "workflow_id": self.metadata.get("workflow_id"),
+                "trace_id": self.metadata.get("trace_id") or self.metadata.get("correlation_id") or self.metadata.get("request_id"),
+                "waiting_reason": self.metadata.get("waiting_reason"),
+                "approval_required": self.metadata.get("approval_required"),
                 "next_run": self.next_run_time(),
             }
 

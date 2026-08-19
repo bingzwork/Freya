@@ -112,6 +112,7 @@ class SystemConfig:
     def __init__(
         self,
         enable_autonomy: bool = True,
+        start_autonomy_on_boot: bool = False,
         enable_orchestrator: bool = True,
         enable_diagnostics: bool = True,
         enable_self_improvement: bool = True,
@@ -126,6 +127,7 @@ class SystemConfig:
         database_path: Optional[Path] = None,
     ):
         self.enable_autonomy = enable_autonomy
+        self.start_autonomy_on_boot = bool(start_autonomy_on_boot)
         self.enable_orchestrator = enable_orchestrator
         self.enable_diagnostics = enable_diagnostics
         self.enable_self_improvement = enable_self_improvement

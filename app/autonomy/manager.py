@@ -1,6 +1,7 @@
 """AutonomyManager - Coordinates Watchdog, SelfInitiatedWorkManager, and MaintenanceManager."""
 
 import threading
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from app.core.background_jobs import BackgroundJobService, get_job_service
@@ -60,6 +61,9 @@ class AutonomyManager:
         
         self._lock = threading.RLock()
         self._running = False
+        self._state = "OFF"
+        self._last_error: Optional[str] = None
+        self._started_at: Optional[str] = None
         
         # Initialize sub-components
         self._initialize_components()
@@ -141,13 +145,17 @@ class AutonomyManager:
     def start(self) -> bool:
         """Start all enabled autonomy components after validating their dependencies."""
         with self._lock:
-            if self._running:
+            if self._running or self._state in {"STARTING", "ON"}:
                 return True
             if not self.config.enabled:
+                self._state = "ERROR"
+                self._last_error = "Autonomy is disabled by configuration"
                 return False
 
-            self._validate_startup_dependencies()
+            self._state = "STARTING"
+            self._last_error = None
             try:
+                self._validate_startup_dependencies()
                 if self._learning_pipeline is not None and hasattr(self._learning_pipeline, "start"):
                     if not self._learning_pipeline.start(self._job_service, interval_seconds=60.0):
                         raise AutonomyStartupError("Canonical learning pipeline failed to start")
@@ -168,6 +176,9 @@ class AutonomyManager:
                         raise AutonomyStartupError(f"Autonomy component failed to start: {name}")
 
                 self._running = True
+                self._state = "ON"
+                self._started_at = datetime.now(timezone.utc).isoformat()
+                self._last_error = None
                 return True
             except Exception as exc:
                 self._stop_started_components()
@@ -178,27 +189,34 @@ class AutonomyManager:
                         pass
                     self._learning_started = False
                 self._running = False
+                self._state = "ERROR"
+                self._last_error = str(exc) or "Autonomy startup failed"
                 if isinstance(exc, AutonomyStartupError):
                     raise
                 raise AutonomyStartupError("Autonomy startup failed") from exc
 
     def stop(self) -> None:
         """Stop all autonomy components."""
-        if not self._running:
-            return
-            
-        # Stop in reverse order
-        if self._maintenance:
-            self._maintenance.stop()
-        if self._self_initiated:
-            self._self_initiated.stop()
-        if self._watchdog:
-            self._watchdog.stop()
-        if self._learning_started and self._learning_pipeline is not None:
-            self._learning_pipeline.stop()
-            self._learning_started = False
-            
-        self._running = False
+        with self._lock:
+            if not self._running:
+                self._state = "OFF"
+                return
+            self._state = "STOPPING"
+            try:
+                # Stop in reverse order
+                if self._maintenance:
+                    self._maintenance.stop()
+                if self._self_initiated:
+                    self._self_initiated.stop()
+                if self._watchdog:
+                    self._watchdog.stop()
+                if self._learning_started and self._learning_pipeline is not None:
+                    self._learning_pipeline.stop()
+                    self._learning_started = False
+            finally:
+                self._running = False
+                self._state = "OFF"
+                self._started_at = None
 
     def is_running(self) -> bool:
         """Check if autonomy manager is running."""
@@ -206,9 +224,19 @@ class AutonomyManager:
 
     def get_status(self) -> Dict[str, Any]:
         """Get status of all autonomy components."""
-        return {
+        with self._lock:
+            active_autonomous_tasks = 0
+            if self._self_initiated:
+                active_autonomous_tasks += len(self._self_initiated.get_active_work())
+            if self._maintenance:
+                active_autonomous_tasks += len(self._maintenance.get_active_work())
+            return {
+            "state": self._state,
             "running": self._running,
             "enabled": self.config.enabled,
+            "started_at": self._started_at,
+            "last_error": self._last_error,
+            "active_autonomous_tasks": active_autonomous_tasks,
             "learning_pipeline": {
                 "running": bool(self._learning_pipeline and getattr(self._learning_pipeline, "is_running", lambda: False)()),
                 "started_by_autonomy": self._learning_started,
@@ -228,7 +256,7 @@ class AutonomyManager:
                 "active_work_count": len(self._maintenance.get_active_work()) if self._maintenance else 0,
                 "scheduled_tasks": len(self._maintenance.get_scheduled_tasks()) if self._maintenance else 0,
             },
-        }
+            }
 
     def set_goal_storage(self, goal_storage: GoalStorage) -> None:
         """Set goal storage (for late binding from SystemInitializer)."""
