@@ -91,25 +91,18 @@ def _document_summary(question, content):
     if not clean:
         return "The attached document contains no readable text."
     fallback = clean if len(clean) <= 1800 else (" ".join(re.split(r"(?<=[.!?])\s+", clean)[:5]).strip() or clean[:1800])
-    system = getattr(FREYA, "system", None) if FREYA is not None else None
-    priority = getattr(system, "priority_llm", None)
-    if priority is not None:
-        try:
-            outcome = priority.ask_outcome(
-                "Summarize the attached document for the user in connected, accurate prose. "
-                "Use only the document text, do not add outside knowledge, and mention plainly if the excerpt is insufficient. "
-                f"User's request: {str(question or '').strip()}\nDocument text:\n{clean[:12000]}",
-                system=("You are Freya's grounded document-summary writer. Do not expose internal routing or provider details, "
-                        "and do not invent facts absent from the document."),
-                priority=LLMPriority.CHAT,
-                timeout=min(DIRECT_CHAT_TIMEOUT_SECONDS, 45.0),
-            )
-            if getattr(outcome, "is_success", False):
-                answer = str(getattr(outcome, "content", "") or "").strip()
-                if answer and not _looks_like_internal_chat_leak(answer):
-                    return answer
-        except Exception:
-            pass
+    try:
+        from app.research.intelligence import SynthesisEngine
+        grounded = SynthesisEngine.write_local_grounded(
+            "Summarize the attached document for the user in connected, accurate prose. Use only the document text; do not add outside knowledge. Return JSON with answer_paragraphs, steps, claims, uncertainties, and follow_up_questions. Mention plainly if the document does not establish the requested detail.\n\n"
+            f"User's request: {str(question or '').strip()}\nDocument text:\n{clean[:12000]}",
+            fallback=f"Summary of the attached document: {fallback}",
+        )
+        answer = str(grounded.get("answer") or "").strip()
+        if answer and not _looks_like_internal_chat_leak(answer):
+            return answer
+    except Exception:
+        pass
     return f"Summary of the attached document: {fallback}"
 
 def _document_text(path):
@@ -275,12 +268,16 @@ def _research_text_request(question, semantic=None):
             if lines:
                 from app.research.intelligence import SynthesisEngine
                 synthesized = SynthesisEngine.synthesize(semantic, snippet_facts, [], [], citations).get("answer", "") if snippet_facts else ""
+                if semantic.response_type == "troubleshooting":
+                    safe_answer = synthesized if synthesized and not re.search(r"could not verify|none contained readable evidence|could not read enough", synthesized, re.I) else SynthesisEngine._troubleshooting_fallback(semantic)
+                    fallback=CapabilityResult(success=True,data={"sources":[],"citations":[],"results":[],"partial":True,"answer":safe_answer},message=safe_answer,capability_name="research_capability")
+                    return fallback,fallback.data
                 if synthesized and not re.search(r"could not verify|none contained readable evidence|could not read enough", synthesized, re.I):
                     synthesized = SynthesisEngine.attach_inline_citations(synthesized, snippet_facts, citations)
-                    fallback=CapabilityResult(success=True,data={"sources":citations,"citations":citations,"results":records,"partial":True,"answer":synthesized},message=synthesized,capability_name="research_capability")
+                    fallback=CapabilityResult(success=True,data={"sources":[],"citations":[],"results":[],"partial":True,"answer":synthesized,"evidence_state":"PARTIAL"},message=synthesized,capability_name="research_capability")
                     return fallback,fallback.data
-                message="I found public-web results for this request. Full page synthesis was unavailable, so I am showing the retrieved sources without inventing claims.\n\n"+"\n".join(lines)
-                fallback=CapabilityResult(success=True,data={"sources":citations,"citations":citations,"results":records,"partial":True},message=message,capability_name="research_capability")
+                message = synthesized or "I could not verify enough relevant readable evidence to answer this reliably. The available public pages did not expose enough readable evidence, and search-result titles and snippets were not sufficient to support a factual answer."
+                fallback=CapabilityResult(success=True,data={"sources":[],"citations":[],"results":[],"partial":True,"answer":message,"evidence_state":"INSUFFICIENT"},message=message,capability_name="research_capability")
                 return fallback,fallback.data
     except Exception:
         pass
@@ -516,7 +513,8 @@ def _is_recommendation_request(question):
 
 def _is_troubleshooting_request(question):
     lower = " ".join(str(question or "").lower().split())
-    if not re.search(r"\b(?:why|how\s+do\s+i|how\s+can\s+i|troubleshoot|fix|debug|not\s+working|error|failed|slow|broken)\b", lower):
+    incident = r"\b(?:troubleshoot|fix|debug|not\s+working|error|failed|slow|broken|suddenly|missing|not\s+(?:detected|recognized|showing|visible)|can['’]?t\s+(?:detect|find|boot|start)|cannot\s+(?:detect|find|boot|start)|won['’]?t\s+(?:boot|start)|detected\s+but|recognized\s+but|disappeared|stopped\s+working|noise|loud|battery\s+(?:drain|dies|dying|life)|drain(?:s|ed)?\s+(?:fast|quickly)|overheat(?:s|ed|ing)?|hot|crash(?:es|ed)?|freeze(?:s|d)?|frozen|stuck|won['’]?t\s+connect|cannot\s+connect|can['’]?t\s+connect)\b"
+    if not re.search(incident, lower):
         return False
     return not bool(re.search(r"\b(?:why\s+are\s+you|what\s+can\s+you\s+do|how\s+are\s+you)\b", lower))
 
@@ -979,16 +977,10 @@ class Handler(BaseHTTPRequestHandler):
                             self._active_shopping_state=_shopping_state_from_research(research_data,self._active_shopping_state)
                             _set_shopping_state(session_id,self._active_shopping_state)
                         if not getattr(research_result,"success",False):
-                            local_answer = _safe_direct_local_chat(message, context) if semantic_model.response_type in {"recommendation", "troubleshooting"} else ""
-                            answer = local_answer if local_answer and not local_answer.lower().startswith("i couldn't complete") else str(research_data.get("answer") or getattr(research_result,"message","") or "I couldn't retrieve enough reliable current evidence from the available public-web providers right now.")
+                            answer = str(research_data.get("answer") or getattr(research_result,"message","") or "I couldn't retrieve enough reliable current evidence from the available public-web providers right now.")
                             image_results=[]
                         else:
                             answer=format_capability_result(research_result)
-                            answer_body = str(answer).split("\n\nSources:", 1)[0]
-                            if semantic_model.response_type == "recommendation" and ("could not read enough" in answer_body.lower() or answer_body.lower().count("\n-") <= 1):
-                                local_answer = _safe_direct_local_chat(message, context)
-                                if local_answer and not local_answer.lower().startswith("i couldn't complete"):
-                                    answer = local_answer
                             image_results=research_data.get("image_results",[])
                 elif reverse_image_requested:
                     research_result=_reverse_image_search_with_attachments(message,attachments)
@@ -1042,8 +1034,12 @@ class Handler(BaseHTTPRequestHandler):
                     if getattr(research_result,"success",False):
                         answer=format_capability_result(research_result)
                     else:
-                        local_answer = _safe_direct_local_chat(message, context) if semantic_model.response_type in {"recommendation", "troubleshooting"} else ""
-                        answer = local_answer if local_answer and not local_answer.lower().startswith("i couldn't complete") else "I couldn't retrieve enough reliable current evidence from the available public-web providers right now."
+                        research_answer = str((research_data or {}).get("answer") or "").strip() if isinstance(research_data, dict) else ""
+                        if research_answer and not _looks_like_internal_chat_leak(research_answer):
+                            answer = research_answer
+                        else:
+                            local_answer = _safe_direct_local_chat(message, context) if semantic_model.response_type in {"recommendation", "troubleshooting"} else ""
+                            answer = local_answer if local_answer and not local_answer.lower().startswith("i couldn't complete") else "I couldn't retrieve enough reliable current evidence from the available public-web providers right now."
                 elif FACEBOOK_FOLLOWUP_RE.search(message):
                     followup_answer = _facebook_followup_search(message)
                     if followup_answer:

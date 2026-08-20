@@ -306,6 +306,16 @@ class ResponseFormatter:
         return f"The current time is {time_str}."
 
     @staticmethod
+    def _is_unusable_source_url(value: Any) -> bool:
+        parsed = urlparse(str(value or ""))
+        path = parsed.path.lower()
+        query = parsed.query.lower()
+        host = (parsed.hostname or "").lower()
+        if host in {"news.google.com", "google.com", "www.google.com", "bing.com", "www.bing.com"} and path.startswith(("/rss/articles", "/url", "/ck/a")):
+            return True
+        return any(token in path for token in ("/challenge", "/captcha", "/.stile")) or ".stile/" in path or "rung=nojs" in query or "captcha" in query
+
+    @staticmethod
     def _clean_research_display(value: Any) -> str:
         text = html.unescape(str(value or ""))
         text = re.sub(r"<[^>]+>", " ", text)
@@ -358,7 +368,7 @@ class ResponseFormatter:
                 parsed = urlparse(str(url))
                 host = (parsed.hostname or "").lower()
                 path = parsed.path.lower()
-                if host in {"news.google.com", "google.com", "www.google.com", "bing.com", "www.bing.com"} and path.startswith(("/rss/articles", "/url", "/ck/a")):
+                if self._is_unusable_source_url(url):
                     continue
                 query = [(key, val) for key, val in parse_qsl(parsed.query, keep_blank_values=True) if not key.lower().startswith("utm_") and key.lower() not in {"ref", "tag", "spm"}]
                 canonical_url = urlunparse((parsed.scheme.lower(), (parsed.hostname or "").lower(), parsed.path.rstrip("/") or "/", "", urlencode(query), ""))
@@ -378,7 +388,8 @@ class ResponseFormatter:
                 if len(title) > 90:
                     title = title[:87].rsplit(" ", 1)[0] + "…"
                 source_lines.append(f"- {title}: {canonical_url}")
-            if source_lines:
+            evidence_limited = bool(re.search(r"none contained readable evidence|could not verify.*(?:evidence|cause)|not enough readable evidence", response, re.I))
+            if source_lines and not evidence_limited:
                 response += "\n\nSources:\n" + "\n".join(source_lines[:5])
             uncertainty = data.get("uncertainty") or []
             cleaned_uncertainty = []
@@ -401,6 +412,10 @@ class ResponseFormatter:
                 cleaned_uncertainty.append("Some public sources were unavailable or unreadable; the comparison uses the evidence that remained.")
             if cleaned_uncertainty:
                 response += "\n\nEvidence notes: " + " ".join(cleaned_uncertainty[:3])
+            followups = data.get("follow_up_questions") or (data.get("grounded_answer") or {}).get("follow_up_questions") or []
+            followups = [self._clean_research_display(item) for item in followups if self._clean_research_display(item)]
+            if followups:
+                response += "\n\nTo narrow this down: " + " ".join(followups[:3])
             return response
 
         status = data.get("status")
@@ -433,6 +448,8 @@ class ResponseFormatter:
                 if len(title) > 90:
                     title = title[:87].rsplit(" ", 1)[0] + "…"
                 url = str(item.get("url") or "").strip()
+                if self._is_unusable_source_url(url):
+                    continue
                 if title and url:
                     lines.append(f"[{title}]({url})")
             if lines:
