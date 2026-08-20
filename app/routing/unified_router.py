@@ -159,7 +159,7 @@ class UnifiedRouter:
             ("capability_introspection", handle_capability_introspection, "Answer whether a requested ability is registered", ["can you", "are you able to", "does freya"], []),
             ("show_memory", handle_show_memory, "Show memory contents", ["memory", "what do you remember", "recall"], ["question", "system_status"]),
             ("show_goals", handle_show_goals, "Show current goals", ["goals", "objectives", "targets"], ["question", "system_status"]),
-            ("show_tasks", handle_show_tasks, "Show active/planned tasks", ["tasks", "plan", "steps", "progress"], ["question", "system_status"]),
+            ("show_tasks", handle_show_tasks, "Show active/planned tasks", ["tasks", "steps", "progress"], ["question", "system_status"]),
         )
         for name, handler, description, keywords, intent_types in definitions:
             def bound_handler(context, handler=handler):

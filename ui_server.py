@@ -19,6 +19,7 @@ from app.core.initializer import SystemConfig
 from app.capabilities.formatter import format_capability_result
 from app.capabilities.router import CapabilityResult
 from app.core.request_context import RequestContext
+from app.core.priority_llm import LLMPriority
 from app.ui.agent_console import get_agent_console_snapshot, get_autonomy_snapshot, get_tasks_snapshot, get_memory_snapshot, get_system_snapshot
 from app.research.intelligence import RequestSemanticAnalyzer, ResearchIntent
 from app.research.task_learning import ResearchTaskSemanticAnalyzer, ResearchTaskLearningOrchestrator
@@ -46,21 +47,70 @@ def emit_avatar(state,**metadata):
         try: subscriber.put_nowait(payload)
         except queue.Full: pass
 
+_INTERNAL_CHAT_LEAK_RE = re.compile(r"(?:success\s*:\s*(?:true|false)|answerability|context\s+evaluated|retrieved\s+\d+\s+results|no\s+provider\s+is\s+configured|found\s+\d+\s+tasks?|lesson\s+\[|candidate_type|workflow\s+validation|traceback|httperror)", re.I)
+
+def _looks_like_internal_chat_leak(answer):
+    text = str(answer or "").strip()
+    return bool(text and _INTERNAL_CHAT_LEAK_RE.search(text))
+
+def _safe_direct_local_chat(message, context=None):
+    system = getattr(FREYA, "system", None) if FREYA is not None else None
+    priority = getattr(system, "priority_llm", None)
+    if priority is None:
+        return "I couldn't complete that request reliably because Freya's local chat model is unavailable."
+    try:
+        outcome = priority.ask_outcome(
+            prompt=str(message or "").strip(),
+            system=("You are Freya, a helpful local AI assistant. Answer the user's request directly, naturally, and usefully. "
+                    "Do not expose routing, memory, provider, capability, workflow, or internal diagnostic details."),
+            priority=LLMPriority.CHAT,
+            timeout=DIRECT_CHAT_TIMEOUT_SECONDS,
+        )
+        if getattr(outcome, "is_success", False) and str(getattr(outcome, "content", "") or "").strip():
+            content = str(outcome.content).strip()
+            if not _looks_like_internal_chat_leak(content):
+                return content
+    except Exception:
+        pass
+    return "I couldn't complete that request reliably because Freya's local chat model did not return a usable answer."
+
+def _sanitize_chat_answer(answer, message, context=None):
+    text = str(answer or "").strip()
+    if _looks_like_internal_chat_leak(text):
+        return _safe_direct_local_chat(message, context)
+    return text
+
 def _ffprobe(path):
     executable=shutil.which("ffprobe") or "ffprobe"; result=subprocess.run([executable,"-v","error","-show_format","-show_streams","-of","json",str(path)],capture_output=True,text=True,timeout=30,check=False)
     if result.returncode: raise RuntimeError(result.stderr.strip()[-600:] or "ffprobe failed")
     return json.loads(result.stdout or "{}")
 
 def _document_summary(question, content):
-    """Return a grounded local summary without re-routing attachment language."""
+    """Write an attached-document summary locally, falling back to a safe excerpt."""
     clean = re.sub(r"\s+", " ", str(content or "")).strip()
     if not clean:
         return "The attached document contains no readable text."
-    if len(clean) <= 1800:
-        return f"The attached document contains: {clean}"
-    sentences = re.split(r"(?<=[.!?])\s+", clean)
-    excerpt = " ".join(sentences[:5]).strip() or clean[:1800]
-    return f"Summary of the attached document: {excerpt[:1800]}"
+    fallback = clean if len(clean) <= 1800 else (" ".join(re.split(r"(?<=[.!?])\s+", clean)[:5]).strip() or clean[:1800])
+    system = getattr(FREYA, "system", None) if FREYA is not None else None
+    priority = getattr(system, "priority_llm", None)
+    if priority is not None:
+        try:
+            outcome = priority.ask_outcome(
+                "Summarize the attached document for the user in connected, accurate prose. "
+                "Use only the document text, do not add outside knowledge, and mention plainly if the excerpt is insufficient. "
+                f"User's request: {str(question or '').strip()}\nDocument text:\n{clean[:12000]}",
+                system=("You are Freya's grounded document-summary writer. Do not expose internal routing or provider details, "
+                        "and do not invent facts absent from the document."),
+                priority=LLMPriority.CHAT,
+                timeout=min(DIRECT_CHAT_TIMEOUT_SECONDS, 45.0),
+            )
+            if getattr(outcome, "is_success", False):
+                answer = str(getattr(outcome, "content", "") or "").strip()
+                if answer and not _looks_like_internal_chat_leak(answer):
+                    return answer
+        except Exception:
+            pass
+    return f"Summary of the attached document: {fallback}"
 
 def _document_text(path):
     suffix=path.suffix.lower()
@@ -226,6 +276,7 @@ def _research_text_request(question, semantic=None):
                 from app.research.intelligence import SynthesisEngine
                 synthesized = SynthesisEngine.synthesize(semantic, snippet_facts, [], [], citations).get("answer", "") if snippet_facts else ""
                 if synthesized and not re.search(r"could not verify|none contained readable evidence|could not read enough", synthesized, re.I):
+                    synthesized = SynthesisEngine.attach_inline_citations(synthesized, snippet_facts, citations)
                     fallback=CapabilityResult(success=True,data={"sources":citations,"citations":citations,"results":records,"partial":True,"answer":synthesized},message=synthesized,capability_name="research_capability")
                     return fallback,fallback.data
                 message="I found public-web results for this request. Full page synthesis was unavailable, so I am showing the retrieved sources without inventing claims.\n\n"+"\n".join(lines)
@@ -454,6 +505,20 @@ def _is_shopping_research_request(question):
 def _is_research_request(question):
     lower = " ".join(str(question or "").lower().split())
     return bool(re.search(r"\b(?:research|search|look\s+(?:this|it)\s+up|find\s+information|deep\s+web|latest|recent|current|official\s+specifications?)\b", lower))
+
+
+def _is_recommendation_request(question):
+    lower = " ".join(str(question or "").lower().split())
+    if not re.search(r"\b(?:recommend|recommendation|best|which\s+(?:one|option|approach)|should\s+i|what\s+should\s+i)\b", lower):
+        return False
+    return not bool(re.fullmatch(r"(?:find|show|give|tell)\s+(?:me\s+)?(?:the\s+)?best\s+one\.?", lower))
+
+
+def _is_troubleshooting_request(question):
+    lower = " ".join(str(question or "").lower().split())
+    if not re.search(r"\b(?:why|how\s+do\s+i|how\s+can\s+i|troubleshoot|fix|debug|not\s+working|error|failed|slow|broken)\b", lower):
+        return False
+    return not bool(re.search(r"\b(?:why\s+are\s+you|what\s+can\s+you\s+do|how\s+are\s+you)\b", lower))
 
 
 def _is_external_factual_request(question):
@@ -828,7 +893,7 @@ class Handler(BaseHTTPRequestHandler):
                 browser_data = {}
                 if not attachments and not vision_meta.get("processed"):
                     browser_answer, browser_data = _browser_ui_request(message) or (None, {})
-                research_requested=_is_research_request(message) or _is_freshness_sensitive_request(message) or _is_shopping_research_request(message) or _is_external_factual_request(message) or semantic_model.should_research
+                research_requested=_is_research_request(message) or _is_freshness_sensitive_request(message) or _is_shopping_research_request(message) or _is_external_factual_request(message) or _is_recommendation_request(message) or _is_troubleshooting_request(message) or semantic_model.response_type in {"recommendation", "troubleshooting", "verified_claim", "research_synthesis"} or semantic_model.should_research
                 image_search_requested=_is_image_search_request(message) or semantic_model.intent == ResearchIntent.IMAGE_SEARCH.value
                 image_results=[]
                 image_search_metrics={}
@@ -914,10 +979,16 @@ class Handler(BaseHTTPRequestHandler):
                             self._active_shopping_state=_shopping_state_from_research(research_data,self._active_shopping_state)
                             _set_shopping_state(session_id,self._active_shopping_state)
                         if not getattr(research_result,"success",False):
-                            answer=str(research_data.get("answer") or getattr(research_result,"message","") or "I couldn't retrieve enough reliable current evidence from the available public-web providers right now.")
+                            local_answer = _safe_direct_local_chat(message, context) if semantic_model.response_type in {"recommendation", "troubleshooting"} else ""
+                            answer = local_answer if local_answer and not local_answer.lower().startswith("i couldn't complete") else str(research_data.get("answer") or getattr(research_result,"message","") or "I couldn't retrieve enough reliable current evidence from the available public-web providers right now.")
                             image_results=[]
                         else:
                             answer=format_capability_result(research_result)
+                            answer_body = str(answer).split("\n\nSources:", 1)[0]
+                            if semantic_model.response_type == "recommendation" and ("could not read enough" in answer_body.lower() or answer_body.lower().count("\n-") <= 1):
+                                local_answer = _safe_direct_local_chat(message, context)
+                                if local_answer and not local_answer.lower().startswith("i couldn't complete"):
+                                    answer = local_answer
                             image_results=research_data.get("image_results",[])
                 elif reverse_image_requested:
                     research_result=_reverse_image_search_with_attachments(message,attachments)
@@ -971,7 +1042,8 @@ class Handler(BaseHTTPRequestHandler):
                     if getattr(research_result,"success",False):
                         answer=format_capability_result(research_result)
                     else:
-                        answer="I couldn't retrieve enough reliable current evidence from the available public-web providers right now."
+                        local_answer = _safe_direct_local_chat(message, context) if semantic_model.response_type in {"recommendation", "troubleshooting"} else ""
+                        answer = local_answer if local_answer and not local_answer.lower().startswith("i couldn't complete") else "I couldn't retrieve enough reliable current evidence from the available public-web providers right now."
                 elif FACEBOOK_FOLLOWUP_RE.search(message):
                     followup_answer = _facebook_followup_search(message)
                     if followup_answer:
@@ -988,6 +1060,7 @@ class Handler(BaseHTTPRequestHandler):
                         composed += "\n\n[ROUTING INSTRUCTION] Preserve the complete user request when selecting or composing downstream capability queries. Never use only the first command verb as a search query. Use visual context only as grounded evidence."
                     self._active_exchange_recorded=True
                     answer=_bounded_call(FREYA.system.facade.chat, DIRECT_CHAT_TIMEOUT_SECONDS, composed, context={**request_context.to_dict(),"original_request":message,"attachment_paths":attachments,"visual_context":context,"has_images":False,"research_requested":research_requested})
+                    answer=_sanitize_chat_answer(answer, message, context)
                 emit_avatar("SPEAKING", activity="response")
                 comparison_payload = None
                 if isinstance(research_data, dict) and research_data.get("comparison_intelligence"):

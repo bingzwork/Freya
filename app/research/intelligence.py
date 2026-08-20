@@ -9,6 +9,8 @@ shape.
 
 from __future__ import annotations
 
+import json
+import logging
 import re
 from collections import Counter
 from dataclasses import asdict, dataclass, field
@@ -16,6 +18,9 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 from urllib.parse import urlparse
+
+
+logger = logging.getLogger(__name__)
 
 
 class ResearchIntent(str, Enum):
@@ -81,6 +86,7 @@ class RequestSemanticModel:
     price_lookup: bool = False
     news: bool = False
     image: bool = False
+    research_query: str = ""
     requested_domain: str = ""
     output_goal: str = "direct_answer"
     explicit_references: List[str] = field(default_factory=list)
@@ -140,7 +146,7 @@ class RequestSemanticAnalyzer:
     )
     _SITE_RE = re.compile(r"\b(?:shopee(?:\.com(?:\.ph)?|\.ph)?|amazon(?:\.com)?|lazada(?:\.com(?:\.ph)?|\.ph)?|ebay(?:\.com)?|walmart(?:\.com)?|newegg(?:\.com)?)\b", re.I)
     _COMPARISON_RE = re.compile(r"\b(?:compare|comparison|versus|vs\.?|against)\b", re.I)
-    _NEWS_RE = re.compile(r"\b(?:news|headline|headlines|update|updates|happening|announcement|announcements)\b", re.I)
+    _NEWS_RE = re.compile(r"\b(?:news|headline|headlines|update|updates|happening|announcement|announcements|development|developments|market\s+trend|price\s+trend)\b", re.I)
     _LATEST_RE = re.compile(r"\b(?:latest|newest|current|currently|today|now|recent)\b", re.I)
     _SHOPPING_RE = re.compile(r"\b(?:cheapest|cheaper|cheap|affordable|lowest\s+price|price\s+comparison|shopping|buy|purchase|seller|listing|availability|in\s+stock|on\s+(?:shopee|amazon|lazada|ebay|walmart|newegg))\b", re.I)
     _REVIEW_RE = re.compile(r"\b(?:review|reviews|reviewers|what\s+do\s+people\s+say|user\s+experience|benchmark(?:s)?|performance\s+test)\b", re.I)
@@ -280,6 +286,11 @@ class RequestSemanticAnalyzer:
             response_type = "verified_claim"
         elif response_type == "direct_answer" and re.search(r"\b(?:research|investigate|synthesize|public\s+work)\b", lower):
             response_type = "research_synthesis"
+        if intent == ResearchIntent.NEWS_RESEARCH.value:
+            response_type = "news_developments"
+        elif intent == ResearchIntent.SPECIFICATION_LOOKUP.value:
+            response_type = "specifications"
+        normalized_query = cls._normalized_research_query(text, intent, entities)
         model = RequestSemanticModel(
             intent=intent,
             execution_mode=execution_mode,
@@ -291,6 +302,7 @@ class RequestSemanticAnalyzer:
             price_lookup=price_lookup,
             news=news,
             image=image,
+            research_query=normalized_query,
             requested_domain=requested_domain,
             output_goal=output_goal,
             explicit_references=references,
@@ -377,6 +389,8 @@ class RequestSemanticAnalyzer:
         elif current and model.intent not in {ResearchIntent.CURRENT_LOOKUP.value, ResearchIntent.NEWS_RESEARCH.value, ResearchIntent.DEEP_RESEARCH.value}:
             model.intent = ResearchIntent.NEWS_RESEARCH.value
             model.operation = "summarize"
+            model.response_type = "news_developments"
+            model.output_goal = "news_developments"
         elif deep:
             model.intent = ResearchIntent.DEEP_RESEARCH.value
             model.operation = "research"
@@ -416,20 +430,30 @@ class RequestSemanticAnalyzer:
 
     @staticmethod
     def _extract_entities(text: str) -> List[str]:
-        cleaned = re.sub(r"\b(?:what\s+is|what's|what\s+are|latest\s+news\s+of|latest\s+update\s+of|find\s+latest\s+update\s+of|compare|comparison|show\s+me|find|research|review|reviews\s+of|the|a|an)\b", " ", text, flags=re.I)
-        parts = [part.strip(" .?!,:;()[]{}") for part in re.split(r"\b(?:vs\.?|versus|against)\b", cleaned, flags=re.I)]
+        cleaned = re.sub(r"\b(?:what\s+is|what's|what\s+are|who\s+makes?|how\s+does|how\s+do|latest\s+news\s+of|latest\s+update\s+of|find\s+latest\s+update\s+of|compare|comparison|show\s+me|find|research|review|reviews\s+of|search\s+(?:the\s+web\s+)?for|check\s+the\s+repository|the|a|an)\b", " ", text, flags=re.I)
+        cleaned = re.sub(r"\b(?:for|with)\s+(?:gaming|productivity|work|school|home|business)\b", " ", cleaned, flags=re.I)
+        parts = [part.strip(" .?!,:;()[]{}") for part in re.split(r"\b(?:and|vs\.?|versus|against)\b", cleaned, flags=re.I)]
         entities: List[str] = []
         for part in parts:
             part = re.sub(r"\s+", " ", part).strip()
             if not part:
                 continue
-            if re.search(r"\b(?:rtx|rx|ryzen|core|geforce|radeon|galaxy|iphone|postgresql|mysql|ssd|openai|nvidia|amd|intel)\b", part, re.I):
+            marker = re.search(r"\b(?:nvidia|amd|intel|openai|postgresql|mysql|fastapi|playwright|geforce|radeon|rtx|rx|ryzen|core|galaxy|iphone|ssd)\b", part, re.I)
+            if marker and marker.start() > 0:
+                part = part[marker.start():]
+            part = re.split(r"\b(?:affecting|latest|recent|developments?|news|prices?|cost|spec(?:ifications?)?|technical\s+details?|official|library|package|framework|handle|middleware|repository|repo)\b", part, maxsplit=1, flags=re.I)[0].strip(" .?!,:;()[]{}")
+            if re.search(r"\b(?:rtx|rx|ryzen|core|geforce|radeon|galaxy|iphone|postgresql|mysql|fastapi|playwright|ssd|openai|nvidia|amd|intel)\b", part, re.I):
                 entities.append(part)
         if not entities:
-            for match in re.finditer(r"\b(?:NVIDIA|AMD|Intel|OpenAI|PostgreSQL|MySQL|GeForce|Radeon|RTX|RX)\b(?:\s+[A-Za-z0-9.-]+){0,5}", text, re.I):
+            for match in re.finditer(r"\b(?:NVIDIA|AMD|Intel|OpenAI|PostgreSQL|MySQL|FastAPI|Playwright|GeForce|Radeon|RTX|RX)\b(?:\s+[A-Za-z0-9.-]+){0,5}", text, re.I):
                 value = re.sub(r"\s+", " ", match.group(0)).strip(" .?!,:;()[]{}")
                 if value and value.lower() not in {item.lower() for item in entities}:
                     entities.append(value)
+        if not entities and re.search(r"\b(?:repository|repo|library|package|framework|api|sdk|middleware|documentation|docs?)\b", text, re.I):
+            ignored = {"how", "what", "where", "when", "which", "the", "this", "check", "repository", "repo", "library", "package", "framework", "api", "sdk", "middleware"}
+            for token in re.findall(r"\b[A-Z][A-Za-z0-9]*(?:\.[A-Za-z0-9]+)?\b", text):
+                if token.lower() not in ignored and token.lower() not in {item.lower() for item in entities}:
+                    entities.append(token)
         normalized: List[str] = []
         for value in entities:
             value = re.sub(r"\b9060xt\b", "9060 XT", value, flags=re.I)
@@ -438,6 +462,26 @@ class RequestSemanticAnalyzer:
             if value and value.lower() not in {item.lower() for item in normalized}:
                 normalized.append(value)
         return normalized[:6]
+
+    @classmethod
+    def _normalized_research_query(cls, text: str, intent: str, entities: Sequence[str]) -> str:
+        value = " ".join(str(text or "").split()).strip(" .?!")
+        if not value:
+            return value
+        if intent in {ResearchIntent.TECHNICAL_COMPARISON.value, ResearchIntent.PRODUCT_COMPARISON.value} and len(entities) >= 2:
+            return f"{entities[0]} versus {entities[1]}"
+        latest = re.match(r"what(?:'s| is)\s+(?:the\s+)?(?:latest|newest|current)\s+(?:stable\s+)?(?:version|release)\s+of\s+(.+)$", value, re.I)
+        if latest:
+            return f"{latest.group(1).strip()} latest stable version"
+        manufacturer = re.match(r"who\s+makes?\s+(?:the\s+)?(.+)$", value, re.I)
+        if manufacturer:
+            return f"{manufacturer.group(1).strip()} manufacturer official"
+        value = re.sub(r"^\s*(?:please\s+|can\s+you\s+|could\s+you\s+|would\s+you\s+)?(?:search|research|look\s+up|find\s+information\s+about|find|check)\s+(?:the\s+web\s+)?(?:for|about)?\s*", "", value, flags=re.I)
+        value = re.sub(r"^\s*(?:can\s+you|could\s+you|please)\s+(?:explain|tell\s+me|help\s+me\s+understand)\s+", "", value, flags=re.I)
+        value = re.sub(r"^\s*(?:what(?:'s|\s+is|\s+are)|how\s+(?:does|do)|why\s+(?:is|are))\s+", "", value, flags=re.I)
+        value = re.sub(r"\b(?:check\s+the\s+repository|the\s+repository)\b", "", value, flags=re.I)
+        value = re.sub(r"\b(?:the\s+)?(?:library|package|framework)\b", "", value, flags=re.I)
+        return re.sub(r"\s+", " ", value).strip(" ,.!?-") or text.strip()
 
     @staticmethod
     def _comparison_dimensions(text: str) -> List[str]:
@@ -464,7 +508,7 @@ class ResearchStrategySelector:
 
     @staticmethod
     def build_queries(semantic: RequestSemanticModel, *, max_queries: int = 4) -> List[str]:
-        base = semantic.query.strip(" .?!")
+        base = (semantic.research_query or semantic.query).strip(" .?!")
         entities = " vs ".join(semantic.entities[:2]) if len(semantic.entities) >= 2 else (semantic.entities[0] if semantic.entities else base)
         if semantic.intent == ResearchIntent.NEWS_RESEARCH.value:
             queries = [f"{entities} latest news", f"{entities} latest announcement", f"{entities} recent development", f"{entities} official news"]
@@ -759,8 +803,9 @@ class EvidenceClassifier:
 
 
 class SynthesisEngine:
-    """Produce compact task-specific answers from typed facts and citations."""
+    """Write grounded research answers with a local LLM and safe templates."""
 
+    LLM_SYNTHESIS_TIMEOUT_SECONDS = 90.0
     _URL_GARBAGE = re.compile(r"\]\((?:https?://)[^)]+\)")
     _NAV_GARBAGE = re.compile(r"\b(?:view source|open image|skip to main content|select address|sign in|register)\b", re.I)
 
@@ -769,12 +814,45 @@ class SynthesisEngine:
         value = str(text or "")
         value = cls._URL_GARBAGE.sub("", value)
         value = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", value)
+        value = re.sub(r"<[^>]+>", " ", value)
         value = cls._NAV_GARBAGE.sub(" ", value)
         value = value.replace("�", " ").replace("â", " ").replace("Â", " ").replace("¯", " ")
         value = re.sub(r"\[[^\]]{0,160}\]", " ", value)
         value = value.replace("|", " ")
         value = re.sub(r"\s+", " ", value).strip(" -:;,.\t\r\n")
         return value
+
+    @classmethod
+    def _usable_segments(cls, fact: Dict[str, Any], *, explanatory: bool = False) -> List[str]:
+        source_title = cls.clean(fact.get("source_title") or "")
+        raw_values = [fact.get("evidence") or "", fact.get("claim") or ""]
+        segments: List[str] = []
+        for raw in raw_values:
+            text = cls.clean(raw)
+            if not text or text.lower() == source_title.lower():
+                continue
+            pieces = [cls.clean(part).strip(" -•") for part in re.split(r"(?<=[.!?])\s+|\s+[-•]\s+|\n+", text) if cls.clean(part).strip(" -•")]
+            for piece in pieces or [text]:
+                piece = re.sub(r"^\s*\d+[.)]?\s+", "", piece).strip().strip("'\"“”")
+                low = piece.lower()
+                if len(piece) < 35 or low == source_title.lower():
+                    continue
+                if re.search(r"(?:date not exposed|read more|click here|subscribe|sign in|graphic:|i['’]ve spent|our testing|in short:|the \d+ most common|best .* tools|mission-critical|secret sauce|buy now|ranked by|typical impact|case studies?|both families|only the second|after reading|after extensive testing|the question .* can['’]?t be answered|the question why|electricity bills range from|href=|news\.google\.com|cbm[a-z0-9]|this blog post|look at your|position the|for maximum|^meanwhile\b|^i\b|^we\b|^our\b|^these tools\b|^the better choice\b|many homeowners|homeowners who|remain stuck|recover the cost|by now you|answered the big question|the fundamental difference|the answer isn['’]?t|here is how to decide|let me know|what are you currently|^!\s|^review your|guide to the best|covers exactly which models|modern health technology|first abnormal load|our electricity demand)", low):
+                    continue
+                if re.match(r"^(?:why|how|what|when|where|which|who)\b", low) or low.endswith("?") or re.search(r":\s*(?:why|how|what|when|where|which|who)\b", low):
+                    continue
+                if explanatory and (re.search(r"(?:if you're in|switch providers|save \$|recommend|choose a better)", low) or not re.search(r"(?:because|due to|driven by|caused by|demand|supply|shortage|capacity|production|consumption|usage|leak|fault|interference|congestion|temperature|humidity|rate|cost|price|bill|signal|router|provider)", low)):
+                    continue
+                if piece.lower() not in {item.lower() for item in segments}:
+                    segments.append(piece)
+        return segments[:6]
+
+    @staticmethod
+    def _is_redirect_url(url: str) -> bool:
+        parsed = urlparse(str(url or ""))
+        host = (parsed.hostname or "").lower()
+        path = parsed.path.lower()
+        return host in {"news.google.com", "google.com", "www.google.com", "bing.com", "www.bing.com"} and path.startswith(("/rss/articles", "/url", "/ck/a"))
 
     @classmethod
     def attach_inline_citations(cls, answer: str, facts: Sequence[Dict[str, Any]], citations: Sequence[Dict[str, Any]]) -> str:
@@ -787,7 +865,7 @@ class SynthesisEngine:
             if not isinstance(item, dict):
                 continue
             url = str(item.get("url") or item.get("source_url") or "").strip()
-            if not url:
+            if not url or cls._is_redirect_url(url):
                 continue
             if url not in citation_by_url:
                 citation_by_url[url] = len(citation_by_url) + 1
@@ -817,7 +895,98 @@ class SynthesisEngine:
         return " ".join(rendered) + "\n\nSources:\n" + "\n".join(source_lines)
 
     @classmethod
-    def synthesize(cls, semantic: RequestSemanticModel, facts: Sequence[Dict[str, Any]], sources: Sequence[Dict[str, Any]], conflicts: Sequence[Dict[str, Any]] = (), citations: Sequence[Dict[str, Any]] = ()) -> Dict[str, Any]:
+    def _intent_guidance(cls, semantic: RequestSemanticModel) -> str:
+        intent = str(semantic.intent or "").upper()
+        if intent in {ResearchIntent.TECHNICAL_COMPARISON.value, ResearchIntent.PRODUCT_COMPARISON.value}:
+            return "Write a balanced comparison of the named entities, organized around the requested dimensions. State tradeoffs and do not declare a universal winner unless the evidence explicitly supports one."
+        if intent == ResearchIntent.NEWS_RESEARCH.value:
+            return "Write a concise current-news synthesis. Separate reported facts from uncertainty, and never turn an article headline into a factual claim."
+        if intent == ResearchIntent.REVIEW_RESEARCH.value:
+            return "Synthesize independent review evidence and preserve test conditions or disagreements when they matter. Do not present one review as universal proof."
+        if intent == ResearchIntent.SPECIFICATION_LOOKUP.value:
+            return "Answer with the requested measurable specifications or release details. Label any requested field that the evidence does not establish instead of filling it from memory or marketing language."
+        if semantic.output_goal in {"explanation", "recommendation"} or re.search(r"\b(?:why|how|recommend|choose|best)\b", semantic.query, re.I):
+            return "Answer the user's practical question directly, explain the evidence-backed reasons, and make recommendations only when the supplied evidence supports them."
+        return "Answer the user's factual question directly in connected prose, preserving important qualifications."
+
+    @classmethod
+    def _synthesis_prompt(cls, semantic: RequestSemanticModel, facts: Sequence[Dict[str, Any]], sources: Sequence[Dict[str, Any]], conflicts: Sequence[Dict[str, Any]], citations: Sequence[Dict[str, Any]]) -> str:
+        compact_facts = []
+        for fact in list(facts)[:20]:
+            if not isinstance(fact, dict):
+                continue
+            compact_facts.append({
+                key: str(fact.get(key) or "")[:1200]
+                for key in ("claim", "evidence", "source_title", "source_url", "source_role", "evidence_type", "confidence")
+                if fact.get(key) not in (None, "")
+            })
+        compact_sources = []
+        for source in list(sources)[:20]:
+            if not isinstance(source, dict):
+                continue
+            page = source.get("page") if isinstance(source.get("page"), dict) else {}
+            search_result = source.get("search_result") if isinstance(source.get("search_result"), dict) else {}
+            compact_sources.append({
+                "title": str(page.get("title") or search_result.get("title") or source.get("title") or "")[:300],
+                "url": str(page.get("url") or search_result.get("url") or source.get("url") or "")[:500],
+                "quality": source.get("quality", {}),
+                "role": source.get("role") or source.get("planned_role") or "",
+            })
+        payload = {
+            "request_semantics": semantic.to_dict(),
+            "facts": compact_facts,
+            "sources": compact_sources,
+            "conflicts": list(conflicts)[:8],
+            "citations": list(citations)[:12],
+        }
+        encoded = json.dumps(payload, ensure_ascii=False, default=str, separators=(",", ":"))[:30000]
+        return (
+            "Write the final answer for the user from the structured research record below.\n"
+            f"Answer shape: {cls._intent_guidance(semantic)}\n"
+            "Grounding rules: use only claims present in facts or directly supported by the supplied source records; do not add outside knowledge, guesses, or invented numbers. Source titles, URLs, and metadata identify sources but are not evidence claims by themselves. "
+            "Every factual sentence must be traceable to one or more supplied facts. Do not include URLs, a Sources section, citation numbers, internal field names, routing details, provider details, or a description of this prompt; citation attachment is handled separately. "
+            "If the evidence is empty or clearly insufficient, say plainly that Freya could not verify enough evidence and explain what is missing rather than papering over the gap. "
+            "Write connected, natural prose with short paragraphs. Use bullets or a compact table only when they materially improve a comparison or specification answer.\n\n"
+            "Structured research record:\n" + encoded
+        )
+
+    @classmethod
+    def _invoke_llm(cls, prompt: str) -> Optional[str]:
+        """Run one bounded local synthesis request; never leak provider errors."""
+        try:
+            from app.core.priority_llm import LLMPriority, get_priority_llm
+            outcome = get_priority_llm().ask_outcome(
+                prompt,
+                system=(
+                    "You are Freya's grounded answer-writing layer. You may rewrite and connect supplied evidence, "
+                    "but you must not introduce facts that are absent from the supplied record. Be honest about missing evidence."
+                ),
+                priority=LLMPriority.CHAT,
+                timeout=cls.LLM_SYNTHESIS_TIMEOUT_SECONDS,
+            )
+            if getattr(outcome, "is_success", False):
+                answer = cls.clean(getattr(outcome, "content", ""))
+                answer = re.split(r"\n\s*(?:Sources?|Citations?)\s*:", answer, maxsplit=1, flags=re.I)[0].strip()
+                return answer or None
+            logger.warning("Research LLM synthesis did not complete: %s", getattr(outcome, "reason", "unknown failure"))
+        except Exception as exc:
+            logger.warning("Research LLM synthesis failed safely: %s", exc)
+        return None
+
+    @classmethod
+    def _template_answer(cls, semantic: RequestSemanticModel, facts: Sequence[Dict[str, Any]]) -> str:
+        if semantic.intent == ResearchIntent.NEWS_RESEARCH.value:
+            return cls._news(semantic, facts)
+        if semantic.intent in {ResearchIntent.TECHNICAL_COMPARISON.value, ResearchIntent.PRODUCT_COMPARISON.value}:
+            return cls._comparison(semantic, facts)
+        if semantic.intent == ResearchIntent.REVIEW_RESEARCH.value:
+            return cls._review(semantic, facts)
+        if semantic.intent == ResearchIntent.SPECIFICATION_LOOKUP.value:
+            return cls._specification(semantic, facts)
+        return cls._factual(semantic, facts)
+
+    @classmethod
+    def synthesize(cls, semantic: RequestSemanticModel, facts: Sequence[Dict[str, Any]], sources: Sequence[Dict[str, Any]], conflicts: Sequence[Dict[str, Any]] = (), citations: Sequence[Dict[str, Any]] = (), fallback_answer: str = "") -> Dict[str, Any]:
         clean_facts = []
         seen = set()
         for raw in facts:
@@ -845,29 +1014,64 @@ class SynthesisEngine:
                 url = str(citation.get("url") or citation.get("source_url") or "").strip()
                 if title:
                     composition_facts.append({"claim": title, "source_title": title, "source_url": url, "source_role": "OFFICIAL_ANNOUNCEMENT" if "official" in title.lower() or "release" in title.lower() else "GENERAL_WEB"})
-        if semantic.intent == ResearchIntent.NEWS_RESEARCH.value:
-            answer = cls._news(semantic, composition_facts)
-        elif semantic.intent in {ResearchIntent.TECHNICAL_COMPARISON.value, ResearchIntent.PRODUCT_COMPARISON.value}:
-            answer = cls._comparison(semantic, composition_facts)
-        elif semantic.intent == ResearchIntent.REVIEW_RESEARCH.value:
-            answer = cls._review(semantic, composition_facts)
-        elif semantic.intent == ResearchIntent.SPECIFICATION_LOOKUP.value:
-            answer = cls._specification(semantic, composition_facts)
-        else:
-            answer = cls._factual(semantic, composition_facts)
+        template_answer = str(fallback_answer or "").strip() or cls._template_answer(semantic, composition_facts)
+        prompt_facts = [fact for fact in composition_facts if cls._usable_segments(fact)]
+        answer = template_answer
+        answer_source = "template"
+        if prompt_facts:
+            generated = cls._invoke_llm(cls._synthesis_prompt(semantic, prompt_facts, sources, conflicts, citations))
+            if generated:
+                quality = ResearchAnswerQualityVerifier.verify(generated, prompt_facts, sources, conflicts, minimum_similarity=0.24)
+                if quality.get("status") == "VERIFIED":
+                    answer = generated
+                    answer_source = "llm"
+                    logger.info("Research LLM synthesis completed for intent=%s", semantic.intent)
+                else:
+                    logger.warning("Rejected unsupported research LLM synthesis for intent=%s: %s", semantic.intent, quality.get("unsupported_claims", [])[:2])
+            if answer_source != "llm":
+                logger.info("Using deterministic research template after bounded or unsupported LLM synthesis.")
         if not clean_facts:
             uncertainty.append("The available public sources did not provide enough relevant readable evidence.")
-        return {"answer": answer, "facts": clean_facts, "uncertainty": list(dict.fromkeys(uncertainty)), "selected_citations": list(citations)[:8], "source_count": len(sources), "answer_plan": semantic.output_goal}
+        return {"answer": answer, "facts": clean_facts, "uncertainty": list(dict.fromkeys(uncertainty)), "selected_citations": list(citations)[:8], "source_count": len(sources), "answer_plan": semantic.output_goal, "answer_source": answer_source}
 
     @classmethod
     def _news(cls, semantic: RequestSemanticModel, facts: Sequence[Dict[str, Any]]) -> str:
-        if not facts:
-            return f"I could not verify a current {(' '.join(semantic.entities) or semantic.query)} development from the available public sources."
-        lines = [f"Here are the most relevant recent developments I found for {' '.join(semantic.entities) or semantic.query}:"]
-        for index, fact in enumerate(facts[:3], 1):
-            date = fact.get("published_date") or fact.get("event_date") or fact.get("updated_date") or "date not exposed"
-            title = str(fact.get("source_title") or "Source")
-            lines.append(f"{index}. {fact.get('claim', '')} ({date}; {title})")
+        subject = " ".join(semantic.entities).strip() or semantic.query.strip()
+        subject = re.sub(r"^(?:why|how)\s+(?:are|is|do|does)\s+", "", subject, flags=re.I).strip(" ?") or subject
+        candidates: List[str] = []
+        seen: set[str] = set()
+        question_headline = re.compile(r"^(?:why|how|what|when|where|which|who)\b|\?\s*$", re.I)
+        causal_terms = re.compile(r"\b(?:because|due to|driven by|caused by|shortage|surge|surging|demand|supply|capacity|production|manufactur|inventory|shift(?:ed|ing)?|buyer|buyers|cost pressure|record production|data cent(?:er|re)|memory)\b", re.I)
+        requires_explanation = bool(re.search(r"\bwhy\b|\bhow\b", semantic.query, re.I))
+        for fact in facts:
+            if not isinstance(fact, dict):
+                continue
+            source_title = cls.clean(fact.get("source_title") or "")
+            evidence = cls.clean(fact.get("evidence") or "")
+            if not evidence or evidence.lower() == source_title.lower():
+                continue
+            selected = []
+            for sentence in cls._usable_segments(fact, explanatory=requires_explanation):
+                if len(sentence) < 30 or question_headline.search(sentence):
+                    continue
+                if re.search(r"\b(?:date not exposed|source|read more|click here|subscribe|sign in)\b", sentence, re.I) and not causal_terms.search(sentence):
+                    continue
+                if causal_terms.search(sentence):
+                    selected.append(sentence)
+            for sentence in selected[:2]:
+                key = re.sub(r"\W+", " ", sentence.lower()).strip()
+                if key and key not in seen:
+                    seen.add(key)
+                    candidates.append(sentence)
+                if len(candidates) >= 4:
+                    break
+            if len(candidates) >= 4:
+                break
+        if not candidates:
+            return f"I found recent reporting related to {subject}, but the available public pages did not expose enough readable evidence to explain the cause reliably. The date not exposed by the readable excerpts is unavailable. I will not turn article headlines into facts."
+        lines = [f"Recent reporting about {subject} points to these evidence-backed factors:", ""]
+        lines.extend(f"- {item}" for item in candidates)
+        lines.extend(["", "Some source pages were not readable in this local research pass, so this summary is limited to the factors present in the available excerpts."])
         return "\n".join(lines)
 
     @classmethod
@@ -925,12 +1129,11 @@ class SynthesisEngine:
         if relevant_facts:
             facts = relevant_facts
         records = []
+        explanatory = bool(re.search(r"\b(?:why|how)\b", lower_query))
         for fact in facts:
-            claim = cls.clean(fact.get("claim") or fact.get("evidence") or "")
-            segments = [part.strip(" -•") for part in re.split(r"(?<=[.!?])\s+|\s+[-•]\s+", claim) if part.strip(" -•")]
-            if not segments:
-                segments = [claim]
+            segments = cls._usable_segments(fact, explanatory=explanatory)
             for segment in segments:
+
                 segment_lower = segment.lower()
                 overlap = sum(1 for token in topic_tokens if token in segment_lower)
                 if topic_tokens and overlap < max(1, min(2, len(topic_tokens))):
@@ -951,7 +1154,34 @@ class SynthesisEngine:
                     break
             if len(records) >= 8:
                 break
+        version_match = re.search(r"(?:latest|newest|current)\s+(?:stable\s+)?(?:version|release)\s+of\s+(.+?)[?.!]*$", lower_query, re.I)
+        if version_match:
+            subject = version_match.group(1).strip()
+            candidates = []
+            for fact in facts:
+                evidence_text = " ".join(str(fact.get(key) or "") for key in ("claim", "evidence", "source_title", "source_url"))
+                versions = re.findall(r"\b\d+\.\d+(?:\.\d+)?(?:[a-z]+\d*)?\b", evidence_text, re.I)
+                role_text = " ".join(str(fact.get(key) or "") for key in ("source_role", "evidence_type", "source_title")).lower()
+                host = (urlparse(str(fact.get("source_url") or "")).hostname or "").lower()
+                primary_bonus = 1 if ("official" in role_text or "primary" in role_text or "release" in role_text or host.endswith(".gov") or host.endswith(".edu") or (host.endswith(".org") and "release" in role_text)) else 0
+                candidates.extend((version.lower(), primary_bonus) for version in versions)
+            if candidates:
+                primary_candidates = [item for item in candidates if item[1]]
+                pool = primary_candidates or candidates
+                version = max(pool, key=lambda item: (tuple(int(part) for part in re.findall(r"\d+", item[0])), item[1]))[0]
+                return f"The latest version I could verify for {subject} is {version}."
         if not records:
+            if re.match(r"^who\s+makes?\b", lower_query):
+                manufacturer_pattern = re.compile(r"\b(?:NVIDIA|AMD|Intel|Apple|Microsoft|Google|Samsung|Sony|Qualcomm|Meta|Amazon|OpenAI|Python Software Foundation)\b", re.I)
+                candidates = []
+                for fact in facts:
+                    text = " ".join(str(fact.get(key) or "") for key in ("claim", "evidence", "source_title"))
+                    candidates.extend(match.group(0) for match in manufacturer_pattern.finditer(text))
+                if candidates:
+                    maker = Counter(item.upper() for item in candidates).most_common(1)[0][0]
+                    subject_match = re.search(r"^who\s+makes?\s+(?:the\s+)?(.+?)[?.!]*$", query, re.I)
+                    subject = subject_match.group(1).strip() if subject_match else "the requested product"
+                    return f"Based on the retrieved sources, {maker} makes the {subject}."
             return "I found sources for this question, but none contained readable evidence that could support a reliable answer."
         query = str(semantic.query or "").strip()
         if re.search(r"\b(?:spec|specification|specifications|specs)\b", lower_query):
@@ -991,6 +1221,10 @@ class SynthesisEngine:
                 pool = primary_candidates or candidates
                 version = max(pool, key=version_key)[0]
                 return f"The latest version I could verify for {subject} is {version}."
+        if semantic.response_type == "recommendation":
+            return "Based on the available evidence, here are the main considerations:\n" + "\n".join(f"- {record}" for record in records[:5]) + "\n\nThe better choice depends on your priorities; the retrieved sources do not justify a universal winner."
+        if explanatory:
+            return "The available evidence points to these likely factors:\n" + "\n".join(f"- {record}" for record in records[:5]) + "\n\nThese are common evidence-backed factors, not a diagnosis of your specific situation."
         return "Based on the retrieved evidence:\n" + "\n".join(f"- {record}" for record in records[:5])
 
 
@@ -1209,7 +1443,7 @@ class ResearchAnswerQualityVerifier:
     """Check answer coverage against selected evidence before presentation."""
 
     @classmethod
-    def verify(cls, answer: str, facts: Sequence[Any], sources: Sequence[Any], conflicts: Sequence[Any] = ()) -> Dict[str, Any]:
+    def verify(cls, answer: str, facts: Sequence[Any], sources: Sequence[Any], conflicts: Sequence[Any] = (), minimum_similarity: float = 0.16) -> Dict[str, Any]:
         text = str(answer or "").strip()
         evidence = [KnowledgeReconciler._external_record(item) for item in list(facts or [])]
         material_claims = [part.strip(" -*\n") for part in re.split(r"(?:\n+|(?<=[.!?])\s+)", text) if len(part.strip()) >= 24 and not part.strip().startswith(("Technical comparison:", "Here are the most relevant", "Relevant specifications"))]
@@ -1217,7 +1451,7 @@ class ResearchAnswerQualityVerifier:
         supported: List[str] = []
         for claim in material_claims[:12]:
             best = max((KnowledgeReconciler._similarity(claim, item["claim"]) for item in evidence), default=0.0)
-            if best < 0.16:
+            if best < minimum_similarity:
                 unsupported.append(claim[:240])
             else:
                 supported.append(claim[:240])

@@ -1729,8 +1729,8 @@ class ResearchCapability(Capability):
         relevance = metadata.get("topic_relevance") if isinstance(metadata, dict) else {}
         return bool(relevance.get("relevant", True)) if isinstance(relevance, dict) else True
 
-    def _synthesize_research(self, semantic: RequestSemanticModel, facts: Sequence[Dict[str, Any]], sources: Sequence[Dict[str, Any]], conflicts: Sequence[Dict[str, Any]] = (), citations: Sequence[Dict[str, Any]] = ()) -> Dict[str, Any]:
-        return self.synthesis_engine.synthesize(semantic, facts, sources, conflicts, citations)
+    def _synthesize_research(self, semantic: RequestSemanticModel, facts: Sequence[Dict[str, Any]], sources: Sequence[Dict[str, Any]], conflicts: Sequence[Dict[str, Any]] = (), citations: Sequence[Dict[str, Any]] = (), fallback_answer: str = "") -> Dict[str, Any]:
+        return self.synthesis_engine.synthesize(semantic, facts, sources, conflicts, citations, fallback_answer=fallback_answer)
 
     @staticmethod
     def _material_conflicts(conflicts: Sequence[Dict[str, Any]], semantic: RequestSemanticModel) -> List[Dict[str, Any]]:
@@ -1775,9 +1775,11 @@ class ResearchCapability(Capability):
         started = time.monotonic()
         context = dict(inputs.get("context") or {}) if isinstance(inputs.get("context"), dict) else {}
         context.setdefault("site_constraint", str(inputs.get("site_constraint") or ""))
+        normalized_query = str(inputs.get("normalized_query") or semantic.research_query or semantic.query).strip() or semantic.query
+        planning_semantic = replace(semantic, query=normalized_query, research_query=normalized_query)
+        semantic = planning_semantic
         context["semantic"] = semantic.to_dict()
-        planning_semantic = replace(semantic, query=str(inputs.get("normalized_query") or semantic.query).strip() or semantic.query)
-        queries = self.strategy_selector.build_queries(planning_semantic, max_queries=limits.max_queries)
+        queries = self.strategy_selector.build_queries(semantic, max_queries=limits.max_queries)
 
         errors: List[str] = []
         pages: List[WebPage] = []
@@ -2088,10 +2090,18 @@ class ResearchCapability(Capability):
         state = ComparisonState(resolved_entities=list(resolved), category=plan.category, plan=plan, claims=claims, matrix=matrix, conflicts=conflicts)
         state.validation_errors = self.comparison_engine.validate(state)
         citations = [{"claim": claim.direct_quote, "url": claim.source_url, "title": claim.source_title, "entity": claim.entity, "property": claim.property} for claim in claims[:12] if claim.source_url]
-        answer = self._render_comparison_answer(state)
+        fallback_answer = self._render_comparison_answer(state)
         if matrix.sufficiency == SufficiencyStatus.INSUFFICIENT or state.validation_errors:
-            answer = self._render_partial_comparison(state)
-        result = ResearchResult(topic=topic, answer=answer, key_findings=[claim.to_dict() for claim in claims], supporting_evidence=[claim.to_dict() for claim in claims], sources=sources, citations=citations, conflicts=conflicts, uncertainty=list(dict.fromkeys(errors + matrix.missing_evidence[:6])), confidence=round(0.82 if matrix.sufficiency == SufficiencyStatus.SUFFICIENT else 0.55 if matrix.sufficiency == SufficiencyStatus.PARTIAL_BUT_USEFUL else 0.0, 3), errors=list(dict.fromkeys(errors)), partial=matrix.sufficiency != SufficiencyStatus.SUFFICIENT, semantic=semantic.to_dict(), answer_plan="comparison_matrix")
+            fallback_answer = self._render_partial_comparison(state)
+        synthesis_facts = []
+        for claim in claims:
+            record = claim.to_dict()
+            record["claim"] = claim.direct_quote or claim.value
+            record["evidence"] = claim.direct_quote or claim.value
+            synthesis_facts.append(record)
+        synthesis = self._synthesize_research(semantic, synthesis_facts, sources, conflicts, citations, fallback_answer=fallback_answer)
+        answer = SynthesisEngine.attach_inline_citations(str(synthesis.get("answer") or fallback_answer), synthesis_facts, citations)
+        result = ResearchResult(topic=topic, answer=answer, key_findings=synthesis.get("facts", synthesis_facts), supporting_evidence=synthesis_facts, sources=sources, citations=citations, conflicts=conflicts, uncertainty=list(dict.fromkeys(errors + matrix.missing_evidence[:6] + list(synthesis.get("uncertainty", [])))), confidence=round(0.82 if matrix.sufficiency == SufficiencyStatus.SUFFICIENT else 0.55 if matrix.sufficiency == SufficiencyStatus.PARTIAL_BUT_USEFUL else 0.0, 3), errors=list(dict.fromkeys(errors)), partial=matrix.sufficiency != SufficiencyStatus.SUFFICIENT, semantic=semantic.to_dict(), answer_plan="comparison_matrix")
         data = result.to_dict()
         data.update({"comparison_intelligence": state.to_dict(), "resolved_entities": [item.canonical_name for item in resolved], "resolved_entity_records": [item.to_dict() for item in resolved], "category": plan.category, "comparison_plan": plan.to_dict(), "evidence_matrix": matrix.to_dict(), "sufficiency": matrix.sufficiency.value, "queries": executed_queries, "gap_queries": matrix.gap_queries, "answer": answer})
         self._publish_event("research.comparison.completed", {"topic": topic[:200], "category": plan.category, "entities": [item.canonical_name for item in resolved], "sufficiency": matrix.sufficiency.value, "claim_count": len(claims), "source_count": len(sources)})
@@ -2288,18 +2298,20 @@ class ResearchCapability(Capability):
         if not topic:
             return {"success": False, "error": "topic is required"}
         semantic = self._semantic_model(topic, inputs)
-        mode = ResearchMode.coerce(inputs.get("mode"), topic)
+        normalized_topic = str(semantic.research_query or topic).strip() or topic
+        planning_semantic = replace(semantic, query=normalized_topic, research_query=normalized_topic)
+        mode = ResearchMode.coerce(inputs.get("mode"), normalized_topic)
         if semantic.intent in {ResearchIntent.TECHNICAL_COMPARISON.value, ResearchIntent.PRODUCT_COMPARISON.value}:
-            return self._action_comparison_research(topic, inputs, semantic)
+            return self._action_comparison_research(topic, {**inputs, "semantic": planning_semantic.to_dict()}, planning_semantic)
         if not inputs.get("mode") and semantic.execution_mode == ResearchMode.DEEP_RESEARCH.value:
             mode = ResearchMode.DEEP_RESEARCH
         if mode == ResearchMode.DEEP_RESEARCH:
-            return self.action_deep_research({**inputs, "topic": topic, "mode": mode.value, "semantic": semantic.to_dict()})
+            return self.action_deep_research({**inputs, "topic": normalized_topic, "mode": mode.value, "semantic": planning_semantic.to_dict(), "normalized_query": normalized_topic})
         if mode == ResearchMode.IMAGE_SEARCH:
             image_data = self.action_image_search({**inputs, "query": topic, "mode": mode.value})
             return {"success": bool(image_data.get("image_results")), "data": image_data, "mode": mode.value, "message": image_data.get("error") or f"Image search completed for {topic}."}
         if semantic.intent not in {ResearchIntent.SHOPPING_DISCOVERY.value, ResearchIntent.SHOPPING_PRICE_SEARCH.value}:
-            return self._action_semantic_research(topic, {**inputs, "semantic": semantic.to_dict()}, semantic)
+            return self._action_semantic_research(normalized_topic, {**inputs, "semantic": planning_semantic.to_dict(), "normalized_query": normalized_topic}, planning_semantic)
         max_sources = max(1, min(int(inputs.get("max_sources", 5)), 10))
 
         shopping = normalize_shopping_query(topic, region=str(inputs.get("region") or ""))

@@ -309,10 +309,14 @@ class ResponseFormatter:
     def _clean_research_display(value: Any) -> str:
         text = html.unescape(str(value or ""))
         text = re.sub(r"<[^>]+>", " ", text)
+        text = re.sub(r"https?://(?:news\.google\.com|www?\.google\.com|www?\.bing\.com|bing\.com)/[^\s)]+", " ", text, flags=re.I)
         text = re.sub(r"\[[^\]]{0,240}\]", " ", text)
         text = text.replace("[", " ").replace("]", " ")
         text = text.replace("â", " ").replace("Â", " ").replace("¯", " ").replace("�", " ")
         text = re.sub(r"[ \t]+", " ", text)
+        text = re.sub(r"(?m)^\s*[-*•]\s*(?:\r?\n|$)", "", text)
+        text = re.sub(r"(?m)^\s*\d+[.)]\s*(?:\r?\n|$)", "", text)
+        text = re.sub(r"(?m)^\s*(?:date not exposed|source)\s*;?\s*(?:\r?\n|$)", "", text, flags=re.I)
         text = re.sub(r"\n{3,}", "\n\n", text).strip()
         return text
 
@@ -352,6 +356,10 @@ class ResponseFormatter:
                 if not url:
                     continue
                 parsed = urlparse(str(url))
+                host = (parsed.hostname or "").lower()
+                path = parsed.path.lower()
+                if host in {"news.google.com", "google.com", "www.google.com", "bing.com", "www.bing.com"} and path.startswith(("/rss/articles", "/url", "/ck/a")):
+                    continue
                 query = [(key, val) for key, val in parse_qsl(parsed.query, keep_blank_values=True) if not key.lower().startswith("utm_") and key.lower() not in {"ref", "tag", "spm"}]
                 canonical_url = urlunparse((parsed.scheme.lower(), (parsed.hostname or "").lower(), parsed.path.rstrip("/") or "/", "", urlencode(query), ""))
                 if not canonical_url or canonical_url in seen_urls:
