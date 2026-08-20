@@ -66,12 +66,13 @@ class LLMOutcomeKind(Enum):
 
 @dataclass(frozen=True)
 class LLMOutcome:
-    """A safe result envelope for the canonical fallback path."""
+    """A safe result envelope for text and tool-capable chat requests."""
 
     kind: LLMOutcomeKind
     content: Optional[str] = None
     reason: str = ""
     request_id: str = ""
+    raw_response: Optional[Dict[str, Any]] = None
 
     @property
     def is_success(self) -> bool:
@@ -93,6 +94,8 @@ class LLMRequest:
     completed_at: Optional[float] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
     timeout: Optional[float] = None
+    messages: Optional[List[Any]] = None
+    parameters: Dict[str, Any] = field(default_factory=dict)
     cancelled: bool = False
 
     def __lt__(self, other: 'LLMRequest') -> bool:
@@ -235,7 +238,9 @@ class PriorityLLMProvider:
             result = self._llm.ask(
                 request.prompt,
                 request.system_prompt,
+                messages=request.messages,
                 timeout=request.timeout,
+                **request.parameters,
             )
 
             _priority_trace(f"6 PROVIDER_RESPONSE_RECEIVED priority={request.priority.name} request_id={request.request_id[:8]}")
@@ -327,6 +332,7 @@ class PriorityLLMProvider:
             future=future,
             loop=loop,
             timeout=timeout,
+            messages=None,
         )
 
         self._enqueue_request(request)
@@ -395,6 +401,46 @@ class PriorityLLMProvider:
             content=response.strip(),
             request_id=request.request_id,
         )
+
+    def ask_outcome_with_tools(
+        self,
+        *,
+        messages: List[Dict[str, Any]],
+        tools: List[Dict[str, Any]],
+        priority: LLMPriority = LLMPriority.CHAT,
+        timeout: Optional[float] = None,
+    ) -> LLMOutcome:
+        """Run one tool-capable chat turn and preserve the raw assistant message."""
+        if self._shutdown_event.is_set():
+            return LLMOutcome(LLMOutcomeKind.SHUTDOWN, reason="Priority LLM provider is shut down.")
+        loop = asyncio.new_event_loop()
+        future = asyncio.Future(loop=loop)
+        request = LLMRequest(
+            prompt="",
+            system_prompt="",
+            priority=priority,
+            future=future,
+            loop=loop,
+            timeout=timeout,
+            messages=list(messages),
+            parameters={"tools": list(tools), "return_provider_response": True},
+        )
+        self._enqueue_request(request)
+        wait_seconds = max(0.01, timeout if timeout is not None else 120.0)
+        try:
+            response = loop.run_until_complete(asyncio.wait_for(future, timeout=wait_seconds))
+        except asyncio.TimeoutError:
+            self._cancel_request(request)
+            return LLMOutcome(LLMOutcomeKind.TIMEOUT, reason=f"Provider did not complete within {wait_seconds:.2f} seconds.", request_id=request.request_id)
+        except Exception as error:
+            return LLMOutcome(self._classify_failure(error), reason=str(error) or type(error).__name__, request_id=request.request_id)
+        finally:
+            loop.close()
+        content = getattr(response, "content", None)
+        raw_response = getattr(response, "raw_response", None)
+        if not isinstance(content, str):
+            return LLMOutcome(LLMOutcomeKind.MALFORMED_OUTPUT, reason="Provider returned a malformed tool response.", request_id=request.request_id)
+        return LLMOutcome(LLMOutcomeKind.SUCCESS, content=content, request_id=request.request_id, raw_response=raw_response if isinstance(raw_response, dict) else None)
 
     @staticmethod
     def _classify_failure(error: Exception) -> LLMOutcomeKind:
@@ -517,6 +563,11 @@ class PriorityLLMProvider:
     def get_provider_health(self) -> Dict[str, Any]:
         """Return health observations from the active LLM provider path."""
         return self._llm.get_provider_health()
+
+    def supports_tool_calling(self) -> bool:
+        """Return whether the selected local-model path advertises tool use."""
+        checker = getattr(self._llm, "supports_tool_calling", None)
+        return bool(checker()) if callable(checker) else False
 
     def shutdown(self) -> None:
         """Shutdown the provider."""

@@ -35,10 +35,27 @@ BROWSER_ACTION_TIMEOUT_SECONDS = max(15.0, float(os.getenv("FREYA_BROWSER_ACTION
 LOCK=threading.Lock()
 SHOPPING_STATE_LOCK=threading.RLock()
 SHOPPING_STATES={}
+WEB_SEARCH_SETTINGS_LOCK=threading.RLock()
+WEB_SEARCH_SETTINGS={
+    "enabled": os.getenv("FREYA_WEB_SEARCH_ENABLED", "true").lower() not in {"0", "false", "off", "no"},
+    "provider": os.getenv("FREYA_WEB_SEARCH_PROVIDER", "exa").strip().lower() or "exa",
+    "searxng_url": os.getenv("FREYA_SEARXNG_URL", "").strip(),
+}
 SUPPORTED_EXTENSIONS={".jpg",".jpeg",".png",".webp",".mp3",".wav",".m4a",".flac",".mp4",".mov",".webm",".txt",".md",".pdf",".docx",".csv",".xlsx",".json"}
 IMAGE_EXTENSIONS={".jpg",".jpeg",".png",".webp",".gif",".bmp"}
 RESEARCH_WORDS=("research","search","look this up","find information","deep web","latest","recent","current")
 UNKNOWN_PERSON_REQUEST=re.compile(r"\b(find|search|latest|recent|current|look\s+up)\b.{0,80}\b(photo|picture|image)\b.{0,80}\b(this person|the person|him|her|them)\b",re.I)
+
+def _web_search_settings_payload():
+    with WEB_SEARCH_SETTINGS_LOCK:
+        values = dict(WEB_SEARCH_SETTINGS)
+    return {
+        "enabled": bool(values.get("enabled", True)),
+        "provider": str(values.get("provider") or "exa"),
+        "searxng_url": str(values.get("searxng_url") or ""),
+        "exa_api_key_configured": bool(os.getenv("EXA_API_KEY", "").strip()),
+    }
+
 
 def emit_avatar(state,**metadata):
     payload={"state":state,**metadata}
@@ -226,7 +243,38 @@ def _is_freshness_sensitive_request(question):
     normalized=" ".join(str(question or "").lower().split())
     return bool(re.search(r"\b(?:latest|newest|current|currently|today|now|recent|price|cost|benchmark|specs?|specification|release|availability|version|generation|vs\.?|versus|compare|comparison)\b", normalized))
 
+def _native_web_research_request(question, semantic=None):
+    """Use the Jan-style model-controlled web_search/web_fetch path."""
+    semantic = semantic if semantic is not None else RequestSemanticAnalyzer.analyze(str(question or ""))
+    if semantic.shopping or semantic.intent in {ResearchIntent.IMAGE_SEARCH.value, ResearchIntent.SHOPPING_DISCOVERY.value, ResearchIntent.SHOPPING_PRICE_SEARCH.value}:
+        return None
+    facade = getattr(getattr(FREYA, "system", None), "facade", None)
+    runner = getattr(facade, "chat_with_web_tools", None)
+    if not callable(runner):
+        return None
+    try:
+        result = _bounded_call(runner, RESEARCH_REQUEST_TIMEOUT_SECONDS, str(question or ""), timeout=RESEARCH_REQUEST_TIMEOUT_SECONDS)
+    except Exception as error:
+        result = None
+        logger = __import__("logging").getLogger(__name__)
+        logger.warning("Native web-tool loop failed: %s", type(error).__name__)
+    if result is None:
+        return CapabilityResult(success=False, data={"native_web_tools": True, "error_code": "WEB_TOOL_LOOP_FAILURE"}, message="The native web-tool loop could not complete this request.", capability_name="research_capability"), {"native_web_tools": True, "error_code": "WEB_TOOL_LOOP_FAILURE"}
+    data = {"native_web_tools": True, "tool_calls": int(getattr(result, "tool_calls", 0) or 0), "search_calls": int(getattr(result, "search_calls", 0) or 0), "fetch_calls": int(getattr(result, "fetch_calls", 0) or 0), "sources": [], "citations": []}
+    if getattr(result, "success", False):
+        data["answer"] = str(getattr(result, "content", "") or "").strip()
+        capability_result = CapabilityResult(success=True, data=data, message=data["answer"], capability_name="research_capability")
+    else:
+        error = getattr(result, "error", None) or {"error": "web_tool_failed", "message": "The native web-tool loop did not return a final answer."}
+        data["error"] = error
+        capability_result = CapabilityResult(success=False, data=data, message=str(error.get("message") if isinstance(error, dict) else error), capability_name="research_capability")
+    return capability_result, data
+
+
 def _research_text_request(question, semantic=None):
+    native_result = _native_web_research_request(question, semantic)
+    if native_result is not None:
+        return native_result
     router=getattr(getattr(getattr(FREYA,"system",None),"facade",None),"_router",None)
     if router is None:
         raise RuntimeError("Research routing is unavailable because the canonical router is not initialized")
@@ -777,6 +825,9 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 self.send_payload(503, {"available": False, "error": "System status is unavailable"})
             return
+        if path=="/api/web-search/settings":
+            self.send_payload(200, _web_search_settings_payload())
+            return
         if path=="/api/autonomy/status":
             try:
                 self.send_payload(200, get_autonomy_snapshot(FREYA.system))
@@ -806,6 +857,27 @@ class Handler(BaseHTTPRequestHandler):
         self.send_payload(404,{"error":"not found"})
     def do_POST(self):
         length=int(self.headers.get("Content-Length","0")); body=self.rfile.read(length); path=urlparse(self.path).path
+        if path=="/api/web-search/settings":
+            try:
+                payload = json.loads(body.decode("utf-8") or "{}")
+                provider = str(payload.get("provider") or "exa").strip().lower()
+                if provider not in {"exa", "searxng", "bing_html"}:
+                    self.send_payload(400, {"error": "Provider must be Exa, SearXNG, or Bing HTML."})
+                    return
+                searxng_url = str(payload.get("searxng_url") or "").strip()
+                if searxng_url and not searxng_url.startswith(("http://", "https://")):
+                    self.send_payload(400, {"error": "SearXNG URL must be an http(s) URL."})
+                    return
+                enabled = bool(payload.get("enabled", True))
+                with WEB_SEARCH_SETTINGS_LOCK:
+                    WEB_SEARCH_SETTINGS.update({"enabled": enabled, "provider": provider, "searxng_url": searxng_url})
+                os.environ["FREYA_WEB_SEARCH_ENABLED"] = "true" if enabled else "false"
+                os.environ["FREYA_WEB_SEARCH_PROVIDER"] = provider
+                os.environ["FREYA_SEARXNG_URL"] = searxng_url
+                self.send_payload(200, _web_search_settings_payload())
+            except Exception:
+                self.send_payload(400, {"error": "Web-search settings could not be updated."})
+            return
         if path=="/api/autonomy/start":
             manager = getattr(getattr(FREYA, "system", None), "autonomy", None)
             if manager is None:

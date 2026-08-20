@@ -90,6 +90,18 @@ class ResilientLLMProvider:
         provider = self._get_provider(canonical)
         return self._health_status(canonical, provider)
 
+    def supports_tool_calling(self) -> bool:
+        """Return true only when a configured concrete provider advertises tools."""
+        for name in self._provider_names:
+            try:
+                provider = self._get_provider(name)
+                checker = getattr(provider, "supports_tool_calling", None)
+                if callable(checker) and bool(checker()):
+                    return True
+            except Exception:
+                continue
+        return False
+
     def ask(
         self,
         prompt: str,

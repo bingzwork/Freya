@@ -19,6 +19,7 @@ from app.memory.coordinator import MemoryCoordinator
 from app.verification.answer_verifier import AnswerVerifier
 from app.core.logger import logger
 from app.capabilities.formatter import format_capability_result
+from app.core.tool_loop import NativeWebToolAgent, ToolLoopResult
 
 
 class AgentFacadeImpl:
@@ -95,6 +96,25 @@ class AgentFacadeImpl:
                 return response or "I couldn't produce a response."
             finally:
                 self._control.finish_question()
+
+    def chat_with_web_tools(
+        self,
+        user_input: str,
+        *,
+        system: Optional[str] = None,
+        timeout: Optional[float] = None,
+    ) -> ToolLoopResult:
+        """Run a local tool-capable chat turn with native web_search/web_fetch."""
+        agent = NativeWebToolAgent(self._priority_llm)
+        return agent.run(
+            user_input,
+            system=system or (
+                "You are Freya, a helpful local AI assistant. Use web_search when current or external information is needed. "
+                "Inspect search results and use web_fetch to read useful sources before answering. "
+                "You may search or fetch again when the evidence is insufficient. Synthesize a natural answer and cite source URLs."
+            ),
+            timeout=timeout,
+        )
 
     def execute_task(self, task: str, allow_mutations: bool = True) -> str:
         """Execute an engineering task directly (bypasses router)."""

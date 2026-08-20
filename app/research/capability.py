@@ -40,6 +40,7 @@ from app.research.web_adapter import (
     ResearchMode,
     WebResearchAdapter,
 )
+from app.research.native_web_tools import NativeWebTools
 from app.research.comparison_intelligence import ComparisonIntelligenceEngine, ComparisonState, SufficiencyStatus
 from app.research.intelligence import (
     EvidenceClassifier,
@@ -1051,6 +1052,7 @@ class ResearchCapability(Capability):
         self._learning_pipeline = None
         self._memory_coordinator = None
         self.web_adapter = WebResearchAdapter()
+        self.native_web_tools = NativeWebTools()
 
         self.search_tool = WebSearchTool(adapter=self.web_adapter)
         self.page_reader = WebPageReader(adapter=self.web_adapter)
@@ -1128,6 +1130,7 @@ class ResearchCapability(Capability):
     def set_tool_manager(self, tool_manager) -> None:
         """Register every research stage as a named ToolManager tool."""
         self._tool_manager = tool_manager
+        self.native_web_tools.register(tool_manager)
         tool_manager.register(self.TOOL_NAMES["search"], lambda **kwargs: self.search_tool.search(**kwargs))
         tool_manager.register(self.TOOL_NAMES["archive"], lambda **kwargs: self.web_search.archive_search(**kwargs))
         tool_manager.register(self.TOOL_NAMES["read"], lambda **kwargs: self.page_reader.read(**kwargs))

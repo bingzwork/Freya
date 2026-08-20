@@ -1,7 +1,7 @@
 """Primary runtime adapter for provider-backed Freya inference."""
 
 import os
-from typing import Mapping, Optional, Sequence
+from typing import Any, Mapping, Optional, Sequence
 
 from app.core.logger import logger
 from app.identity import create_enhanced_system_prompt
@@ -79,17 +79,27 @@ class LLM:
             for name in self._provider_router.provider_order
         }
 
+    def supports_tool_calling(self) -> bool:
+        """Return whether any active configured model advertises native tools."""
+        checker = getattr(self._provider_router, "supports_tool_calling", None)
+        return bool(checker()) if callable(checker) else False
+
     def ask(
         self,
         prompt: str,
         system: str = ENHANCED_SYSTEM_PROMPT,
         timeout: Optional[float] = None,
-    ) -> str:
-        """Perform one inference request or propagate the safe provider failure."""
+        messages: Optional[Sequence[Any]] = None,
+        return_provider_response: bool = False,
+        **kwargs: Any,
+    ) -> Any:
+        """Perform one inference request, optionally preserving a raw tool response."""
         response = self._provider_router.ask(
             prompt,
             system=system,
+            messages=list(messages) if messages is not None else None,
             timeout=timeout,
+            **kwargs,
         )
         self._model = response.model
-        return response.content
+        return response if return_provider_response else response.content

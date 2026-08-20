@@ -200,7 +200,10 @@ class OllamaProvider(BaseLLMProvider):
         # Add existing messages if provided
         if messages:
             for msg in messages:
-                chat_messages.append({"role": msg.role, "content": msg.content})
+                if isinstance(msg, dict):
+                    chat_messages.append(dict(msg))
+                else:
+                    chat_messages.append({"role": msg.role, "content": msg.content})
 
         # Add system message if provided
         if system:
@@ -226,7 +229,7 @@ class OllamaProvider(BaseLLMProvider):
         try:
             # Handle chat endpoint response
             if "message" in response:
-                return response["message"].get("content", "")
+                return response["message"].get("content", "") or ""
             # Handle generate endpoint response
             elif "response" in response:
                 return response["response"]
@@ -293,6 +296,20 @@ class OllamaProvider(BaseLLMProvider):
             return f"Connection to Ollama server at {self.base_url} timed out"
 
         return f"Failed to connect to Ollama server at {self.base_url}: {reason}"
+
+    def supports_tool_calling(self) -> bool:
+        """Return true only when Ollama reports the selected model has tools."""
+        try:
+            payload = self._client.post("/api/show", {"name": self.model}, timeout=5.0)
+            capabilities = payload.get("capabilities") if isinstance(payload, dict) else None
+            if isinstance(capabilities, list):
+                return "tools" in {str(item).lower() for item in capabilities}
+            model_info = payload.get("model_info") if isinstance(payload, dict) else None
+            if isinstance(model_info, dict):
+                return any("tool" in str(key).lower() for key in model_info)
+        except Exception:
+            return False
+        return False
 
     def check_health(self) -> ProviderHealthStatus:
         """Check the health of the Ollama provider.
